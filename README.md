@@ -15,8 +15,9 @@ an archival baseline, not an installer or a portable release.
   as historical context. They are not enabled by this repository. The inspected
   enablement directories contain the current unit, not these older units.
 - `tests/original/`: four existing hardware-free test scripts, unchanged.
-- `tests/run.py`: snapshot-only runner redirects historical test paths in memory
-  to this copy and blocks real child processes, device access and connections.
+- `tests/run.py`: hardware-free runner redirects historical test paths in memory
+  to this copy, blocks real child processes, device access and connections, and
+  runs direct mocked tests of the current CEC coordinator.
 - `SNAPSHOT.json`: exact source paths and SHA-256 hashes for all 17 copied files.
 - `PROVENANCE.md` and `VALIDATION.md`: origin/licensing and verification details.
 
@@ -57,6 +58,7 @@ From the repository root, run:
 
 ```sh
 python3 -B tests/run.py self-test
+python3 -B tests/run.py cec-power
 python3 -B tests/run.py test_cec_live.py
 python3 -B tests/run.py test_kde_settings.py
 python3 -B tests/run.py check_fixed.py
