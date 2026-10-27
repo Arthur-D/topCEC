@@ -2,9 +2,10 @@
 
 Intelligent per-display HDMI-CEC power management for Linux
 
-Baseline snapshot dated 2026-10-27 from magne-desktop. Installed source files are
-preserved byte-for-byte; no redesign, refactoring or functional changes. This is
-an archival baseline, not an installer or a portable release.
+Baseline snapshot dated 2026-10-27 from magne-desktop. The imported source was
+initially copied byte-for-byte; `SNAPSHOT.json` records those original hashes.
+Focused development changes may alter the current files. This is not an installer
+or a portable release.
 
 ## Included
 
@@ -18,7 +19,7 @@ an archival baseline, not an installer or a portable release.
 - `tests/run.py`: hardware-free runner redirects historical test paths in memory
   to this copy, blocks real child processes, device access and connections, and
   runs direct mocked tests of the current CEC coordinator.
-- `SNAPSHOT.json`: exact source paths and SHA-256 hashes for all 17 copied files.
+- `SNAPSHOT.json`: original source paths and SHA-256 hashes for all 17 baseline files.
 - `PROVENANCE.md` and `VALIDATION.md`: origin/licensing and verification details.
 
 Local backups, logs, journals, caches, compiled Python files, unrelated desktop
@@ -26,8 +27,8 @@ configuration, external research repositories and credentials are excluded.
 
 ## Machine-specific values and limitations
 
-- Target display is `HDMI-A-2`; the other display is `HDMI-A-1`. The mouse bridge
-  assumes a horizontal boundary at x=1536, not dynamically discovered geometry.
+- Target display is `HDMI-A-2`. The mouse bridge maps cursor position using KWin's
+  current output geometries; gaps and overlapping geometry are treated as unknown.
 - CEC adapter: `/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00`;
   commands address TV logical address 0. This is one TV, not a general multi-TV manager.
 - Startup input paths: `/dev/input/by-id/usb-Logitech_G29_Driving_Force_Racing_Wheel-event-joystick`
