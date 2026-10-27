@@ -1,0 +1,6 @@
+[Unit]
+Description=Update CEC idle timeout from KDE Plasma
+
+[Service]
+Type=oneshot
+ExecStart=/home/arthur/.local/bin/cec-tv-config-check

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+CEC=/usr/bin/cec-client
+QDBUS=/usr/bin/qdbus
+SERVICE=org.kde.Solid.PowerManagement
+OBJECT=/org/kde/Solid/PowerManagement/PolicyAgent
+INTERFACE=org.kde.Solid.PowerManagement.PolicyAgent
+
+has_idle_inhibition() {
+    "$QDBUS" --literal "$SERVICE" "$OBJECT" \
+        org.freedesktop.DBus.Properties.Get \
+        "$INTERFACE" ActiveInhibitions |
+        /usr/bin/grep -q '"idle",'
+}
+
+case "$1" in
+    off)
+        # Wait until KDE no longer reports active idle inhibitors.
+        while has_idle_inhibition; do
+            sleep 5
+        done
+
+        logger -t cec-tv-power "CEC command: off"
+        echo 'standby 0' | "$CEC" -s -d 1
+        ;;
+    on)
+        logger -t cec-tv-power "CEC command: on"
+        echo 'on 0' | "$CEC" -s -d 1
+        ;;
+esac

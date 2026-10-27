@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+timeout=$(/usr/bin/kreadconfig6 \
+    --file powerdevilrc \
+    --group AC \
+    --group Display \
+    --key TurnOffDisplayIdleTimeoutSec \
+    --default 600)
+
+if ! [[ "$timeout" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid Plasma display timeout: $timeout" >&2
+    exit 1
+fi
+
+exec /usr/bin/swayidle -w \
+    timeout "$timeout" \
+    '/usr/bin/systemd-run --user --unit=cec-tv-off --collect /home/arthur/.local/bin/cec-tv-power off' \
+    resume '/usr/bin/systemctl --user stop cec-tv-off.service; /home/arthur/.local/bin/cec-tv-power on' \
+    before-sleep '/usr/bin/true'
