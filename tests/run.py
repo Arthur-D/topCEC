@@ -20,6 +20,10 @@ mode = sys.argv[1] if len(sys.argv) > 1 else 'self-test'
 sys.argv = [str(ROOT / 'cec-tv/monitor.py'), '--self-test']
 if mode == 'self-test':
     runpy.run_path(str(ROOT / 'cec-tv/monitor.py'), run_name='__main__')
+elif mode == 'cec-power':
+    path = ROOT / 'tests/test_cec_power.py'
+    sys.argv = [str(path)]
+    runpy.run_path(str(path), run_name='__main__')
 else:
     path = ROOT / 'tests/original' / mode
     source = path.read_text()
