@@ -17,8 +17,8 @@ or a portable release.
   enablement directories contain the current unit, not these older units.
 - `tests/original/`: four existing hardware-free test scripts, unchanged.
 - `tests/run.py`: hardware-free runner redirects historical test paths in memory
-  to this copy, blocks real child processes, device access and connections, and
-  runs direct mocked tests of the current CEC coordinator.
+  to this copy, adapts legacy wake scenarios, blocks real child processes, device
+  access and connections, and runs direct mocked tests of the current CEC coordinator.
 - `SNAPSHOT.json`: original source paths and SHA-256 hashes for all 17 baseline files.
 - `PROVENANCE.md` and `VALIDATION.md`: origin/licensing and verification details.
 
@@ -47,6 +47,9 @@ configuration, external research repositories and credentials are excluded.
   stale data blocks OFF. Snapshot interval 2 seconds; mapping TTL 15 seconds.
 - Axis deadzones: ABS_RZ 5%, other axes 2%. Missing input devices stop the monitor;
   systemd retries after 15 seconds. Failed ON can retry upon activity after 10 seconds.
+- CEC operations are bounded by a 130-second monitor deadline. An unconfirmed OFF
+  does not trigger an automatic ON; a wake requested during the operation remains
+  queued, and later activity can request ON while the CEC fault blocks further OFF.
 - Shutdown may attempt to wake the TV; forced termination/power loss cannot guarantee
   recovery. Legacy controllers must not run alongside the current controller.
 - Runtime diagnostics can contain window titles. No runtime logs are included.
