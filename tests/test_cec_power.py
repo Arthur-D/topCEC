@@ -1,5 +1,7 @@
 """Hardware-free regression tests for the live CEC coordinator."""
 import json
+import os
+import signal
 import sys
 import unittest
 from pathlib import Path
@@ -12,6 +14,7 @@ import monitor
 
 class Child:
     def __init__(self):
+        self.pid = 123
         self.returncode = None
         self.output = ''
 
@@ -66,6 +69,7 @@ class CecPowerChecks(unittest.TestCase):
     def test_failed_off_dispatches_recovery_on_and_blocks_future_off(self):
         self.power.request('off')
         self.power.poll()
+        self.power.activity()
         self.children[0].finish(ok=False)
         self.power.poll()
 
@@ -74,6 +78,61 @@ class CecPowerChecks(unittest.TestCase):
         self.power.request('off')
         self.power.poll()
         self.assertEqual(self.actions, ['off', 'on'])
+
+    def test_failed_off_without_wake_does_not_send_on(self):
+        self.power.request('off')
+        self.power.poll()
+        self.children[0].finish(ok=False)
+        self.power.poll()
+
+        self.assertEqual(self.actions, ['off'])
+        self.assertIsNotNone(self.power.fault)
+        self.assertTrue(self.power.may_be_off)
+
+        self.power.activity()
+        self.power.poll()
+        self.assertEqual(self.actions, ['off', 'on'])
+
+    def test_timed_out_off_only_recovers_when_wake_was_requested(self):
+        self.power.request('off')
+        self.power.poll()
+        child = self.children[0]
+        self.power.activity()
+        self.now[0] += monitor.CecPower.OPERATION_TIMEOUT - 0.1
+        self.power.poll()
+        self.assertEqual(self.actions, ['off'])
+
+        def terminate_group(pid, signum):
+            self.assertEqual(pid, child.pid)
+            self.assertEqual(signum, signal.SIGKILL)
+            child.returncode = -signal.SIGKILL
+
+        with patch.object(os, 'killpg', side_effect=terminate_group) as killpg:
+            self.now[0] += 0.1
+            self.power.poll()
+
+        killpg.assert_called_once_with(child.pid, signal.SIGKILL)
+        self.assertEqual(self.actions, ['off', 'on'])
+        self.assertIn('deadline', self.power.fault)
+
+    def test_timed_out_off_without_wake_does_not_send_on(self):
+        self.power.request('off')
+        self.power.poll()
+        child = self.children[0]
+        self.now[0] += monitor.CecPower.OPERATION_TIMEOUT
+
+        def terminate_group(pid, signum):
+            self.assertEqual(pid, child.pid)
+            self.assertEqual(signum, signal.SIGKILL)
+            child.returncode = -signal.SIGKILL
+
+        with patch.object(os, 'killpg', side_effect=terminate_group) as killpg:
+            self.power.poll()
+
+        killpg.assert_called_once_with(child.pid, signal.SIGKILL)
+        self.assertEqual(self.actions, ['off'])
+        self.assertIsNotNone(self.power.fault)
+        self.assertIn('deadline', self.power.fault)
 
     def test_failed_on_retries_only_after_activity_and_cooldown(self):
         self.power.request('on')

@@ -25,6 +25,8 @@ def log(message):
 
 
 class CecPower:
+    OPERATION_TIMEOUT = 130.0
+
     def __init__(self, port):
         self.port = port
         self.process = None
@@ -49,14 +51,19 @@ class CecPower:
             self.request('on')
 
     def poll(self):
+        timed_out = False
         if self.process is not None:
             if self.process.poll() is None:
-                if time.monotonic() - self.started < 130:
+                if time.monotonic() - self.started < self.OPERATION_TIMEOUT:
                     return
                 import os, signal
                 os.killpg(self.process.pid, signal.SIGKILL)
+                timed_out = True
             output, errors = self.process.communicate()
             try:
+                if timed_out:
+                    raise TimeoutError(
+                        f'CEC operation exceeded {self.OPERATION_TIMEOUT:g}-second deadline')
                 result = json.loads(output)
                 if self.process.returncode or not result.get('ok'):
                     raise RuntimeError(result.get('error', errors or 'CEC feilet'))
@@ -66,10 +73,7 @@ class CecPower:
             except Exception as error:
                 self.fault = str(error)
                 log('CEC-FEIL: ' + self.fault + '; videre AV sperret')
-                # An unconfirmed OFF may still have reached the TV. Recover ON.
-                if self.sent == 'off':
-                    self.pending = 'on'
-                elif self.sent == 'on':
+                if self.sent == 'on':
                     self.may_be_off = True
                     # A new activity event may queue a retry, at most once per
                     # ten seconds after failure. Never retry without activity.
@@ -96,7 +100,7 @@ class CecPower:
         self.pending = None
         if self.process is not None:
             try:
-                self.process.communicate(timeout=130)
+                self.process.communicate(timeout=self.OPERATION_TIMEOUT)
             except subprocess.TimeoutExpired:
                 import os, signal
                 os.killpg(self.process.pid, signal.SIGKILL)

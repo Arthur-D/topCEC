@@ -29,6 +29,22 @@ else:
     source = path.read_text()
     for old in ('/tmp/cec-activity-monitor-live.py', '/home/arthur/.local/share/cec-tv/monitor.py', 'work/monitor.fixed.py'):
         source = source.replace(old, str(ROOT / 'cec-tv/monitor.py'))
+    legacy_wake_scenarios = {
+        'test_cec_live.py': (
+            "p.request('off'); p.poll(); children[2].done=True",
+            "p.request('off'); p.poll(); p.activity(); children[2].done=True"),
+        'check_fixed.py': (
+            'self.off();self.jobs[0].finish(ok=False);self.power.poll()',
+            'self.off();self.activity();self.jobs[0].finish(ok=False);self.power.poll()'),
+        'check_cec.py': (
+            'self.off();self.jobs[0].finish(ok=False);self.power.poll()',
+            'self.off();self.activity();self.jobs[0].finish(ok=False);self.power.poll()'),
+    }
+    if mode in legacy_wake_scenarios:
+        old, new = legacy_wake_scenarios[mode]
+        if old not in source:
+            raise RuntimeError('Expected legacy CEC wake scenario was not found')
+        source = source.replace(old, new)
     source = source.replace("Path('outputs/cec-tv')", 'Path(' + repr(str(ROOT / 'cec-tv')) + ')')
     sys.argv = [str(path)]
     import types
