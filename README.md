@@ -10,7 +10,8 @@ or a portable release.
 ## Included
 
 - `cec-tv/`: installed monitor, startup script, CEC command helper, KDE settings
-  reader, and the `activity.js` / `firefox.js` KWin bridges loaded by `start.py`.
+  reader, hardware-independent activity policy, and the `activity.js` /
+  `firefox.js` KWin bridges loaded by `start.py`.
 - `systemd/user/topcec.service`: current topCEC controller unit.
 - `legacy/`: three older systemd units and their three shell helpers, retained
   as historical context. They are not enabled by this repository. The inspected
@@ -81,6 +82,7 @@ From the repository root, run:
 ```sh
 python3 -B tests/run.py self-test
 python3 -B tests/run.py cec-power
+python3 -B tests/run.py activity-policy
 python3 -B tests/run.py test_cec_live.py
 python3 -B tests/run.py test_kde_settings.py
 python3 -B tests/run.py check_fixed.py
