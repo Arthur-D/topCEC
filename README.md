@@ -34,9 +34,10 @@ configuration, external research repositories and credentials are excluded.
 - Startup input paths: `/dev/input/by-id/usb-Logitech_G29_Driving_Force_Racing_Wheel-event-joystick`
   and `/dev/input/by-id/usb-Glorious_GMBK_75__ISO_SL125211940100411-event-kbd`.
   Direct monitor defaults instead use `/dev/input/event10` and `/dev/input/event14`.
-- Installation path is `/home/arthur/.local/share/cec-tv/`; older helpers use
-  `/home/arthur/.local/bin/`. Device identifier and local paths are intentionally
-  retained to preserve the exact baseline; they are not credentials.
+- The `topcec.service` unit runs from `%h/Programs/topCEC/`, specifically
+  `%h/Programs/topCEC/cec-tv/start.py`; older helpers use `/home/arthur/.local/bin/`.
+  Device identifiers and local paths are intentionally retained to preserve the
+  exact baseline; they are not credentials.
 - Requires KDE Plasma/KWin 6 on Wayland, session D-Bus, qdbus, kreadconfig6,
   cec-client/libCEC, Python with dbus-python, PyGObject/GLib, evdev and pyatspi.
   External dependencies are not vendored or version-pinned.
