@@ -8,9 +8,9 @@ import re
 import subprocess
 import sys
 
-from PySide6.QtCore import QObject, Property, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Property, QStandardPaths, QUrl, Signal, Slot
 from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 
 from configuration import (
@@ -21,6 +21,15 @@ from configuration import (
 SERVICE = 'net.local.CecActivity'
 OBJECT = '/net/local/CecActivity'
 INTERFACE = 'net.local.CecActivity'
+APP_ID = 'net.local.topcec'
+
+
+def application_icon():
+    installed = QStandardPaths.locate(
+        QStandardPaths.StandardLocation.GenericDataLocation,
+        f'icons/hicolor/scalable/apps/{APP_ID}.svg')
+    fallback = QIcon(installed or str(Path(__file__).with_name(f'{APP_ID}.svg')))
+    return QIcon.fromTheme(APP_ID, fallback)
 
 
 def available_outputs():
@@ -245,17 +254,18 @@ class GuiBackend(QObject):
 
     @Slot(str)
     def requestPower(self, action):
+        description = 'on' if action == 'on' else 'standby'
         if action not in ('on', 'off'):
             self._action_message = 'Unsupported manual action: ' + action
         elif self._simulation_mode:
-            self._action_message = f'Simulation: would request TV {action}. No command sent.'
+            self._action_message = f'Simulation: would request TV {description}. No command sent.'
         elif not self._service_data.get('cec_enabled'):
             self._action_message = 'Live CEC control is unavailable.'
         else:
             reply = self._service_interface().call('RequestPower', action)
             error = self._reply_error(reply)
             self._action_message = (
-                'Request queued: TV ' + action if error is None
+                'Request queued: TV ' + description if error is None
                 else 'Request rejected: ' + error)
         self.changed.emit()
 
@@ -299,6 +309,8 @@ class GuiBackend(QObject):
 def main():
     app = QGuiApplication(sys.argv)
     app.setApplicationName('topCEC')
+    app.setDesktopFileName(APP_ID)
+    app.setWindowIcon(application_icon())
     backend = GuiBackend()
     backend.refresh()
     engine = QQmlApplicationEngine()

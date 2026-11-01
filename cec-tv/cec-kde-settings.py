@@ -11,7 +11,7 @@ import sys
 def parse(enabled, seconds):
     value = enabled.strip().lower()
     if value not in ('true', 'false'):
-        raise ValueError('Ugyldig TurnOffDisplayWhenIdle')
+        raise ValueError('Invalid TurnOffDisplayWhenIdle value')
     if value == 'false':
         return None
     timeout = int(seconds.strip())

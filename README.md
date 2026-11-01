@@ -14,6 +14,13 @@ or a portable release.
 
 ## Included
 
+The original TV/power-symbol application icon is
+[`cec-tv/net.local.topcec.svg`](cec-tv/net.local.topcec.svg), licensed
+GPL-3.0-or-later. The Qt window, desktop launcher, user installer, RPM GUI package
+and Flatpak share the `net.local.topcec` identity. Packages install the scalable
+icon under `share/icons/hicolor/scalable/apps`; checkout GUI runs load the source
+SVG directly when no installed icon is available.
+
 - `cec-tv/`: installed monitor, startup script, CEC command helper, KDE settings
   reader, hardware-independent activity policy and CEC power-state machine, and
   structural interfaces for activity, media and CEC providers, and the
@@ -63,6 +70,11 @@ configuration, external research repositories and credentials are excluded.
 - Shutdown may attempt to wake the TV; forced termination/power loss cannot guarantee
   recovery. Legacy controllers must not run alongside the current controller.
 - Runtime diagnostics can contain window titles. No runtime logs are included.
+- TopCEC CLI messages, help, service diagnostics and GUI text are English.
+  External command errors, system/Qt dialogs and user-supplied window titles may
+  still follow the desktop locale. Firefox AT-SPI mute-tab labels must match
+  Firefox's language; translating the interface does not change detection labels.
+  Existing D-Bus report tokens and diagnostic JSON keys are retained for compatibility.
 - Some original comments retain older test names or timing descriptions. The source
   is authoritative. Hardware operation and reboot/login startup were not retested.
 

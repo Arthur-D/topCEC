@@ -32,7 +32,7 @@ def main():
     owner = qdbus('org.freedesktop.DBus', '/org/freedesktop/DBus',
                   'org.freedesktop.DBus.NameHasOwner', 'net.local.CecActivity')
     if owner == 'true':
-        raise RuntimeError('En annen aktivitetsmonitor eier D-Bus-navnet')
+        raise RuntimeError('Another activity monitor owns the D-Bus name')
     for name in ('kwin-cec-firefox-bridge', 'kwin-cec-firefox-live',
                  'kwin-cec-activity-test', 'cec-tv-firefox', 'cec-tv-activity'):
         qdbus('org.kde.KWin', '/Scripting', 'org.kde.kwin.Scripting.unloadScript',
@@ -41,7 +41,7 @@ def main():
         ident = qdbus('org.kde.KWin', '/Scripting', 'org.kde.kwin.Scripting.loadScript',
                       str(BASE / file), name)
         if not ident.isdigit():
-            raise RuntimeError('KWin kunne ikke laste ' + name + ': ' + ident)
+            raise RuntimeError('KWin could not load ' + name + ': ' + ident)
     qdbus('org.kde.KWin', '/Scripting', 'org.kde.kwin.Scripting.start')
     command = ['/usr/bin/python3', str(BASE / 'monitor.py'),
                '--cec', '--require-snapshot']
@@ -56,5 +56,5 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        print('CEC oppstart feilet: ' + str(error), flush=True)
+        print('CEC startup failed: ' + str(error), flush=True)
         sys.exit(1)

@@ -85,7 +85,9 @@ install -m 0644 cec-tv/topcec.qml \
     %{buildroot}%{_topcec_appdir}/cec-tv/topcec.qml
 install -d %{buildroot}%{_datadir}/applications
 install -m 0644 packaging/topcec-gui.desktop \
-    %{buildroot}%{_datadir}/applications/topcec-gui.desktop
+    %{buildroot}%{_datadir}/applications/net.local.topcec.desktop
+install -D -m 0644 cec-tv/net.local.topcec.svg \
+    %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/net.local.topcec.svg
 
 %files
 %license LICENSE
@@ -115,7 +117,8 @@ install -m 0644 packaging/topcec-gui.desktop \
 %{_bindir}/topcec-gui
 %{_topcec_appdir}/cec-tv/topcec_gui.py
 %{_topcec_appdir}/cec-tv/topcec.qml
-%{_datadir}/applications/topcec-gui.desktop
+%{_datadir}/applications/net.local.topcec.desktop
+%{_datadir}/icons/hicolor/scalable/apps/net.local.topcec.svg
 
 %changelog
 * Sun Nov 01 2026 topCEC contributors - 0.1.0-1

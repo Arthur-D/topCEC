@@ -182,6 +182,8 @@ class FirefoxMediaChecks(unittest.TestCase):
                 **os.environ,
                 'HOME': str(home),
                 'TOPCEC_HOME': str(home),
+                'XDG_DATA_HOME': str(root / 'data'),
+                'XDG_CONFIG_HOME': str(root / 'config'),
                 'TOPCEC_APP_DIR': str(app),
                 'TOPCEC_FIREFOX_NATIVE_DIR': str(manifest_dir),
                 'TOPCEC_SKIP_SYSTEMCTL': '1',

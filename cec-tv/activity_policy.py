@@ -14,7 +14,7 @@ class ActivityPolicy:
         self.last = now
         if self.expired:
             self.expired = False
-            return 'VILLE SLÅTT PÅ TV'
+            return 'Simulation: would turn TV on'
         return None
 
     def tick(self, now, uncertain=False):
@@ -23,7 +23,7 @@ class ActivityPolicy:
             self.last = now
         elif self.timeout is not None and not self.expired and now - self.last >= self.timeout:
             self.expired = True
-            return f'VILLE SLÅTT AV TV ({self.timeout:g} sekunder uten aktivitet)'
+            return f'Simulation: would put TV in standby ({self.timeout:g} seconds without activity)'
         return None
 
     def set_timeout(self, timeout, now):

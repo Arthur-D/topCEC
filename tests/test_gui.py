@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QUrl, QStandardPaths
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -25,6 +25,38 @@ from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    def test_original_application_icon_renders_at_small_and_large_sizes(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        icon = topcec_gui.application_icon()
+        self.assertFalse(icon.isNull())
+        for size in (16, 32, 128):
+            image = icon.pixmap(size, size).toImage()
+            self.assertFalse(image.isNull())
+            self.assertGreater(image.pixelColor(size // 2, size // 2).alpha(), 0)
+            white_rows = [
+                y for y in range(size)
+                if all(channel > 180 for channel in (
+                    image.pixelColor(size // 2, y).red(),
+                    image.pixelColor(size // 2, y).green(),
+                    image.pixelColor(size // 2, y).blue()))
+            ]
+            self.assertTrue(white_rows)
+            lower_frame = round(82 * size / 128)
+            self.assertGreaterEqual(lower_frame - max(white_rows) - 1, 1)
+        self.assertIsNotNone(app)
+
+    def test_installed_icon_is_used_without_a_theme(self):
+        from PySide6.QtGui import QIcon
+
+        app = QGuiApplication.instance() or QGuiApplication([])
+        path = str(ROOT / 'cec-tv/net.local.topcec.svg')
+        with patch.object(QStandardPaths, 'locate', return_value=path) as locate, \
+                patch.object(QIcon, 'fromTheme', side_effect=lambda name, fallback: fallback):
+            self.assertFalse(topcec_gui.application_icon().pixmap(32, 32).isNull())
+        self.assertIn('icons/hicolor/scalable/apps/net.local.topcec.svg',
+                      locate.call_args.args)
+        self.assertIsNotNone(app)
+
     def setUp(self):
         self.config = DEFAULT_CONFIG.copy()
         self.values = {
@@ -108,7 +140,34 @@ class GuiChecks(unittest.TestCase):
         with patch.object(backend, '_service_interface') as service:
             backend.requestPower('off')
         service.assert_not_called()
-        self.assertIn('Simulation:', backend.actionMessage)
+        self.assertEqual(backend.actionMessage,
+                         'Simulation: would request TV standby. No command sent.')
+
+    def test_gui_displays_english_service_diagnostics(self):
+        from monitor import Mapping
+
+        backend = GuiBackend(dbus_only=True)
+        reason = Mapping(15).health(0, required=True)
+        status = {
+            'service': 'running', 'power_state': 'unknown',
+            'fail_safe_reason': reason, 'scan_status': reason,
+        }
+        interface = Mock()
+        interface.isValid.return_value = True
+        interface.call.side_effect = [
+            SimpleNamespace(arguments=lambda: [json.dumps(status)]),
+            SimpleNamespace(arguments=lambda: [json.dumps({
+                'schema_version': 1, **DEFAULT_CONFIG,
+            })]),
+        ]
+        with patch.object(backend, '_service_interface', return_value=interface), \
+                patch.object(backend, '_reply_error', return_value=None):
+            backend.refresh()
+        self.assertEqual(
+            backend.standbyReason,
+            'Automatic standby blocked: Waiting for Firefox snapshot from the live bridge')
+        self.assertIn('Scan: Waiting for Firefox snapshot from the live bridge',
+                      backend.diagnostics)
 
     def test_settings_are_applied_through_host_service(self):
         backend = GuiBackend(dbus_only=True)
@@ -190,6 +249,8 @@ class GuiChecks(unittest.TestCase):
         self.assertIn('runtime-version: "6.11"', manifest)
         self.assertIn('packaging/flatpak/pyside.yml', manifest)
         self.assertIn('path: .', manifest)
+        self.assertIn('/app/share/icons/hicolor/scalable/apps/net.local.topcec.svg',
+                      manifest)
         self.assertIn("os.environ['TOPCEC_DBUS_ONLY'] = '1'", launcher)
         self.assertIn('org.kde.Platform', manifest)
         self.assertIn('cec-tv/configuration.py', manifest)
@@ -220,12 +281,16 @@ class GuiChecks(unittest.TestCase):
 
     def test_kirigami_window_loads_offscreen(self):
         app = QGuiApplication.instance() or QGuiApplication([])
+        app.setDesktopFileName(topcec_gui.APP_ID)
+        app.setWindowIcon(topcec_gui.application_icon())
         backend = GuiBackend(dbus_only=True)
         engine = QQmlApplicationEngine()
         engine.rootContext().setContextProperty('topcec', backend)
         engine.load(QUrl.fromLocalFile(
             str(ROOT / 'cec-tv' / 'topcec.qml')))
         self.assertEqual(len(engine.rootObjects()), 1)
+        self.assertFalse(app.windowIcon().isNull())
+        self.assertEqual(app.desktopFileName(), 'net.local.topcec')
         self.assertIsNotNone(app)
 
 
