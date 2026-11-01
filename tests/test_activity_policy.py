@@ -1,4 +1,5 @@
 """Hardware-free regression tests for inactivity policy."""
+# SPDX-License-Identifier: GPL-3.0-or-later
 import sys
 import unittest
 from pathlib import Path

@@ -1,4 +1,5 @@
 """Hardware-free regression tests for the live CEC coordinator."""
+# SPDX-License-Identifier: GPL-3.0-or-later
 import json
 import os
 import signal
@@ -57,7 +58,8 @@ class CecPowerChecks(unittest.TestCase):
     def test_activity_during_inflight_off_queues_wake(self):
         self.power.request('off')
         self.power.poll()
-        self.power.activity()
+        with patch.object(os, 'killpg'):
+            self.power.activity()
         self.power.poll()
         self.assertEqual(self.actions, ['off'])
         self.assertEqual(self.power.pending, 'on')
@@ -66,10 +68,50 @@ class CecPowerChecks(unittest.TestCase):
         self.power.poll()
         self.assertEqual(self.actions, ['off', 'on'])
 
+    def test_activity_cancels_inflight_standby_before_dispatching_wake(self):
+        self.power.request('off')
+        self.power.poll()
+        child = self.children[0]
+
+        def terminate_group(pid, signum):
+            self.assertEqual(pid, child.pid)
+            self.assertEqual(signum, signal.SIGTERM)
+            child.returncode = -signal.SIGTERM
+
+        with patch.object(os, 'killpg', side_effect=terminate_group) as killpg:
+            self.power.activity()
+        killpg.assert_called_once_with(child.pid, signal.SIGTERM)
+        self.assertEqual(self.power.pending, 'on')
+        self.power.poll()
+
+        self.assertEqual(self.actions, ['off', 'on'])
+        self.assertIsNotNone(self.power.fault)
+        self.assertTrue(self.power.may_be_off)
+        self.children[1].finish(state='on')
+        self.power.poll()
+        self.assertIsNone(self.power.fault)
+        self.assertFalse(self.power.may_be_off)
+
+    def test_failed_standby_cancellation_keeps_wake_queued_and_reports_fault(self):
+        self.power.request('off')
+        self.power.poll()
+        child = self.children[0]
+
+        with patch.object(os, 'killpg', side_effect=PermissionError('denied')):
+            self.power.activity()
+
+        self.assertEqual(self.power.pending, 'on')
+        self.assertIn('Could not cancel standby command', self.power.fault)
+        self.assertEqual(self.actions, ['off'])
+        child.finish()
+        self.power.poll()
+        self.assertEqual(self.actions, ['off', 'on'])
+
     def test_failed_off_dispatches_recovery_on_and_blocks_future_off(self):
         self.power.request('off')
         self.power.poll()
-        self.power.activity()
+        with patch.object(os, 'killpg'):
+            self.power.activity()
         self.children[0].finish(ok=False)
         self.power.poll()
 
@@ -97,7 +139,8 @@ class CecPowerChecks(unittest.TestCase):
         self.power.request('off')
         self.power.poll()
         child = self.children[0]
-        self.power.activity()
+        with patch.object(os, 'killpg'):
+            self.power.activity()
         self.now[0] += monitor.CecPower.OPERATION_TIMEOUT - 0.1
         self.power.poll()
         self.assertEqual(self.actions, ['off'])
@@ -133,6 +176,20 @@ class CecPowerChecks(unittest.TestCase):
         self.assertEqual(self.actions, ['off'])
         self.assertIsNotNone(self.power.fault)
         self.assertIn('deadline', self.power.fault)
+
+    def test_timeout_kill_race_uses_child_final_result(self):
+        self.power.request('on')
+        self.power.poll()
+        child = self.children[0]
+        child.finish(state='on')
+        self.now[0] += monitor.CecPower.OPERATION_TIMEOUT
+
+        with patch.object(os, 'killpg', side_effect=ProcessLookupError):
+            self.power.poll()
+
+        self.assertEqual(self.actions, ['on'])
+        self.assertIsNone(self.power.fault)
+        self.assertFalse(self.power.may_be_off)
 
     def test_failed_on_retries_only_after_activity_and_cooldown(self):
         self.power.request('on')

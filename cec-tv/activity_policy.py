@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Hardware-independent inactivity and standby policy."""
 
 DEFAULT_TIMEOUT = 60.0

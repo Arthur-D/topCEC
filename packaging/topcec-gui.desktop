@@ -1,0 +1,9 @@
+[Desktop Entry]
+# SPDX-License-Identifier: GPL-3.0-or-later
+Type=Application
+Name=topCEC
+Comment=Configure per-display TV power management
+Exec=topcec-gui
+Icon=video-display
+Terminal=false
+Categories=Settings;HardwareSettings;

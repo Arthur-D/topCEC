@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Temporary KWin 6 test bridge. Read-only: no CEC, window or audio changes.
 // QTimer is provided by KWin's JavaScript engine, not a browser timer.
 // https://invent.kde.org/plasma/kwin/-/blob/master/src/scripting/scripting.cpp

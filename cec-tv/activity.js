@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 let lastOutput = "";
 let lastMouseReport = 0;
 let watchedScreens = [];

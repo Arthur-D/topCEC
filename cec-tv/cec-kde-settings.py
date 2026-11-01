@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Read Plasma's AC display timeout for this desktop; never changes settings.
 AC defaults: KDE/powerdevil daemon/powerdevilsettingsdefaults.cpp.
 """

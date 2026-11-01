@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """TV activity monitor with opt-in real CEC. Default remains simulation.
 --cec enables actual power commands, requires fresh KWin snapshots and stops on
 adapter failures. Use start-cec-live.fish to exclude the old idle controller.
@@ -9,11 +10,20 @@ import json
 import math
 import selectors
 import subprocess
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 from activity_policy import ActivityPolicy, DEFAULT_TIMEOUT
+from cec_power_state import CecPowerStateMachine
+from configuration import (
+    DEFAULT_CONFIG, default_config_path, load_config, merge_cli, save_config,
+    validate_config,
+)
+from firefox_media import FirefoxWebExtensionProvider
+from providers import ActivityProvider as ActivityProviderContract
+from providers import CecBackend, MediaProvider as MediaProviderContract
 
 TARGET = 'HDMI-A-2'
 TIMEOUT = DEFAULT_TIMEOUT
@@ -31,22 +41,49 @@ class CecPower:
 
     def __init__(self, port):
         self.port = port
+        self.state_machine = CecPowerStateMachine()
         self.process = None
         self.pending = None
         self.sent = None
         self.started = 0
-        self.fault = None
-        self.may_be_off = False
         self.on_retry_after = 0.0
 
+    @property
+    def fault(self):
+        return self.state_machine.fault
+
+    @fault.setter
+    def fault(self, error):
+        self.state_machine.set_fault(error)
+
+    @property
+    def may_be_off(self):
+        return self.state_machine.may_be_off
+
     def request(self, action):
-        if action == 'off' and self.fault:
+        if action == 'off' and not self.state_machine.can_standby:
             return
         if action == 'on' and self.process is not None and self.sent == 'on':
             # Activity cancels a queued OFF but never duplicates an in-flight ON.
             self.pending = None
             return
         self.pending = action
+        if action == 'on' and self.process is not None and self.sent == 'off':
+            pid = getattr(self.process, 'pid', None)
+            if pid is None:
+                self.state_machine.set_fault(
+                    'Could not cancel standby command: process PID unavailable')
+            else:
+                import os
+                import signal
+                try:
+                    os.killpg(pid, signal.SIGTERM)
+                    log('CEC standby cancellation requested for wake')
+                except ProcessLookupError:
+                    pass
+                except OSError as error:
+                    self.state_machine.set_fault(
+                        f'Could not cancel standby command: {error}')
 
     def activity(self, wake_requested=False):
         if wake_requested or self.may_be_off:
@@ -59,8 +96,13 @@ class CecPower:
                 if time.monotonic() - self.started < self.OPERATION_TIMEOUT:
                     return
                 import os, signal
-                os.killpg(self.process.pid, signal.SIGKILL)
-                timed_out = True
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                    timed_out = True
+                except ProcessLookupError:
+                    # The child can exit between poll() and killpg(); its final
+                    # status/output below remains authoritative in that race.
+                    pass
             output, errors = self.process.communicate()
             try:
                 if timed_out:
@@ -70,13 +112,11 @@ class CecPower:
                 if self.process.returncode or not result.get('ok'):
                     raise RuntimeError(result.get('error', errors or 'CEC feilet'))
                 log('CEC bekreftet: TV ' + result['state'])
-                self.may_be_off = result['state'] != 'on'
-                self.fault = None
+                self.state_machine.confirm(result['state'])
             except Exception as error:
-                self.fault = str(error)
+                self.state_machine.fail(error, self.sent)
                 log('CEC-FEIL: ' + self.fault + '; videre AV sperret')
                 if self.sent == 'on':
-                    self.may_be_off = True
                     # A new activity event may queue a retry, at most once per
                     # ten seconds after failure. Never retry without activity.
                     self.on_retry_after = time.monotonic() + 10.0
@@ -85,15 +125,15 @@ class CecPower:
             if self.pending == 'on' and time.monotonic() < self.on_retry_after:
                 return
             action, self.pending = self.pending, None
-            if action == 'off' and self.fault:
+            if action == 'off' and not self.state_machine.can_standby:
                 return
-            if action == 'off':
-                self.may_be_off = True
             helper = str(Path(__file__).with_name('cec-power-command.py'))
-            self.process = subprocess.Popen(
+            process = subprocess.Popen(
                 [sys.executable, helper, action, '--port', self.port],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 start_new_session=True)
+            self.state_machine.begin(action)
+            self.process = process
             self.started, self.sent = time.monotonic(), action
             log('CEC sender: ' + ('AV' if action == 'off' else 'PÅ'))
 
@@ -117,6 +157,28 @@ class CecPower:
                 log('CEC avslutning: ' + result.stdout.strip())
             except Exception as error:
                 log('CEC avslutningsfeil: ' + str(error))
+
+
+def request_manual_power(power, action, fail_safe_reason):
+    if action not in ('on', 'off'):
+        raise ValueError('Power action must be "on" or "off"')
+    if power is None:
+        raise RuntimeError('CEC power control is not enabled')
+    if action == 'off':
+        if fail_safe_reason:
+            raise RuntimeError('Standby blocked: ' + str(fail_safe_reason))
+        process = getattr(power, 'process', None)
+        if not power.state_machine.can_standby or power.pending == 'on' or (
+            process is not None and getattr(power, 'sent', None) == 'on'
+        ):
+            raise RuntimeError('Standby blocked by CEC recovery state')
+        if power.pending == 'off' or (
+            process is not None and getattr(power, 'sent', None) == 'off'
+        ):
+            raise RuntimeError('Standby request is already in progress')
+    power.request(action)
+    if action == 'off' and power.pending != 'off':
+        raise RuntimeError('Standby request was not queued')
 
 
 class KdeTimeout:
@@ -201,6 +263,31 @@ class Axis:
         return False
 
 
+class EvdevActivityProvider:
+    def __init__(self, ecodes, axis_deadzone_percent, rz_deadzone_percent):
+        self.ecodes = ecodes
+        self.axis_deadzone_percent = axis_deadzone_percent
+        self.rz_deadzone_percent = rz_deadzone_percent
+
+    def seed(self, device):
+        ecodes = self.ecodes
+        return {code: Axis(info, self.rz_deadzone_percent if code == ecodes.ABS_RZ
+                           else self.axis_deadzone_percent) for code, info in
+                device.capabilities(absinfo=True).get(ecodes.EV_ABS, [])
+                if code < ecodes.ABS_MT_SLOT}
+
+    def event_activity(self, state, event, focused):
+        ecodes = self.ecodes
+        if event.type == ecodes.EV_ABS:
+            axis = state['axes'].get(event.code)
+            if axis and axis.update(event.value, focused):
+                return (f'ratt/pedal ({ecodes.ABS.get(event.code, event.code)}, '
+                        f'verdi {event.value}, terskel {axis.threshold})')
+        elif event.type == ecodes.EV_KEY and event.value in (1, 2) and focused:
+            return 'tastatur/ratt'
+        return None
+
+
 def firefox_window_snapshot(payload, read_exe=None):
     """Resolve KWin PIDs on the host; never infer browser identity from titles."""
     if read_exe is None:
@@ -279,16 +366,48 @@ class Mapping:
         output = next(iter(candidates))
         return None if output in ('ingen', 'unknown', '') else output
 
+    @staticmethod
+    def _normalized_firefox_caption(title):
+        for suffix in (
+                ' — Mozilla Firefox', ' - Mozilla Firefox',
+                ' — Firefox', ' - Firefox', ' — Mozilla Firefox ESR',
+                ' - Mozilla Firefox ESR'):
+            if title.endswith(suffix):
+                return title[:-len(suffix)].rstrip()
+        return title
 
-def audio_state(frames, mapping, now):
+    def browser_window_output(self, active_title, now):
+        if not active_title or self.health(now):
+            return None
+        expected = active_title.strip()
+        matches = [
+            output for (title, output), stamp in self.reports.items()
+            if now - stamp <= self.ttl
+            and self._normalized_firefox_caption(title) == expected
+        ]
+        if len(matches) != 1:
+            return None
+        output = matches[0]
+        return None if output in ('ingen', 'unknown', '') else output
+
+
+def audio_state(frames, mapping, now, target_output=TARGET):
     counts = Counter(frame['title'] for frame in frames)
     audible_tv, uncertain = False, False
     for frame in frames:
         if frame['audio']:
             output = mapping.output(frame['title'], counts, now)
-            audible_tv |= output == TARGET
+            audible_tv |= output == target_output
             uncertain |= output is None
     return audible_tv, uncertain
+
+
+class FirefoxMediaProvider:
+    def decode_scan(self, output, errors, returncode):
+        return decode_scan(output, errors, returncode)
+
+    def audio_state(self, frames, mapping, now, target_output=TARGET):
+        return audio_state(frames, mapping, now, target_output)
 
 
 class MatchDiagnostics:
@@ -415,7 +534,8 @@ def scan_atspi(mute_labels):
     return frames
 
 
-def run(args):
+def run(args, *, activity_provider_factory=None, media_provider=None,
+        cec_backend_factory=None):
     try:
         import dbus
         import dbus.service
@@ -428,10 +548,17 @@ def run(args):
         return 2
 
     DBusGMainLoop(set_as_default=True)
-    timer = Timer(time.monotonic())
+    target_output = getattr(args, 'target', TARGET)
+    timer = Timer(time.monotonic(), timeout=getattr(args, 'timeout_seconds', DEFAULT_TIMEOUT))
     kde_settings = KdeTimeout() if args.kde_timeout else None
-    power = CecPower(args.cec_port) if args.cec else None
+    if cec_backend_factory is None:
+        cec_backend_factory = CecPower
+    power: CecBackend | None = (
+        cec_backend_factory(args.cec_port) if args.cec else None)
+    if media_provider is None:
+        media_provider = FirefoxMediaProvider()
     mapping = Mapping(args.mapping_ttl)
+    webextension_media = FirefoxWebExtensionProvider()
     match_diagnostics = MatchDiagnostics()
     selector = selectors.DefaultSelector()
     devices = {}
@@ -444,6 +571,34 @@ def run(args):
     previous_status = None
     warning_reported = False
     previous_playback = False
+    status_snapshot = {
+        'service': 'starting',
+        'cec_enabled': power is not None,
+        'target_output': target_output,
+        'adapter': args.cec_port if power else None,
+        'power_state': 'unknown',
+        'pending_action': None,
+        'cec_fault': None,
+        'fail_safe_reason': 'monitor poll has not completed',
+        'playback_active': False,
+        'scan_status': scan_error,
+    }
+    config_path = (Path(args.config).expanduser()
+                   if getattr(args, 'config', None) else default_config_path())
+    runtime_config = validate_config({
+        'schema_version': 1,
+        'target_output': target_output,
+        'timeout_seconds': getattr(args, 'timeout_seconds', int(DEFAULT_TIMEOUT)),
+        'mapping_ttl_seconds': getattr(args, 'mapping_ttl', 15.0),
+        'devices': getattr(args, 'device', None) or DEFAULT_CONFIG['devices'],
+        'mute_labels': getattr(args, 'mute_label', None) or DEFAULT_CONFIG['mute_labels'],
+        'cec_enabled': bool(args.cec),
+        'cec_port': args.cec_port,
+        'kde_timeout': bool(args.kde_timeout),
+        'require_snapshot': bool(args.require_snapshot or args.cec),
+        'axis_deadzone_percent': args.axis_deadzone_percent,
+        'rz_deadzone_percent': args.rz_deadzone_percent,
+    })
 
     def activity(source):
         now = time.monotonic()
@@ -482,12 +637,66 @@ def run(args):
                 if mapping.snapshot(message[len('Firefox-snapshot: '):], time.monotonic()):
                     if first:
                         log('Firefox-livebro tilkoblet; komplette vindusrapporter mottas')
+            elif message.startswith('Firefox-media-snapshot: '):
+                if not webextension_media.update(
+                        message[len('Firefox-media-snapshot: '):], time.monotonic()):
+                    log('Ugyldig Firefox WebExtension-snapshot; bruker AT-SPI-fallback')
             elif message.startswith('Firefox-vindu: '):
                 payload = message[len('Firefox-vindu: '):]
                 if ' | ' in payload:
                     output, title = payload.split(' | ', 1)
                     if title:
                         mapping.report(output.strip(), title, time.monotonic())
+
+        @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
+        def GetStatus(self):
+            return json.dumps(status_snapshot, sort_keys=True)
+
+        @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
+        def GetConfig(self):
+            if config_path.exists():
+                try:
+                    config = load_config(config_path)
+                except ValueError as error:
+                    raise dbus.DBusException(str(error))
+            else:
+                config = runtime_config
+            return json.dumps({'schema_version': 1, **config}, sort_keys=True)
+
+        @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='s')
+        def ApplySettings(self, serialized_config):
+            try:
+                config = validate_config(json.loads(str(serialized_config)))
+                if config.get('cec_enabled'):
+                    config['require_snapshot'] = True
+                saved = save_config(
+                    config_path, {'schema_version': 1, **config})
+            except (ValueError, TypeError, OSError) as error:
+                raise dbus.DBusException('Could not save settings: ' + str(error))
+            try:
+                result = subprocess.run(
+                    ['/usr/bin/systemctl', '--user', 'restart', '--no-block',
+                     'topcec.service'],
+                    capture_output=True, text=True, timeout=10)
+                if result.returncode:
+                    raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+            except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+                raise dbus.DBusException(
+                    'Settings were saved, but the service restart could not be '
+                    'queued: ' + str(error))
+            return json.dumps({
+                'accepted': True,
+                'config': saved,
+            }, sort_keys=True)
+
+        @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='s')
+        def RequestPower(self, action):
+            try:
+                request_manual_power(power, str(action),
+                                     status_snapshot.get('fail_safe_reason'))
+            except (RuntimeError, ValueError) as error:
+                raise dbus.DBusException(str(error))
+            return json.dumps({'accepted': True, 'action': str(action)})
 
     bus = dbus.SessionBus()
     try:
@@ -498,18 +707,16 @@ def run(args):
         log('Kan ikke eie D-Bus-navnet. Stopp gammel monitor først: ' + str(error))
         return 2
 
-    def seed(device):
-        # Only conventional axes, never multitouch slot/tracking identifiers.
-        return {code: Axis(info, args.rz_deadzone_percent if code == ecodes.ABS_RZ
-                           else args.axis_deadzone_percent) for code, info in
-                device.capabilities(absinfo=True).get(ecodes.EV_ABS, [])
-                if code < ecodes.ABS_MT_SLOT}
+    if activity_provider_factory is None:
+        activity_provider_factory = EvdevActivityProvider
+    activity_provider: ActivityProviderContract = activity_provider_factory(
+        ecodes, args.axis_deadzone_percent, args.rz_deadzone_percent)
 
     try:
         for path in dict.fromkeys(args.device or ['/dev/input/event10', '/dev/input/event14']):
             device = InputDevice(path)
             try:
-                axes = seed(device)
+                axes = activity_provider.seed(device)
                 selector.register(device, selectors.EVENT_READ)
             except Exception:
                 device.close()
@@ -554,15 +761,10 @@ def run(args):
                                 state['dropped'] = False
                                 break
                             continue
-                        if event.type == ecodes.EV_ABS:
-                            axis = state['axes'].get(event.code)
-                            # Always update off-screen axes; no stale baseline.
-                            if axis and axis.update(event.value, focus == TARGET):
-                                activity(f'ratt/pedal ({ecodes.ABS.get(event.code, event.code)}, '
-                                         f'verdi {event.value}, terskel {axis.threshold})')
-                        elif (event.type == ecodes.EV_KEY and event.value in (1, 2)
-                              and focus == TARGET):
-                            activity('tastatur/ratt')
+                        source = activity_provider.event_activity(
+                            state, event, focus == target_output)
+                        if source:
+                            activity(source)
                 except BlockingIOError:
                     pass
             now = time.monotonic()
@@ -570,7 +772,7 @@ def run(args):
                 if worker.poll() is not None:
                     output, errors = worker.communicate()
                     try:
-                        frames = decode_scan(output, errors, worker.returncode)
+                        frames = media_provider.decode_scan(output, errors, worker.returncode)
                         if errors.strip() and not warning_reported:
                             log('AT-SPI-advarsel, men skanningen returnerte lesbare '
                                 'Firefox-frames. Advarsel vises bare én gang:')
@@ -595,26 +797,39 @@ def run(args):
                 worker = subprocess.Popen(command, stdout=subprocess.PIPE,
                                           stderr=subprocess.PIPE, text=True)
                 worker_started = now
-            reason = scan_error
-            if scan_stamp is None or now - scan_stamp > SCAN_MAX_AGE:
-                reason = reason or 'AT-SPI-resultat mangler eller er foreldet'
+            reason = None
             audible = False
-            if reason is None:
-                if mapping.health(now, required=True) is None:
-                    for message in match_diagnostics.update(frames, mapping, now, scan_stamp):
-                        log(message)
-                audible, uncertain_audio = audio_state(frames, mapping, now)
+            native_audio_state = webextension_media.audio_state(
+                mapping, now, target_output, mapping.ttl)
+            if native_audio_state is not None:
+                audible, uncertain_audio = native_audio_state
                 if uncertain_audio:
-                    reason = 'lyd i Firefox, men vindusmatching er ukjent/tvetydig/foreldet'
-                # A successful scan may still omit an inaccessible application.
-                recent_titles = {title for (title, _), stamp in mapping.reports.items()
-                                 if now - stamp <= mapping.ttl}
-                scanned_titles = {frame['title'] for frame in frames}
-                if recent_titles - scanned_titles:
-                    reason = 'KWin-vinduer mangler i AT-SPI; venter på samsvar'
-                # Reports of Firefox but no frames can mean inaccessible Firefox.
-                if not frames and mapping.reports:
-                    reason = 'KWin har meldt Firefox, men AT-SPI finner ingen frames'
+                    reason = (
+                        'Firefox WebExtension reports audio, but its active window '
+                        'cannot be uniquely matched to a KWin display')
+            else:
+                reason = scan_error
+                if scan_stamp is None or now - scan_stamp > SCAN_MAX_AGE:
+                    reason = reason or 'AT-SPI-resultat mangler eller er foreldet'
+                if reason is None:
+                    if mapping.health(now, required=True) is None:
+                        for message in match_diagnostics.update(
+                                frames, mapping, now, scan_stamp):
+                            log(message)
+                    audible, uncertain_audio = media_provider.audio_state(
+                        frames, mapping, now, target_output)
+                    if uncertain_audio:
+                        reason = (
+                            'Firefox audio is active, but window mapping is '
+                            'unknown, ambiguous or stale')
+                    recent_titles = {
+                        title for (title, _), stamp in mapping.reports.items()
+                        if now - stamp <= mapping.ttl}
+                    scanned_titles = {frame['title'] for frame in frames}
+                    if recent_titles - scanned_titles:
+                        reason = 'KWin-vinduer mangler i AT-SPI; venter på samsvar'
+                    if not frames and mapping.reports:
+                        reason = 'KWin har meldt Firefox, men AT-SPI finner ingen frames'
             reason = reason or mapping.health(now, args.require_snapshot)
             if kde_settings:
                 settings_error = kde_settings.poll(timer, now)
@@ -635,7 +850,7 @@ def run(args):
             if any(state['dropped'] for state in devices.values()):
                 reason = reason or 'venter på input-resynkronisering'
             if audible:
-                activity('Firefox: Mute tab i frame på ' + TARGET)
+                activity('Firefox: Mute tab i frame på ' + target_output)
             # Logging state is separate from activity and fail-safe decisions.
             # Unknown monitoring state must not be reported as playback stopping.
             if reason is None and audible != previous_playback:
@@ -651,6 +866,20 @@ def run(args):
                     power.request('off')
                 else:
                     log(message)
+            state_machine = getattr(power, 'state_machine', None)
+            state = getattr(state_machine, 'state', None)
+            power_state = getattr(state, 'value', 'unknown')
+            if not isinstance(power_state, str):
+                power_state = 'unknown'
+            status_snapshot.update({
+                'service': 'running',
+                'power_state': power_state,
+                'pending_action': power.pending if power else None,
+                'cec_fault': power.fault if power else None,
+                'fail_safe_reason': reason,
+                'playback_active': audible,
+                'scan_status': scan_error,
+            })
         except Exception as error:
             # An input disconnect or callback failure must never become silence.
             runtime_failed = True
@@ -879,7 +1108,7 @@ def self_test():
             # Diagnostics must not change the matching input or its result.
             self.assertEqual(m.output('New title', Counter({'New title': 1}), 14), TARGET)
 
-        def run_monitor_steps(self, steps, diagnostics_enabled=True):
+        def run_monitor_steps(self, steps, diagnostics_enabled=True, config_path=None):
             from unittest.mock import Mock, patch
 
             clock = SimpleNamespace(now=0)
@@ -900,10 +1129,16 @@ def self_test():
                 context.poll = callback
 
             def main_loop():
-                for now, snapshot, scan in steps:
+                for step in steps:
+                    now, snapshot, scan, *optional = step
                     clock.now = now
                     if snapshot is not None:
                         context.receiver.Report('Firefox-snapshot: ' + snapshot)
+                    if optional and optional[0] is not None:
+                        context.receiver.Report(
+                            'Firefox-media-snapshot: ' + optional[0])
+                    if len(optional) > 1 and optional[1] is not None:
+                        context.receiver.Report('Fokus: ' + optional[1])
                     if scan is not None:
                         output, errors, returncode = scan
                         workers[-1].poll.return_value = returncode
@@ -918,10 +1153,13 @@ def self_test():
                 workers.append(worker)
                 return worker
 
+            session_bus = Mock()
             service = SimpleNamespace(
                 Object=Object, BusName=Mock(),
                 method=lambda *args, **kwargs: lambda method: method)
-            dbus = SimpleNamespace(service=service, SessionBus=Mock(), DBusException=RuntimeError)
+            dbus = SimpleNamespace(
+                service=service, SessionBus=Mock(return_value=session_bus),
+                DBusException=RuntimeError)
             loop = Mock()
             loop.run.side_effect = main_loop
             glib = SimpleNamespace(MainLoop=lambda: loop, timeout_add=timeout_add)
@@ -935,11 +1173,15 @@ def self_test():
                 'dbus.mainloop.glib': SimpleNamespace(DBusGMainLoop=Mock()),
                 'gi': SimpleNamespace(), 'gi.repository': SimpleNamespace(GLib=glib),
                 'evdev': SimpleNamespace(InputDevice=Mock(return_value=device),
-                                         ecodes=SimpleNamespace(EV_ABS=3, ABS_MT_SLOT=47)),
+                                         ecodes=SimpleNamespace(EV_ABS=3, EV_KEY=1,
+                                                                ABS_RZ=2, ABS_MT_SLOT=47,
+                                                                ABS={})),
             }
             args = SimpleNamespace(kde_timeout=False, cec=True, cec_port='unused',
                                    mapping_ttl=15, require_snapshot=True, device=['unused'],
-                                   mute_label=['Mute tab'])
+                                   mute_label=['Mute tab'], axis_deadzone_percent=2.0,
+                                   rz_deadzone_percent=5.0,
+                                   config=str(config_path) if config_path else None)
             with patch.dict(sys.modules, modules), \
                     patch.dict(globals(), {
                         'Timer': Mock(return_value=timer), 'CecPower': Mock(return_value=power),
@@ -949,12 +1191,16 @@ def self_test():
                     patch.object(diagnostics, 'update', update), \
                     patch.object(time, 'monotonic', lambda: clock.now), \
                     patch.object(selectors, 'DefaultSelector', return_value=selector), \
+                    patch.object(subprocess, 'run', return_value=SimpleNamespace(
+                        returncode=0, stdout='', stderr='')) as command_run, \
                     patch.object(subprocess, 'Popen', side_effect=start_worker):
                 self.assertEqual(run(args), 0)
             return SimpleNamespace(
                 messages=[message for message in messages if message.startswith('MATCH-DIAG:')],
                 all_messages=messages, diagnostics=diagnostics, update=update,
-                timer=vars(timer), mapping=vars(mapping), power_calls=power.mock_calls)
+                timer=vars(timer), mapping=vars(mapping), power_calls=power.mock_calls,
+                receiver=context.receiver, power=power, command_run=command_run,
+                status=json.loads(context.receiver.GetStatus()))
 
         def test_runtime_match_diagnostics(self):
             snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
@@ -1034,6 +1280,74 @@ def self_test():
                                      None if expected == 0 else 1)
                     self.assertEqual(result.update.call_count, calls[name])
 
+        def test_dbus_status_and_manual_control_api(self):
+            snapshot = json.dumps([{'title': 'Firefox', 'output': TARGET}])
+            result = self.run_monitor_steps([(0, snapshot, None)])
+            status = json.loads(result.receiver.GetStatus())
+            self.assertEqual(status['service'], 'running')
+            self.assertTrue(status['cec_enabled'])
+            self.assertIsNotNone(status['fail_safe_reason'])
+            with self.assertRaisesRegex(RuntimeError, 'Standby blocked'):
+                result.receiver.RequestPower('off')
+            result.receiver.RequestPower('on')
+            result.power.request.assert_called_once_with('on')
+
+        def test_dbus_config_api_validates_persists_and_requests_user_restart(self):
+            import tempfile
+            from pathlib import Path
+            from unittest.mock import patch
+
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'config.json'
+                result = self.run_monitor_steps([(0, None, None)], config_path=path)
+                initial = json.loads(result.receiver.GetConfig())
+                self.assertEqual(initial['schema_version'], 1)
+                self.assertTrue(initial['cec_enabled'])
+                invalid = json.dumps({'schema_version': 2})
+                with self.assertRaisesRegex(RuntimeError, 'Unsupported configuration'):
+                    result.receiver.ApplySettings(invalid)
+                result.command_run.assert_not_called()
+                request = {
+                    'schema_version': 1,
+                    'target_output': 'DP-1',
+                    'cec_enabled': True,
+                    'require_snapshot': False,
+                }
+                with patch.object(subprocess, 'run', return_value=SimpleNamespace(
+                        returncode=0, stdout='', stderr='')) as command_run:
+                    response = json.loads(
+                        result.receiver.ApplySettings(json.dumps(request)))
+                saved = json.loads(path.read_text(encoding='utf-8'))
+                self.assertTrue(response['accepted'])
+                self.assertEqual(saved['target_output'], 'DP-1')
+                self.assertTrue(saved['require_snapshot'])
+                self.assertEqual(
+                    json.loads(result.receiver.GetConfig())['target_output'], 'DP-1')
+                command_run.assert_called_once_with(
+                    ['/usr/bin/systemctl', '--user', 'restart', '--no-block',
+                     'topcec.service'],
+                    capture_output=True, text=True, timeout=10)
+
+        def test_webextension_audio_uses_active_window_display_without_atspi(self):
+            window_map = json.dumps([
+                {'title': 'TV video — Mozilla Firefox', 'output': TARGET},
+            ])
+            media = json.dumps({
+                'version': 1,
+                'windows': [{
+                    'window_id': 3,
+                    'active_title': 'TV video',
+                    'tabs': [{'audible': True, 'muted': False}],
+                }],
+            })
+            result = self.run_monitor_steps([
+                (0, window_map, None, media, TARGET)])
+            self.assertTrue(result.status['playback_active'])
+            self.assertIsNone(result.status['fail_safe_reason'])
+            self.assertTrue(any(
+                call.kwargs.get('wake_requested') is False
+                for call in result.power.activity.call_args_list))
+
         def test_matching(self):
             m = Mapping(15)
             frames = [{'title': 'Preferences — Mozilla Firefox', 'audio': True}]
@@ -1056,25 +1370,46 @@ def self_test():
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--rz-deadzone-percent', type=float, default=5.0,
+    parser.add_argument('--config', help='JSON-konfigurasjonsfil med versjonert skjema')
+    parser.add_argument('--target', help='Skjermutgang som styrer TV-en')
+    parser.add_argument('--timeout-seconds', type=int,
+                        help='Inaktivitet før standby; nullkonfigurasjon deaktiverer')
+    parser.add_argument('--rz-deadzone-percent', type=float, default=None,
                         help='Deadzone for ABS_RZ i prosent (standard: 5)')
-    parser.add_argument('--axis-deadzone-percent', type=float, default=2.0,
+    parser.add_argument('--axis-deadzone-percent', type=float, default=None,
                         help='Minste aksebevegelse i prosent av området (standard: 2)')
-    parser.add_argument('--kde-timeout', action='store_true',
+    parser.add_argument('--kde-timeout', action=argparse.BooleanOptionalAction, default=None,
                         help='Følg KDEs skjermtidsgrense for nettstrøm')
-    parser.add_argument('--cec', action='store_true', help='Send faktisk CEC av/på')
-    parser.add_argument('--cec-port', default='/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00')
+    parser.add_argument('--cec', action=argparse.BooleanOptionalAction, default=None,
+                        help='Send faktisk CEC av/på')
+    parser.add_argument('--cec-port')
     parser.add_argument('--device', action='append', help='Inputsti; kan gjentas')
-    parser.add_argument('--mapping-ttl', type=float, default=15.0,
+    parser.add_argument('--mapping-ttl', type=float, default=None,
                         help='Sekunder før vindusrapport blir usikker (standard: 15)')
     parser.add_argument('--mute-label', action='append', default=None,
                         help='Eksakt AT-SPI-knappnavn (standard: Mute tab)')
-    parser.add_argument('--require-snapshot', action='store_true',
+    parser.add_argument('--require-snapshot', action=argparse.BooleanOptionalAction, default=None,
                         help='Sperr AV uten ferske rapporter fra Firefox-livebroen')
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--atspi-scan', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
-    args.mute_label = args.mute_label or ['Mute tab']
+    try:
+        config = load_config(args.config) if args.config else {
+            'schema_version': 1, **DEFAULT_CONFIG}
+        config = merge_cli(config, args)
+    except ValueError as error:
+        parser.error(str(error))
+    args.target = config['target_output']
+    args.timeout_seconds = config['timeout_seconds']
+    args.mapping_ttl = config['mapping_ttl_seconds']
+    args.device = config['devices']
+    args.mute_label = config['mute_labels']
+    args.cec = config['cec_enabled']
+    args.cec_port = config['cec_port']
+    args.kde_timeout = config['kde_timeout']
+    args.require_snapshot = config['require_snapshot']
+    args.axis_deadzone_percent = config['axis_deadzone_percent']
+    args.rz_deadzone_percent = config['rz_deadzone_percent']
     if args.cec:
         args.require_snapshot = True
     if not math.isfinite(args.rz_deadzone_percent) or not 0 < args.rz_deadzone_percent <= 25:
