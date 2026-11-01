@@ -6,6 +6,7 @@ import unittest.mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / 'cec-tv'))
 
 def guard(event, args):
     if event in ('subprocess.Popen', 'os.system', 'os.posix_spawn', 'os.exec', 'os.fork', 'socket.connect', 'os.kill', 'os.killpg'):
@@ -22,6 +23,10 @@ if mode == 'self-test':
     runpy.run_path(str(ROOT / 'cec-tv/monitor.py'), run_name='__main__')
 elif mode == 'cec-power':
     path = ROOT / 'tests/test_cec_power.py'
+    sys.argv = [str(path)]
+    runpy.run_path(str(path), run_name='__main__')
+elif mode == 'activity-policy':
+    path = ROOT / 'tests/test_activity_policy.py'
     sys.argv = [str(path)]
     runpy.run_path(str(path), run_name='__main__')
 else:
@@ -45,6 +50,10 @@ else:
         if old not in source:
             raise RuntimeError('Expected legacy CEC wake scenario was not found')
         source = source.replace(old, new)
+    if mode in ('check_fixed.py', 'check_cec.py'):
+        source = source.replace(
+            "ns={'__file__':",
+            "from activity_policy import ActivityPolicy\nns={'ActivityPolicy':ActivityPolicy,'__file__':")
     source = source.replace("Path('outputs/cec-tv')", 'Path(' + repr(str(ROOT / 'cec-tv')) + ')')
     sys.argv = [str(path)]
     import types

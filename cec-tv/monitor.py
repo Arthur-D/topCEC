@@ -13,8 +13,10 @@ import sys
 import time
 from pathlib import Path
 
+from activity_policy import ActivityPolicy, DEFAULT_TIMEOUT
+
 TARGET = 'HDMI-A-2'
-TIMEOUT = 60.0
+TIMEOUT = DEFAULT_TIMEOUT
 SCAN_INTERVAL = 2.0
 SCAN_TIMEOUT = 5.0
 SCAN_MAX_AGE = 8.0
@@ -138,8 +140,7 @@ class KdeTimeout:
                         raise ValueError('ugyldig tidsgrense')
                     if value != self.value:
                         self.value = value
-                        timer.timeout = value
-                        timer.last = now
+                        timer.set_timeout(value, now)
                         log('KDE-tidsgrense (nettstrøm): ' +
                             ('aldri — automatisk AV deaktivert' if value is None
                              else f'{value} sekunder ({value / 60:g} minutter)'))
@@ -168,27 +169,8 @@ class KdeTimeout:
             self.process.communicate()
 
 
-class Timer:
-    def __init__(self, now, timeout=TIMEOUT):
-        self.timeout = timeout
-        self.last = now
-        self.expired = False
-
-    def activity(self, now):
-        self.last = now
-        if self.expired:
-            self.expired = False
-            return 'VILLE SLÅTT PÅ TV'
-        return None
-
-    def tick(self, now, uncertain=False):
-        if uncertain:
-            # Require a full 60 seconds of known inactivity after recovery.
-            self.last = now
-        elif self.timeout is not None and not self.expired and now - self.last >= self.timeout:
-            self.expired = True
-            return f'VILLE SLÅTT AV TV ({self.timeout:g} sekunder uten aktivitet)'
-        return None
+class Timer(ActivityPolicy):
+    """Compatibility name for the extracted activity policy."""
 
 
 class Axis:
@@ -639,11 +621,11 @@ def run(args):
                 reason = reason or settings_error
                 if timer.timeout is None and power and power.pending == 'off':
                     power.pending = None
-                    timer.expired = False
+                    timer.cancel_standby(now)
             if power:
                 if reason and power.pending == 'off':
                     power.pending = None
-                    timer.expired = False
+                    timer.cancel_standby(now)
                 power.poll()
                 reason = reason or power.fault
                 if power.process is not None:
