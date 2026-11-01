@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Load the two KWin bridges, then run the monitor in the desktop session."""
+import argparse
 import os
 from pathlib import Path
 import subprocess
 import sys
+
+from configuration import default_config_path, load_config
 
 BASE = Path(__file__).resolve().parent
 
@@ -17,6 +21,14 @@ def qdbus(*args, required=True):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', help='JSON monitor configuration file')
+    args = parser.parse_args()
+    config_path = Path(args.config).expanduser() if args.config else default_config_path()
+    if args.config or config_path.exists():
+        load_config(config_path)
+    else:
+        config_path = None
     owner = qdbus('org.freedesktop.DBus', '/org/freedesktop/DBus',
                   'org.freedesktop.DBus.NameHasOwner', 'net.local.CecActivity')
     if owner == 'true':
@@ -31,10 +43,13 @@ def main():
         if not ident.isdigit():
             raise RuntimeError('KWin kunne ikke laste ' + name + ': ' + ident)
     qdbus('org.kde.KWin', '/Scripting', 'org.kde.kwin.Scripting.start')
-    os.execv('/usr/bin/python3', ['/usr/bin/python3', str(BASE / 'monitor.py'),
-             '--cec', '--require-snapshot', '--kde-timeout',
-             '--device', '/dev/input/by-id/usb-Logitech_G29_Driving_Force_Racing_Wheel-event-joystick',
-             '--device', '/dev/input/by-id/usb-Glorious_GMBK_75__ISO_SL125211940100411-event-kbd'])
+    command = ['/usr/bin/python3', str(BASE / 'monitor.py'),
+               '--cec', '--require-snapshot']
+    if config_path:
+        command += ['--config', str(config_path)]
+    else:
+        command += ['--kde-timeout']
+    os.execv('/usr/bin/python3', command)
 
 
 if __name__ == '__main__':

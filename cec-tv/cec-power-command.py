@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Explicit CEC command to TV address 0, followed by verified power status.
 Only invoked by the live monitor. No broadcast, input switching or autostart.
 """

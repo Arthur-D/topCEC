@@ -1,0 +1,9 @@
+{
+  "name": "net.local.topcec.media",
+  "description": "topCEC Firefox media status bridge",
+  "path": "/usr/libexec/topcec/cec-tv/firefox-native-host.py",
+  "type": "stdio",
+  "allowed_extensions": [
+    "topcec-media@topcec.local"
+  ]
+}

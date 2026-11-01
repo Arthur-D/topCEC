@@ -1,4 +1,5 @@
 """Hardware-free KWin JavaScript tests; requires PySide6 (QtQml)."""
+# SPDX-License-Identifier: GPL-3.0-or-later
 from pathlib import Path
 import unittest
 from PySide6.QtCore import QCoreApplication

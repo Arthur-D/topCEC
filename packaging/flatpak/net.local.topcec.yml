@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+app-id: net.local.topcec
+runtime: org.kde.Platform
+runtime-version: "6.11"
+sdk: org.kde.Sdk
+base: io.qt.PySide.BaseApp
+base-version: "6.11"
+command: topcec-gui
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --talk-name=net.local.CecActivity
+  - --env=QT_QUICK_CONTROLS_STYLE=org.kde.desktop
+modules:
+  - name: topcec-gui
+    buildsystem: simple
+    build-commands:
+      - install -D -m 0644 cec-tv/configuration.py /app/lib/topcec/configuration.py
+      - install -D -m 0644 cec-tv/topcec_gui.py /app/lib/topcec/topcec_gui.py
+      - install -D -m 0644 cec-tv/topcec.qml /app/lib/topcec/topcec.qml
+      - install -D -m 0755 packaging/flatpak/topcec-gui /app/bin/topcec-gui
+      - install -D -m 0644 packaging/topcec-gui.desktop /app/share/applications/net.local.topcec.desktop
+    sources:
+      - type: dir
+        path: ../..
+cleanup-commands:
+  - /app/cleanup-BaseApp.sh

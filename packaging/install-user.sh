@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -euo pipefail
+
+SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+HOME_DIR="${TOPCEC_HOME:-$HOME}"
+APP_DIR="${TOPCEC_APP_DIR:-$HOME_DIR/.local/share/topcec}"
+BIN_DIR="${TOPCEC_BIN_DIR:-$HOME_DIR/.local/bin}"
+UNIT_DIR="${TOPCEC_USER_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME_DIR/.config}/systemd/user}"
+
+install -d "$APP_DIR/cec-tv" "$BIN_DIR" "$UNIT_DIR"
+for file in \
+    activity_policy.py cec_power_state.py configuration.py firefox_media.py \
+    native_messaging.py providers.py \
+    monitor.py start.py cec-kde-settings.py cec-power-command.py \
+    firefox-native-host.py topcec_gui.py activity.js firefox.js topcec.qml; do
+    mode=0644
+    case "$file" in
+        monitor.py|start.py|cec-kde-settings.py|cec-power-command.py|\
+        firefox-native-host.py|topcec_gui.py)
+            mode=0755
+            ;;
+    esac
+    install -m "$mode" "$SOURCE_DIR/cec-tv/$file" "$APP_DIR/cec-tv/$file"
+done
+TOPCEC_HOME="$HOME_DIR" TOPCEC_APP_DIR="$APP_DIR" \
+    bash "$SOURCE_DIR/packaging/install-firefox-native-host.sh"
+
+install -m 0644 "$SOURCE_DIR/systemd/user/topcec.service" \
+    "$UNIT_DIR/topcec.service"
+printf '#!/usr/bin/env bash\nexec /usr/bin/python3 %q "$@"\n' \
+    "$APP_DIR/cec-tv/topcec_gui.py" > "$BIN_DIR/topcec-gui"
+chmod 0755 "$BIN_DIR/topcec-gui"
+
+if [[ "${TOPCEC_SKIP_SYSTEMCTL:-0}" != 1 ]]; then
+    systemctl --user daemon-reload
+fi
+
+printf 'Installed topCEC files under %s\n' "$APP_DIR"
+printf 'User unit: %s/topcec.service (not enabled or started)\n' "$UNIT_DIR"
+printf 'GUI launcher: %s/topcec-gui\n' "$BIN_DIR"
+printf 'Config is preserved separately at %s/topcec/config.json\n' \
+    "${XDG_CONFIG_HOME:-$HOME_DIR/.config}"
+printf 'Configure settings with topcec-gui, then enable with:\n'
+printf '  systemctl --user enable --now topcec.service\n'

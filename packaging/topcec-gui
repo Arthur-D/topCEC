@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+import runpy
+
+runpy.run_path('/usr/libexec/topcec/cec-tv/topcec_gui.py', run_name='__main__')

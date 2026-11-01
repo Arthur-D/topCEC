@@ -7,11 +7,16 @@ Earlier local installation documentation corroborates the component layout and
 superseded units. Available material suggests local iterative development, but
 this is not a complete authorship or chain-of-title audit.
 
-No LICENSE, SPDX identifier, copyright notice or explicit redistribution grant
-was found in the 17 selected original files or the installed cec-tv root.
-Individual authorship and any earlier copied-code provenance remain unverified.
-No new license has been assigned. Private archival storage must not be interpreted
-as permission to publish or redistribute under an open-source license.
+The project owner explicitly selected GPL-3.0-or-later for TopCEC-authored
+project files; `LICENSE` contains the standard license text. This applies to
+TopCEC-authored work in this repository and does not change licenses for
+third-party dependencies or separately identified external material.
+
+The original 17-file snapshot was copied from a local installation. Its
+individual authorship and any earlier copied-code provenance remain
+unverified; the project-level license does not claim copyright in separately
+identified third-party material. The KWin and PowerDevil references below are
+references only and do not establish that code from those projects was copied.
 
 firefox.js contains a reference to KDE KWin's scripting.cpp for its QTimer API.
 cec-kde-settings.py refers to KDE PowerDevil's defaults implementation. References
@@ -26,5 +31,6 @@ that their licenses automatically cover the local controller. External projects
 from prior comparison research were deliberately excluded.
 
 README, manifest, validation notes, .gitignore and the safe test runner were added
-solely for this archival task. All installed controller and original test bytes
-remain unchanged.
+solely for this archival task. The baseline hashes remain recorded in
+SNAPSHOT.json; subsequent TopCEC-authored modifications are covered by the
+project license.
