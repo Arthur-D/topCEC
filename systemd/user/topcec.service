@@ -1,5 +1,5 @@
 [Unit]
-Description=TV CEC power from screen activity and Firefox audio
+Description=topCEC TV CEC power from screen activity and Firefox audio
 After=plasma-kwin_wayland.service
 PartOf=graphical-session.target plasma-kwin_wayland.service
 Conflicts=cec-tv-power.service cec-activity-live.service

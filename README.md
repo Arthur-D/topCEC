@@ -11,7 +11,7 @@ or a portable release.
 
 - `cec-tv/`: installed monitor, startup script, CEC command helper, KDE settings
   reader, and the `activity.js` / `firefox.js` KWin bridges loaded by `start.py`.
-- `systemd/user/cec-activity.service`: current controller unit.
+- `systemd/user/topcec.service`: current topCEC controller unit.
 - `legacy/`: three older systemd units and their three shell helpers, retained
   as historical context. They are not enabled by this repository. The inspected
   enablement directories contain the current unit, not these older units.
