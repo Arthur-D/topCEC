@@ -1,4 +1,4 @@
-# TopCEC
+# topCEC
 
 Intelligent per-display HDMI-CEC power management for Linux
 
