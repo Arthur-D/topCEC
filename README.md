@@ -56,6 +56,23 @@ configuration, external research repositories and credentials are excluded.
 - Some original comments retain older test names or timing descriptions. The source
   is authoritative. Hardware operation and reboot/login startup were not retested.
 
+## Firefox web apps and accessibility
+
+KWin reports window PIDs. The monitor verifies the host Firefox executable
+through /proc/<pid>/exe, including web apps with custom window classes.
+Missing or invalid process information blocks automatic OFF until recovery.
+Chromium is not supported.
+
+Separate Flatpak profiles on this machine needed GNOME_ACCESSIBILITY=1,
+passed with flatpak run --env=GNOME_ACCESSIBILITY=1 org.mozilla.firefox.
+Personal desktop launchers are outside this repository. Fresh profiles must
+complete the Firefox welcome dialog before tabs become accessible. A live test
+of the same process confirmed zero tabs before and one tab after completion.
+
+Only the WebRTC indicator with AT-SPI attributes id:webrtcIndicator and tag:html
+is excluded. Other frames without readable tabs still fail the scan.
+Socket warnings may remain while frames are readable; no sockets were deleted.
+
 ## Hardware-free verification
 
 From the repository root, run:

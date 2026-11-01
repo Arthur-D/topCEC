@@ -11,12 +11,11 @@ function reportFirefox() {
         const snapshot = [];
         for (let i = 0; i < windows.length; i++) {
             const w = windows[i];
-            if (!String(w.resourceClass || '').toLowerCase().includes('firefox')) continue;
-            snapshot.push({title: String(w.caption || ''),
+            snapshot.push({pid: Number(w.pid), title: String(w.caption || ''),
                            output: w.output ? String(w.output.name) : 'ingen'});
         }
         // One atomic message also removes closed windows and old titles.
-        send('Firefox-snapshot: ' + JSON.stringify(snapshot));
+        send('Desktop-snapshot: ' + JSON.stringify(snapshot));
         const active = workspace.activeWindow;
         send('Fokus: ' + (active && active.output ? active.output.name : 'ingen'));
     } catch (error) {

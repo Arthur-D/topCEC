@@ -219,6 +219,26 @@ class Axis:
         return False
 
 
+def firefox_window_snapshot(payload, read_exe=None):
+    """Resolve KWin PIDs on the host; never infer browser identity from titles."""
+    if read_exe is None:
+        read_exe = lambda pid: str(Path(f"/proc/{pid}/exe").readlink())
+    rows = json.loads(payload)
+    if not isinstance(rows, list):
+        raise ValueError("Ugyldig skrivebordssnapshot")
+    result = []
+    for row in rows:
+        if (not isinstance(row, dict) or type(row.get("pid")) is not int
+                or row["pid"] <= 0 or not isinstance(row.get("title"), str)
+                or not isinstance(row.get("output"), str)):
+            raise ValueError("Ugyldig vindusidentitet")
+        executable = Path(read_exe(row["pid"]))
+        if (executable.name in ("firefox", "firefox-bin")
+                and executable.parent.name == "firefox"):
+            result.append({"title": row["title"], "output": row["output"]})
+    return json.dumps(result)
+
+
 class Mapping:
     def __init__(self, ttl):
         self.ttl = ttl
@@ -396,6 +416,14 @@ def scan_atspi(mute_labels):
                 continue
             found = True
             title = frame.name or ''
+            # Firefox exports its WebRTC indicator as a frame without tabs.
+            # Identify only this browser-owned auxiliary window; unknown
+            # tabless frames must still fail the scan.
+            attributes = dict(item.split(":", 1) for item in frame.getAttributes()
+                              if ":" in item)
+            if (attributes.get("id") == "webrtcIndicator"
+                    and attributes.get("tag") == "html"):
+                continue
             tabs, sounding = walk(frame)
             if tabs == 0:
                 raise RuntimeError('Firefox-frame uten lesbare page tabs: ' + title)
@@ -458,6 +486,15 @@ def run(args):
                             axis.reset()
             elif message == 'TV-aktivitet: mus':
                 activity('mus (TV-melding fra KWin)')
+            elif message.startswith("Desktop-snapshot: "):
+                first = mapping.snapshot_stamp is None
+                try:
+                    payload = firefox_window_snapshot(message[len("Desktop-snapshot: "):])
+                except (ValueError, TypeError, OSError) as error:
+                    mapping.snapshot_error = "Vindusprosesser kunne ikke verifiseres: " + str(error)
+                else:
+                    if mapping.snapshot(payload, time.monotonic()) and first:
+                        log("Firefox-livebro tilkoblet; prosessidentitet verifisert")
             elif message.startswith('Firefox-snapshot: '):
                 first = mapping.snapshot_stamp is None
                 if mapping.snapshot(message[len('Firefox-snapshot: '):], time.monotonic()):
@@ -732,9 +769,13 @@ def self_test():
             from unittest.mock import patch
 
             class Node:
-                def __init__(self, role, name='', children=()):
+                def __init__(self, role, name='', children=(), attributes=()):
                     self.role, self.name, self.children = role, name, children
                     self.childCount = len(children)
+                    self.attributes = attributes
+
+                def getAttributes(self):
+                    return self.attributes
 
                 def getRoleName(self):
                     return self.role
@@ -751,15 +792,37 @@ def self_test():
             sounding = Node('frame', 'Advanced Preferences — Mozilla Firefox', [
                 Node('page tab', 'Advanced Preferences'),
                 Node('page tab', 'Background YouTube', [Node('button', 'Mute tab')])])
-            app = Node('application', 'Firefox', [quiet, sounding])
+            indicator = Node('frame', 'Localized sharing indicator',
+                             attributes=["id:webrtcIndicator", "tag:html"])
+            app = Node('application', 'Firefox', [quiet, indicator, sounding])
             desktop = Node('desktop', children=[app])
             fake = SimpleNamespace(STATE_DEFUNCT=99,
                                    Registry=SimpleNamespace(getDesktop=lambda n: desktop))
             with patch.dict(sys.modules, {'pyatspi': fake}):
                 result = scan_atspi(['Mute tab'])
+                for attributes in ((), ["id:main-window", "tag:html"],
+                                   ["id:webrtcIndicator", "tag:button"]):
+                    indicator.attributes = attributes
+                    with self.assertRaises(RuntimeError):
+                        scan_atspi(['Mute tab'])
             self.assertEqual(result, [
                 {'title': quiet.name, 'audio': False},
                 {'title': sounding.name, 'audio': True}])
+
+        def test_process_window_identity(self):
+            rows = [{"pid": 10, "title": "Web App", "output": TARGET},
+                    {"pid": 20, "title": "Firefox fake title", "output": TARGET}]
+            paths = {10: "/app/lib/firefox/firefox-bin", 20: "/app/chromium/chrome"}
+            self.assertEqual(json.loads(firefox_window_snapshot(json.dumps(rows), paths.__getitem__)),
+                             [{"title": "Web App", "output": TARGET}])
+            def inaccessible(pid):
+                raise ProcessLookupError("process disappeared")
+            with self.assertRaises(OSError):
+                firefox_window_snapshot(json.dumps(rows), inaccessible)
+            for pid in (0, -1, True, "10", None):
+                rows[0]["pid"] = pid
+                with self.assertRaises(ValueError):
+                    firefox_window_snapshot(json.dumps(rows), paths.__getitem__)
 
         def test_snapshots(self):
             m = Mapping(15)
