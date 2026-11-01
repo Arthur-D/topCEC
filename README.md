@@ -244,15 +244,39 @@ session-D-Bus name. The host service exposes `GetStatus`, `GetConfig`,
 `RequestPower`, and `ApplySettings`; the host validates and atomically saves
 configuration, then asks the user systemd manager to restart `topcec.service`.
 The service must already be installed and running to view or change settings.
-The manifest uses KDE's Python runtime and Qt/PySide BaseApp for PySide6. See
-[KDE's Python Flatpak guidance](https://develop.kde.org/docs/getting-started/python/python-flatpak/).
-Building requires `flatpak-builder` and the matching KDE Platform, KDE SDK, and
-`io.qt.PySide.BaseApp` runtimes for branch 6.11. Build the client from the
-repository root with:
+The root-level manifest uses KDE Platform/SDK 6.11 and builds the required
+PySide6 modules from checksum-pinned upstream source against that SDK.
+PySide uses Qt's private ABI: the previous PySide BaseApp 6.11.2 failed to
+import against KDE's Qt 6.11.3 despite sharing the same branch. Building the
+bindings against the SDK avoids relying on a stale binary BaseApp. An import
+check for QtCore, QtDBus, QtGui, QtQml, and QtQuick runs during the build.
+When updating the KDE branch or Qt patch version, review the pinned PySide
+source and LLVM SDK extension as well; the import check must still pass.
+Upstream PySide/Shiboken license texts are installed under
+`/app/share/licenses/pyside`; other third-party notices remain in their packages.
+The source URL and checksum are recorded in `packaging/flatpak/pyside.yml`.
+
+Build from the repository root with the Flatpak-packaged builder (this builds
+and exports the app without installing it):
 
 ```sh
-flatpak-builder --force-clean build-dir \
-  packaging/flatpak/net.local.topcec.yml
+flatpak run --command=flathub-build org.flatpak.Builder net.local.topcec.yml
+flatpak build-bundle repo dist/net.local.topcec.flatpak net.local.topcec
+```
+
+The root-level source path works directly with `flathub-build`; no temporary
+manifest or `sed` workaround is needed. The first build also downloads the
+KDE SDK/runtime and LLVM 22 SDK extension, and compiles the required bindings.
+If using a native builder instead, run
+`flatpak-builder --user --install-deps-from=flathub --force-clean --repo=repo builddir net.local.topcec.yml`.
+Add `--install` to the builder command only if you want to replace/install the
+user's GUI app. This does not install or restart the separate host service.
+After installing the GUI, verify the actual runtime import with:
+
+```sh
+flatpak run --command=python3 net.local.topcec -c \
+  'from PySide6 import QtCore, QtDBus, QtGui, QtQml, QtQuick; print(QtCore.qVersion())'
+flatpak run net.local.topcec
 ```
 
 The manifest grants Wayland/X11 display access and the single topCEC session

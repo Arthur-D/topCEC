@@ -180,15 +180,16 @@ class GuiChecks(unittest.TestCase):
         self.assertIn('host service is not available', backend.actionMessage)
 
     def test_flatpak_manifest_only_grants_the_host_control_bus_name(self):
-        manifest = (ROOT / 'packaging/flatpak/net.local.topcec.yml').read_text(
+        manifest = (ROOT / 'net.local.topcec.yml').read_text(
             encoding='utf-8')
         launcher = (ROOT / 'packaging/flatpak/topcec-gui').read_text(
             encoding='utf-8')
         self.assertIn('app-id: net.local.topcec', manifest)
         self.assertIn('--talk-name=net.local.CecActivity', manifest)
-        self.assertIn('base: io.qt.PySide.BaseApp', manifest)
+        self.assertNotIn('base: io.qt.PySide.BaseApp', manifest)
         self.assertIn('runtime-version: "6.11"', manifest)
-        self.assertIn('base-version: "6.11"', manifest)
+        self.assertIn('packaging/flatpak/pyside.yml', manifest)
+        self.assertIn('path: .', manifest)
         self.assertIn("os.environ['TOPCEC_DBUS_ONLY'] = '1'", launcher)
         self.assertIn('org.kde.Platform', manifest)
         self.assertIn('cec-tv/configuration.py', manifest)
@@ -199,6 +200,23 @@ class GuiChecks(unittest.TestCase):
                 '--talk-name=org.freedesktop.systemd1',
                 '--talk-name=org.kde.KWin'):
             self.assertNotIn(forbidden_permission, manifest)
+
+    def test_flatpak_builds_bindings_against_sdk_and_checks_imports(self):
+        module = (ROOT / 'packaging/flatpak/pyside.yml').read_text(
+            encoding='utf-8')
+        self.assertIn('--qtpaths=/usr/bin/qtpaths', module)
+        self.assertIn('--module-subset=Core,Gui,Network,DBus,OpenGL,Qml,Quick', module)
+        self.assertIn('from PySide6 import QtCore, QtDBus, QtGui, QtQml, QtQuick',
+                      module)
+        self.assertNotIn('LD_LIBRARY_PATH', module)
+        self.assertIn('sha256:', module)
+        self.assertIn('LICENSES/*.txt /app/share/licenses/pyside/', module)
+
+    def test_qml_list_accessors_take_no_arguments(self):
+        backend = GuiBackend(dbus_only=True)
+        meta = backend.metaObject()
+        self.assertGreaterEqual(meta.indexOfMethod('deviceList()'), 0)
+        self.assertGreaterEqual(meta.indexOfMethod('muteLabelList()'), 0)
 
     def test_kirigami_window_loads_offscreen(self):
         app = QGuiApplication.instance() or QGuiApplication([])
