@@ -1,6 +1,7 @@
 """Staged tests for the user-level installer and uninstaller."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,6 +12,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class UserPackagingChecks(unittest.TestCase):
+    def test_publication_metadata_and_scoped_build_ignores(self):
+        ignores = (ROOT / '.gitignore').read_text().splitlines()
+        for pattern in (
+                '/repo/', '/repo-local/', '/dist/', '/builddir/',
+                '/build-dir/', '/.flatpak-builder/', '/topcec-local.yml'):
+            self.assertIn(pattern, ignores)
+        snapshot = json.loads((ROOT / 'SNAPSHOT.json').read_text())
+        self.assertEqual(len(snapshot['files']), 17)
+        for record in snapshot['files']:
+            self.assertFalse(record['source'].startswith('/home/'))
+            self.assertRegex(record['sha256'], r'^[0-9a-f]{64}$')
+        provenance = (ROOT / 'PROVENANCE.md').read_text()
+        self.assertIn('provenance remain\nunverified', provenance)
+        self.assertIn('does not redact', provenance)
+
     def test_install_and_uninstall_are_scoped_and_preserve_config(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

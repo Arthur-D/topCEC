@@ -18,3 +18,10 @@ backups/
 *.key
 .venv/
 venv/
+/repo/
+/repo-local/
+/dist/
+/builddir/
+/build-dir/
+/.flatpak-builder/
+/topcec-local.yml

@@ -4,7 +4,7 @@ After=plasma-kwin_wayland.service
 
 [Service]
 Type=simple
-ExecStart=/home/arthur/.local/bin/cec-tv-swayidle
+ExecStart=%h/.local/bin/cec-tv-swayidle
 Restart=on-failure
 RestartSec=5
 

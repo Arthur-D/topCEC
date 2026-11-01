@@ -32,4 +32,6 @@ modules:
           - builddir
           - build-dir
           - repo
+          - repo-local
           - dist
+          - topcec-local.yml

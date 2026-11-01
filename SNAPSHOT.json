@@ -1,90 +1,90 @@
 {
   "date": "2026-10-27",
-  "host": "magne-desktop (persisted /etc/hostname; sandbox hostname bazzite)",
+  "host": "Original local KDE Plasma installation (hostname redacted)",
   "files": [
     {
       "path": "cec-tv/activity.js",
-      "source": "/home/arthur/.local/share/cec-tv/activity.js",
+      "source": "$XDG_DATA_HOME/cec-tv/activity.js",
       "sha256": "bd5f956c8938e5573cc8654e6cae77f4163602859def010be7b16a62235b40bd"
     },
     {
       "path": "cec-tv/cec-kde-settings.py",
-      "source": "/home/arthur/.local/share/cec-tv/cec-kde-settings.py",
+      "source": "$XDG_DATA_HOME/cec-tv/cec-kde-settings.py",
       "sha256": "5052309633442cb4beee7aa408edd030dcd35f56368a11113be28bbc4aab7b2a"
     },
     {
       "path": "cec-tv/cec-power-command.py",
-      "source": "/home/arthur/.local/share/cec-tv/cec-power-command.py",
+      "source": "$XDG_DATA_HOME/cec-tv/cec-power-command.py",
       "sha256": "8f185e4b3b9e695da1a382239ce54bf587c6d5e626dd7bef846f187858470e39"
     },
     {
       "path": "cec-tv/firefox.js",
-      "source": "/home/arthur/.local/share/cec-tv/firefox.js",
+      "source": "$XDG_DATA_HOME/cec-tv/firefox.js",
       "sha256": "609aaa70f51b1520860bdc72cdb05a0c6534610b65aed4e18211cbfdefdb5942"
     },
     {
       "path": "cec-tv/monitor.py",
-      "source": "/home/arthur/.local/share/cec-tv/monitor.py",
+      "source": "$XDG_DATA_HOME/cec-tv/monitor.py",
       "sha256": "00c2398e038c9609babb10c04ece673a7f26eac770215c3b79e2cc936056179d"
     },
     {
       "path": "cec-tv/start.py",
-      "source": "/home/arthur/.local/share/cec-tv/start.py",
+      "source": "$XDG_DATA_HOME/cec-tv/start.py",
       "sha256": "4938e1965ccbcb41b3db8e3a9b4781924621da910184f3b024a5f029cd143791"
     },
     {
       "path": "systemd/user/cec-activity.service",
-      "source": "/home/arthur/.config/systemd/user/cec-activity.service",
+      "source": "$XDG_CONFIG_HOME/systemd/user/cec-activity.service",
       "sha256": "384c22063e0a8bb162310ff0b6083c5b3a60446ad1e90f96c0e03d92ce26eadb"
     },
     {
       "path": "legacy/systemd/user/cec-tv-power.service",
-      "source": "/home/arthur/.config/systemd/user/cec-tv-power.service",
+      "source": "$XDG_CONFIG_HOME/systemd/user/cec-tv-power.service",
       "sha256": "c4289559f01c25e623eb82d3121af3343c1342aca870c09d5f00084855afb30e"
     },
     {
       "path": "legacy/systemd/user/cec-tv-config-check.service",
-      "source": "/home/arthur/.config/systemd/user/cec-tv-config-check.service",
+      "source": "$XDG_CONFIG_HOME/systemd/user/cec-tv-config-check.service",
       "sha256": "e70c4afff9b31abd8d0d0d7ef3c2bfc7f91cfa68eacf2cb23ab081958b415791"
     },
     {
       "path": "legacy/systemd/user/cec-tv-config-check.path",
-      "source": "/home/arthur/.config/systemd/user/cec-tv-config-check.path",
+      "source": "$XDG_CONFIG_HOME/systemd/user/cec-tv-config-check.path",
       "sha256": "4a52aca0b2c8dfce51cb996dfcd918cc1d76b5230ea12fce917388ea711a84f1"
     },
     {
       "path": "legacy/bin/cec-tv-power",
-      "source": "/home/arthur/.local/bin/cec-tv-power",
+      "source": "$HOME/.local/bin/cec-tv-power",
       "sha256": "9c30b24df85e89ec4f68f55118ce1f91340527a6c2ca179bdd6de6bac4ad4df4"
     },
     {
       "path": "legacy/bin/cec-tv-swayidle",
-      "source": "/home/arthur/.local/bin/cec-tv-swayidle",
+      "source": "$HOME/.local/bin/cec-tv-swayidle",
       "sha256": "c8e0593312b21f560324eae2557754259df9c063d69489a57d52141fd803dc6b"
     },
     {
       "path": "legacy/bin/cec-tv-config-check",
-      "source": "/home/arthur/.local/bin/cec-tv-config-check",
+      "source": "$HOME/.local/bin/cec-tv-config-check",
       "sha256": "8963b937cc9e4b6e568accbf6867d1d2a05d3c178f9dce2797886c46e92db333"
     },
     {
       "path": "tests/original/test_cec_live.py",
-      "source": "/home/arthur/Documents/Codex/2026-10-26/referenced-chatgpt-conversation-this-is-an/work/test_cec_live.py",
+      "source": "Local development work directory, 2026-10-26/test_cec_live.py",
       "sha256": "a2864525901d7186af273296d0f73ba6c989130dbf9b9f1b8052a5e83877187c"
     },
     {
       "path": "tests/original/test_kde_settings.py",
-      "source": "/home/arthur/Documents/Codex/2026-10-26/referenced-chatgpt-conversation-this-is-an/work/test_kde_settings.py",
+      "source": "Local development work directory, 2026-10-26/test_kde_settings.py",
       "sha256": "da41f39e1dcceb0dfdd0d71a7f388d7996a9724a26005304236d06a1168f9282"
     },
     {
       "path": "tests/original/check_cec.py",
-      "source": "/home/arthur/Documents/Codex/2026-10-26/referenced-chatgpt-conversation-this-is-an-3/work/check_cec.py",
+      "source": "Local development work directory, 2026-10-26/check_cec.py",
       "sha256": "73047e2b0b28ce111c135a97cf54be79b98db3693a8c464d4b3e7ef4bc00dabe"
     },
     {
       "path": "tests/original/check_fixed.py",
-      "source": "/home/arthur/Documents/Codex/2026-10-26/referenced-chatgpt-conversation-this-is-an-3/work/check_fixed.py",
+      "source": "Local development work directory, 2026-10-26/check_fixed.py",
       "sha256": "2ab9c3e45d94835865be49e41fe7a5efcd5dec82237f4f48a51d7e8b1653d6dd"
     }
   ]

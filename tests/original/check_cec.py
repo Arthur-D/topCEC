@@ -1,6 +1,6 @@
 import ast, pathlib, unittest, json
 from unittest.mock import Mock
-p=pathlib.Path('/home/arthur/.local/share/cec-tv/monitor.py')
+p=pathlib.Path(__file__).resolve().parents[2] / 'cec-tv' / 'monitor.py'
 tree=ast.parse(p.read_text())
 ns={'__file__':str(p),'Path':pathlib.Path,'json':json,'sys':Mock(executable='python'),'time':Mock(),'subprocess':Mock(),'log':lambda x:None}
 ns['time'].monotonic.return_value=1

@@ -7,7 +7,7 @@ Project-authored topCEC code is licensed under **GPL-3.0-or-later**; see
 external material retain their own licenses. This project license does not
 relicense those components.
 
-Baseline snapshot dated 2026-10-27 from magne-desktop. The imported source was
+Baseline snapshot dated 2026-10-27 from a local KDE Plasma installation. The imported source was
 initially copied byte-for-byte; `SNAPSHOT.json` records those original hashes.
 Focused development changes may alter the current files. This is not an installer
 or a portable release.
@@ -29,7 +29,8 @@ SVG directly when no installed icon is available.
 - `legacy/`: three older systemd units and their three shell helpers, retained
   as historical context. They are not enabled by this repository. The inspected
   enablement directories contain the current unit, not these older units.
-- `tests/original/`: four existing hardware-free test scripts, unchanged.
+- `tests/original/`: four historical hardware-free test scripts, with assertions
+  preserved and personal import paths sanitized.
 - `tests/run.py`: hardware-free runner redirects historical test paths in memory
   to this copy, adapts legacy wake scenarios, blocks real child processes, device
   access and connections, and runs direct mocked tests of the current CEC coordinator.
@@ -43,15 +44,19 @@ configuration, external research repositories and credentials are excluded.
 
 - Target display is `HDMI-A-2`. The mouse bridge maps cursor position using KWin's
   current output geometries; gaps and overlapping geometry are treated as unknown.
+  The bridge reports activity with its actual output name; the monitor filters
+  it using `target_output`, including non-default displays. No separate KWin
+  target configuration is required. Legacy TV-only mouse reports are accepted
+  only for the original default display.
 - CEC adapter: `/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00`;
   commands address TV logical address 0. This is one TV, not a general multi-TV manager.
-- Startup input paths: `/dev/input/by-id/usb-Logitech_G29_Driving_Force_Racing_Wheel-event-joystick`
-  and `/dev/input/by-id/usb-Glorious_GMBK_75__ISO_SL125211940100411-event-kbd`.
-  Direct monitor defaults instead use `/dev/input/event10` and `/dev/input/event14`.
+- Input defaults remain `/dev/input/event10` and `/dev/input/event14` for
+  compatibility. Configure `devices` for your keyboard/wheel using stable
+  `/dev/input/by-id/` paths; event numbers are not portable between systems.
 - The packaged user unit runs from `%h/.local/share/topcec/cec-tv/start.py`.
   Direct checkout operation remains possible; older legacy helpers use
-  `/home/arthur/.local/bin/`. Machine device paths in the defaults are not
-  credentials.
+  `$HOME/.local/bin/`. The default CEC adapter path identifies a device model,
+  not a unique serial; set `cec_port` for your adapter. No devices are auto-selected.
 - Requires KDE Plasma/KWin 6 on Wayland, session D-Bus, qdbus, kreadconfig6,
   cec-client/libCEC, Python with dbus-python, PyGObject/GLib, evdev and pyatspi.
   External dependencies are not vendored or version-pinned.
@@ -74,9 +79,16 @@ configuration, external research repositories and credentials are excluded.
   External command errors, system/Qt dialogs and user-supplied window titles may
   still follow the desktop locale. Firefox AT-SPI mute-tab labels must match
   Firefox's language; translating the interface does not change detection labels.
-  Existing D-Bus report tokens and diagnostic JSON keys are retained for compatibility.
+  Existing D-Bus focus tokens and diagnostic JSON keys are retained for compatibility.
 - Some original comments retain older test names or timing descriptions. The source
   is authoritative. Hardware operation and reboot/login startup were not retested.
+
+Build output under `repo/`, `repo-local/`, `dist/`, `builddir/`, `build-dir/`
+and `.flatpak-builder/`, plus the obsolete temporary `topcec-local.yml`, is
+ignored and is not part of the source payload. Use only `net.local.topcec.yml`
+for Flatpak builds. Ignore rules do not remove files already committed in another
+checkout or redact earlier history. Original snapshot provenance remains
+unresolved as documented in `PROVENANCE.md`; no new authorship claim is made.
 
 ## Firefox web apps and accessibility
 

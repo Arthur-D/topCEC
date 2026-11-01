@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 let lastOutput = "";
 let lastMouseReport = 0;
+let lastMouseOutput = "";
 let watchedScreens = [];
-const TARGET = "HDMI-A-2";
 function send(message) {
     callDBus("net.local.CecActivity", "/net/local/CecActivity", "net.local.CecActivity", "Report", message);
 }
@@ -49,9 +49,12 @@ function refreshScreens() {
     updateCursorOutput();
 }
 function reportCursor() {
-    if (updateCursorOutput() === TARGET && Date.now() - lastMouseReport >= 1000) {
+    const output = updateCursorOutput();
+    if (output !== "unknown" &&
+            (output !== lastMouseOutput || Date.now() - lastMouseReport >= 1000)) {
         lastMouseReport = Date.now();
-        send("TV-aktivitet: mus");
+        lastMouseOutput = output;
+        send("Mouse-activity: " + output);
     }
 }
 function reportFocus() {

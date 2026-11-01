@@ -25,7 +25,7 @@ from firefox_media import FirefoxWebExtensionProvider
 from providers import ActivityProvider as ActivityProviderContract
 from providers import CecBackend, MediaProvider as MediaProviderContract
 
-TARGET = 'HDMI-A-2'
+TARGET = DEFAULT_CONFIG['target_output']
 TIMEOUT = DEFAULT_TIMEOUT
 SCAN_INTERVAL = 2.0
 SCAN_TIMEOUT = 5.0
@@ -621,7 +621,12 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     for state in devices.values():
                         for axis in state['axes'].values():
                             axis.reset()
-            elif message == 'TV-aktivitet: mus':
+            elif message.startswith('Mouse-activity: '):
+                output = message[len('Mouse-activity: '):].strip()
+                if output == target_output and output not in ('unknown', 'ingen', ''):
+                    activity('mouse (TV activity report from KWin)')
+            elif message == 'TV-aktivitet: mus' and target_output == TARGET:
+                # Older bridges identify only the original default TV output.
                 activity('mouse (TV activity report from KWin)')
             elif message.startswith("Desktop-snapshot: "):
                 first = mapping.snapshot_stamp is None
@@ -713,7 +718,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         ecodes, args.axis_deadzone_percent, args.rz_deadzone_percent)
 
     try:
-        for path in dict.fromkeys(args.device or ['/dev/input/event10', '/dev/input/event14']):
+        for path in dict.fromkeys(args.device or DEFAULT_CONFIG['devices']):
             device = InputDevice(path)
             try:
                 axes = activity_provider.seed(device)
@@ -1113,7 +1118,7 @@ def self_test():
             self.assertEqual(m.output('New title', Counter({'New title': 1}), 14), TARGET)
 
         def run_monitor_steps(self, steps, diagnostics_enabled=True, config_path=None,
-                              timeout=int(DEFAULT_TIMEOUT)):
+                              timeout=int(DEFAULT_TIMEOUT), target=TARGET):
             from unittest.mock import Mock, patch
 
             clock = SimpleNamespace(now=0)
@@ -1144,6 +1149,9 @@ def self_test():
                             'Firefox-media-snapshot: ' + optional[0])
                     if len(optional) > 1 and optional[1] is not None:
                         context.receiver.Report('Fokus: ' + optional[1])
+                    if len(optional) > 2:
+                        for message in optional[2]:
+                            context.receiver.Report(message)
                     if scan is not None:
                         output, errors, returncode = scan
                         workers[-1].poll.return_value = returncode
@@ -1187,6 +1195,7 @@ def self_test():
                                    mute_label=['Mute tab'], axis_deadzone_percent=2.0,
                                    rz_deadzone_percent=5.0,
                                    timeout_seconds=timeout,
+                                   target=target,
                                    config=str(config_path) if config_path else None)
             with patch.dict(sys.modules, modules), \
                     patch.dict(globals(), {
@@ -1207,6 +1216,20 @@ def self_test():
                 timer=vars(timer), mapping=vars(mapping), power_calls=power.mock_calls,
                 receiver=context.receiver, power=power, command_run=command_run,
                 status=json.loads(context.receiver.GetStatus()))
+
+        def test_mouse_reports_follow_configured_target_not_default_display(self):
+            for report, expected in (
+                    ('Mouse-activity: DP-1', 1),
+                    ('Mouse-activity: HDMI-A-2', 0),
+                    ('Mouse-activity: unknown', 0),
+                    ('TV-aktivitet: mus', 0)):
+                with self.subTest(report=report):
+                    result = self.run_monitor_steps([
+                        (0, None, None, None, None, [report])], target='DP-1')
+                    self.assertEqual(result.power.activity.call_count, expected)
+            legacy = self.run_monitor_steps([
+                (0, None, None, None, None, ['TV-aktivitet: mus'])])
+            legacy.power.activity.assert_called_once()
 
         def test_runtime_startup_messages_reflect_configured_timeout(self):
             custom = self.run_monitor_steps([(0, None, None)], timeout=600)

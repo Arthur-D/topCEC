@@ -15,6 +15,6 @@ fi
 
 exec /usr/bin/swayidle -w \
     timeout "$timeout" \
-    '/usr/bin/systemd-run --user --unit=cec-tv-off --collect /home/arthur/.local/bin/cec-tv-power off' \
-    resume '/usr/bin/systemctl --user stop cec-tv-off.service; /home/arthur/.local/bin/cec-tv-power on' \
+    '/usr/bin/systemd-run --user --unit=cec-tv-off --collect "$HOME/.local/bin/cec-tv-power" off' \
+    resume '/usr/bin/systemctl --user stop cec-tv-off.service; "$HOME/.local/bin/cec-tv-power" on' \
     before-sleep '/usr/bin/true'

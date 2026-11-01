@@ -12,6 +12,8 @@ import subprocess
 import sys
 import time
 
+from configuration import DEFAULT_CONFIG
+
 
 def cec(port, command):
     result = subprocess.run(['/usr/bin/cec-client', '-s', '-d', '1', port],
@@ -26,7 +28,7 @@ def cec(port, command):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=['on', 'off', 'status'])
-    parser.add_argument('--port', default='/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00')
+    parser.add_argument('--port', default=DEFAULT_CONFIG['cec_port'])
     args = parser.parse_args()
     # Shared lock with the controller prevents overlapping adapter clients.
     lock_path = os.path.join(os.environ['XDG_RUNTIME_DIR'], 'cec-activity-command.lock')

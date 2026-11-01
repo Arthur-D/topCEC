@@ -62,7 +62,7 @@ elif mode == 'packaging':
 else:
     path = ROOT / 'tests/original' / mode
     source = path.read_text()
-    for old in ('/tmp/cec-activity-monitor-live.py', '/home/arthur/.local/share/cec-tv/monitor.py', 'work/monitor.fixed.py'):
+    for old in ('/tmp/cec-activity-monitor-live.py', 'work/monitor.fixed.py'):
         source = source.replace(old, str(ROOT / 'cec-tv/monitor.py'))
     legacy_wake_scenarios = {
         'test_cec_live.py': (

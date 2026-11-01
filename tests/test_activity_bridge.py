@@ -40,7 +40,8 @@ class ActivityBridgeTests(unittest.TestCase):
         self.evaluate(SOURCE.read_text())
 
     def test_startup_and_shared_boundary(self):
-        self.assertEqual(self.evaluate('messages'), ['Mus: HDMI-A-1', 'Fokus: ingen'])
+        self.assertEqual(self.evaluate('messages'), [
+            'Mus: HDMI-A-1', 'Mouse-activity: HDMI-A-1', 'Fokus: ingen'])
         self.assertEqual(self.evaluate('outputAt({x:1535.9,y:100})'), 'HDMI-A-1')
         self.assertEqual(self.evaluate('outputAt({x:1536,y:100})'), 'HDMI-A-2')
         self.assertEqual(self.evaluate('outputAt({x:3456,y:100})'), 'unknown')
@@ -71,13 +72,22 @@ class ActivityBridgeTests(unittest.TestCase):
         self.evaluate('workspace.screens[0].geometry.x=2000;workspace.screens[0].geometryChanged.emit()')
         self.assertEqual(self.evaluate('messages[messages.length-1]'), 'Mus: unknown')
 
-    def test_tv_activity_is_throttled_and_only_on_tv(self):
+    def test_mouse_activity_is_throttled_and_reports_actual_output(self):
         self.evaluate('messages=[];workspace.cursorPosChanged.emit()')
         self.assertEqual(self.evaluate('messages'), [])
         self.evaluate('workspace.cursorPos={x:1600,y:100};workspace.cursorPosChanged.emit();workspace.cursorPosChanged.emit()')
-        self.assertEqual(self.evaluate('messages'), ['Mus: HDMI-A-2', 'TV-aktivitet: mus'])
+        self.assertEqual(self.evaluate('messages'), [
+            'Mus: HDMI-A-2', 'Mouse-activity: HDMI-A-2'])
         self.evaluate('now+=1000;workspace.cursorPosChanged.emit()')
-        self.assertEqual(self.evaluate('messages.filter(m=>m==="TV-aktivitet: mus").length'), 2)
+        self.assertEqual(self.evaluate('messages.filter(m=>m==="Mouse-activity: HDMI-A-2").length'), 2)
+
+    def test_nondefault_output_and_unknown_geometry(self):
+        self.evaluate("messages=[];workspace.screens=[screen('DP-1',0,0,1920,1080)];"
+                      "workspace.screensChanged.emit();workspace.cursorPosChanged.emit()")
+        self.assertIn('Mouse-activity: DP-1', self.evaluate('messages'))
+        self.evaluate("messages=[];now+=1000;workspace.cursorPos={x:3000,y:100};"
+                      "workspace.cursorPosChanged.emit()")
+        self.assertEqual(self.evaluate('messages'), ['Mus: unknown'])
 
 
 if __name__ == '__main__':

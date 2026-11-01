@@ -72,7 +72,9 @@
   keys, GitHub tokens, AWS access keys, common API tokens, literal password/secret
   assignments or credential-bearing URLs. This bounded scan is not proof that
   arbitrary secrets can never be present. Local paths and input device identifiers
-  are deliberately retained and documented.
+  were retained in the original baseline. Publication cleanup subsequently
+  generalized personal paths/hostnames and removed unique peripheral identifiers
+  from current documentation; historical commits and baseline hashes remain.
 - No logs, backups, cache, credentials, unrelated user configuration or third-party
   research source trees were copied. Test output stayed outside the repository.
 - No controller startup, service reload/restart, CEC command, input-device read,
