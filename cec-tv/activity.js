@@ -9,7 +9,11 @@ function outputAt(pos) {
     const screens = workspace.screens;
     let match = null;
     for (let i = 0; i < screens.length; i++) {
-        if (screens[i].geometry.contains(pos)) {
+        // KWin's script rectangle exposes fields, not QRect.contains().
+        // Half-open bounds give adjacent outputs an unambiguous shared edge.
+        const geometry = screens[i].geometry;
+        if (pos.x >= geometry.x && pos.x < geometry.x + geometry.width &&
+            pos.y >= geometry.y && pos.y < geometry.y + geometry.height) {
             if (match !== null) return "unknown";
             match = screens[i];
         }

@@ -87,6 +87,16 @@ python3 -B tests/run.py check_fixed.py
 python3 -B tests/run.py check_cec.py
 ```
 
+The KWin activity bridge also has hardware-free JavaScript regression tests,
+executed with Qt's JavaScript engine (requires Python `PySide6` / QtQml):
+
+```sh
+python3 -B tests/test_activity_bridge.py
+```
+
+These cover screen boundaries, scaled/rearranged outputs, gaps and overlaps,
+geometry changes, hotplug subscriptions, and TV-only mouse activity throttling.
+
 Do not execute `start.py`, the power helpers or legacy scripts to verify this
 snapshot: those are operational programs. See `VALIDATION.md` for actual results.
 
