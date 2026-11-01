@@ -6,6 +6,7 @@ HOME_DIR="${TOPCEC_HOME:-$HOME}"
 APP_DIR="${TOPCEC_APP_DIR:-$HOME_DIR/.local/share/topcec}"
 BIN_DIR="${TOPCEC_BIN_DIR:-$HOME_DIR/.local/bin}"
 UNIT_DIR="${TOPCEC_USER_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME_DIR/.config}/systemd/user}"
+DATA_DIR="${XDG_DATA_HOME:-$HOME_DIR/.local/share}"
 NATIVE_HOST_MANIFEST="${TOPCEC_FIREFOX_NATIVE_DIR:-$HOME_DIR/.mozilla/native-messaging-hosts}/net.local.topcec.media.json"
 NATIVE_HOST_PATH="$APP_DIR/cec-tv/firefox-native-host.py"
 
@@ -22,6 +23,8 @@ if [[ "${TOPCEC_SKIP_SYSTEMCTL:-0}" != 1 && -f "$UNIT_DIR/topcec.service" ]]; th
 fi
 
 rm -f -- "$BIN_DIR/topcec-gui" "$UNIT_DIR/topcec.service"
+rm -f -- "$DATA_DIR/applications/net.local.topcec.desktop" \
+    "$DATA_DIR/icons/hicolor/scalable/apps/net.local.topcec.svg"
 if [[ -f "$NATIVE_HOST_MANIFEST" ]]; then
     if python3 - "$NATIVE_HOST_MANIFEST" "$NATIVE_HOST_PATH" <<'PY'
 import json

@@ -7,6 +7,7 @@ HOME_DIR="${TOPCEC_HOME:-$HOME}"
 APP_DIR="${TOPCEC_APP_DIR:-$HOME_DIR/.local/share/topcec}"
 BIN_DIR="${TOPCEC_BIN_DIR:-$HOME_DIR/.local/bin}"
 UNIT_DIR="${TOPCEC_USER_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME_DIR/.config}/systemd/user}"
+DATA_DIR="${XDG_DATA_HOME:-$HOME_DIR/.local/share}"
 
 install -d "$APP_DIR/cec-tv" "$BIN_DIR" "$UNIT_DIR"
 for file in \
@@ -31,6 +32,10 @@ install -m 0644 "$SOURCE_DIR/systemd/user/topcec.service" \
 printf '#!/usr/bin/env bash\nexec /usr/bin/python3 %q "$@"\n' \
     "$APP_DIR/cec-tv/topcec_gui.py" > "$BIN_DIR/topcec-gui"
 chmod 0755 "$BIN_DIR/topcec-gui"
+install -D -m 0644 "$SOURCE_DIR/cec-tv/net.local.topcec.svg" \
+    "$DATA_DIR/icons/hicolor/scalable/apps/net.local.topcec.svg"
+install -D -m 0644 "$SOURCE_DIR/packaging/topcec-gui.desktop" \
+    "$DATA_DIR/applications/net.local.topcec.desktop"
 
 if [[ "${TOPCEC_SKIP_SYSTEMCTL:-0}" != 1 ]]; then
     systemctl --user daemon-reload
@@ -39,6 +44,7 @@ fi
 printf 'Installed topCEC files under %s\n' "$APP_DIR"
 printf 'User unit: %s/topcec.service (not enabled or started)\n' "$UNIT_DIR"
 printf 'GUI launcher: %s/topcec-gui\n' "$BIN_DIR"
+printf 'Desktop launcher: %s/applications/net.local.topcec.desktop\n' "$DATA_DIR"
 printf 'Config is preserved separately at %s/topcec/config.json\n' \
     "${XDG_CONFIG_HOME:-$HOME_DIR/.config}"
 printf 'Configure settings with topcec-gui, then enable with:\n'

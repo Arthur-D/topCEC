@@ -46,7 +46,7 @@ def main():
                                   'action': args.action}))
                 return 0 if state in ('on', 'standby') else 1
             time.sleep(1)
-        raise RuntimeError('TV rapporterer ' + state + ', forventet ' + target)
+        raise RuntimeError('TV reports ' + state + '; expected ' + target)
 
 
 if __name__ == '__main__':

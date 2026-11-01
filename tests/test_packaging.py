@@ -16,6 +16,7 @@ class UserPackagingChecks(unittest.TestCase):
             root = Path(temporary)
             home = root / 'home'
             config_home = root / 'config'
+            data_home = root / 'data'
             app_dir = home / '.local/share/topcec'
             bin_dir = home / '.local/bin'
             unit_dir = config_home / 'systemd/user'
@@ -37,6 +38,7 @@ class UserPackagingChecks(unittest.TestCase):
                 'HOME': str(home),
                 'TOPCEC_HOME': str(home),
                 'XDG_CONFIG_HOME': str(config_home),
+                'XDG_DATA_HOME': str(data_home),
                 'TOPCEC_SKIP_SYSTEMCTL': '1',
                 'TOPCEC_FIREFOX_NATIVE_DIR': str(root / 'mozilla/native-messaging-hosts'),
             }
@@ -51,6 +53,11 @@ class UserPackagingChecks(unittest.TestCase):
             self.assertIn('%h/.local/share/topcec/cec-tv/start.py',
                           (unit_dir / 'topcec.service').read_text(encoding='utf-8'))
             self.assertTrue(os.access(bin_dir / 'topcec-gui', os.X_OK))
+            icon_path = data_home / 'icons/hicolor/scalable/apps/net.local.topcec.svg'
+            desktop_path = data_home / 'applications/net.local.topcec.desktop'
+            self.assertEqual(icon_path.read_bytes(),
+                             (ROOT / 'cec-tv/net.local.topcec.svg').read_bytes())
+            self.assertIn('Icon=net.local.topcec', desktop_path.read_text())
             native_manifest = root / 'mozilla/native-messaging-hosts/net.local.topcec.media.json'
             self.assertTrue(native_manifest.is_file())
             self.assertTrue((app_dir / 'firefox-extension/background.js').is_file())
@@ -65,6 +72,8 @@ class UserPackagingChecks(unittest.TestCase):
             self.assertEqual(custom_file.read_text(encoding='utf-8'), 'keep')
             self.assertFalse((bin_dir / 'topcec-gui').exists())
             self.assertFalse((unit_dir / 'topcec.service').exists())
+            self.assertFalse(icon_path.exists())
+            self.assertFalse(desktop_path.exists())
             self.assertFalse(native_manifest.exists())
             self.assertEqual(config_path.read_text(encoding='utf-8'), 'user config\n')
             self.assertEqual((unrelated_app / 'keep').read_text(encoding='utf-8'), 'keep')
@@ -78,6 +87,9 @@ class UserPackagingChecks(unittest.TestCase):
         self.assertIn('%{_userunitdir}/topcec.service', spec)
         self.assertIn('%{_topcec_appdir}/cec-tv/monitor.py', spec)
         self.assertIn('%files gui', spec)
+        self.assertIn('%{_datadir}/icons/hicolor/scalable/apps/net.local.topcec.svg', spec)
+        self.assertIn('%{_datadir}/applications/net.local.topcec.desktop', spec)
+        self.assertIn('net.local.topcec.svg', builder)
         self.assertIn('topcec.service', builder)
         self.assertNotIn('tests/original', builder)
         self.assertNotIn('legacy/', builder)

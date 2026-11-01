@@ -110,12 +110,12 @@ class CecPower:
                         f'CEC operation exceeded {self.OPERATION_TIMEOUT:g}-second deadline')
                 result = json.loads(output)
                 if self.process.returncode or not result.get('ok'):
-                    raise RuntimeError(result.get('error', errors or 'CEC feilet'))
-                log('CEC bekreftet: TV ' + result['state'])
+                    raise RuntimeError(result.get('error', errors or 'CEC failed'))
+                log('CEC confirmed: TV ' + result['state'])
                 self.state_machine.confirm(result['state'])
             except Exception as error:
                 self.state_machine.fail(error, self.sent)
-                log('CEC-FEIL: ' + self.fault + '; videre AV sperret')
+                log('CEC ERROR: ' + self.fault + '; further standby blocked')
                 if self.sent == 'on':
                     # A new activity event may queue a retry, at most once per
                     # ten seconds after failure. Never retry without activity.
@@ -135,7 +135,7 @@ class CecPower:
             self.state_machine.begin(action)
             self.process = process
             self.started, self.sent = time.monotonic(), action
-            log('CEC sender: ' + ('AV' if action == 'off' else 'PÅ'))
+            log('CEC sending: ' + ('standby' if action == 'off' else 'on'))
 
     def close(self):
         # Do not abandon a delayed OFF after the monitor has stopped.
@@ -149,14 +149,14 @@ class CecPower:
                 self.process.communicate()
             self.process = None
         if self.may_be_off:
-            log('Avslutter: forsøker å sette TV på igjen')
+            log('Shutting down: attempting to turn TV back on')
             try:
                 result = subprocess.run(
                     [sys.executable, str(Path(__file__).with_name('cec-power-command.py')),
                      'on', '--port', self.port], capture_output=True, text=True, timeout=130)
-                log('CEC avslutning: ' + result.stdout.strip())
+                log('CEC shutdown: ' + result.stdout.strip())
             except Exception as error:
-                log('CEC avslutningsfeil: ' + str(error))
+                log('CEC shutdown error: ' + str(error))
 
 
 def request_manual_power(power, action, fail_safe_reason):
@@ -186,7 +186,7 @@ class KdeTimeout:
         self.process = None
         self.next_read = 0
         self.started = 0
-        self.error = 'venter på KDE-tidsgrense'
+        self.error = 'Waiting for KDE display timeout'
         self.value = 'unread'
 
     def poll(self, timer, now):
@@ -199,16 +199,16 @@ class KdeTimeout:
                     if self.process.returncode or not result.get('ok'):
                         raise ValueError(result.get('error', errors))
                     if value is not None and (type(value) is not int or value <= 0):
-                        raise ValueError('ugyldig tidsgrense')
+                        raise ValueError('Invalid display timeout')
                     if value != self.value:
                         self.value = value
                         timer.set_timeout(value, now)
-                        log('KDE-tidsgrense (nettstrøm): ' +
-                            ('aldri — automatisk AV deaktivert' if value is None
-                             else f'{value} sekunder ({value / 60:g} minutter)'))
+                        log('KDE display timeout (AC power): ' +
+                            ('never; automatic standby disabled' if value is None
+                             else f'{value} seconds ({value / 60:g} minutes)'))
                     self.error = None
                 except Exception as error:
-                    self.error = 'kan ikke lese KDE-tidsgrense: ' + str(error)
+                    self.error = 'Cannot read KDE display timeout: ' + str(error)
                 self.process = None
                 self.next_read = now + 5
             elif now - self.started > 5:
@@ -216,7 +216,7 @@ class KdeTimeout:
                 self.process.communicate()
                 self.process = None
                 self.next_read = now + 5
-                self.error = 'KDE-innstillinger svarte ikke'
+                self.error = 'KDE settings did not respond'
         if self.process is None and now >= self.next_read:
             self.process = subprocess.Popen(
                 [sys.executable, str(Path(__file__).with_name('cec-kde-settings.py'))],
@@ -281,10 +281,10 @@ class EvdevActivityProvider:
         if event.type == ecodes.EV_ABS:
             axis = state['axes'].get(event.code)
             if axis and axis.update(event.value, focused):
-                return (f'ratt/pedal ({ecodes.ABS.get(event.code, event.code)}, '
-                        f'verdi {event.value}, terskel {axis.threshold})')
+                return (f'wheel/pedal ({ecodes.ABS.get(event.code, event.code)}, '
+                        f'value {event.value}, threshold {axis.threshold})')
         elif event.type == ecodes.EV_KEY and event.value in (1, 2) and focused:
-            return 'tastatur/ratt'
+            return 'keyboard/wheel'
         return None
 
 
@@ -294,13 +294,13 @@ def firefox_window_snapshot(payload, read_exe=None):
         read_exe = lambda pid: str(Path(f"/proc/{pid}/exe").readlink())
     rows = json.loads(payload)
     if not isinstance(rows, list):
-        raise ValueError("Ugyldig skrivebordssnapshot")
+        raise ValueError("Invalid desktop snapshot")
     result = []
     for row in rows:
         if (not isinstance(row, dict) or type(row.get("pid")) is not int
                 or row["pid"] <= 0 or not isinstance(row.get("title"), str)
                 or not isinstance(row.get("output"), str)):
-            raise ValueError("Ugyldig vindusidentitet")
+            raise ValueError("Invalid window identity")
         executable = Path(read_exe(row["pid"]))
         if (executable.name in ("firefox", "firefox-bin")
                 and executable.parent.name == "firefox"):
@@ -332,7 +332,7 @@ class Mapping:
                 or not isinstance(row.get('output'), str)
                 for row in rows
             ):
-                raise ValueError('Ugyldig Firefox-snapshot')
+                raise ValueError('Invalid Firefox snapshot')
         except (ValueError, TypeError) as error:
             self.snapshot_error = str(error)
             return False
@@ -344,11 +344,11 @@ class Mapping:
 
     def health(self, now, required=False):
         if self.snapshot_error:
-            return 'ugyldig Firefox-snapshot'
+            return 'Invalid Firefox snapshot'
         if self.snapshot_stamp is None:
-            return 'venter på Firefox-snapshot fra live-broen' if required else None
+            return 'Waiting for Firefox snapshot from the live bridge' if required else None
         if now - self.snapshot_stamp > self.ttl:
-            return 'Firefox-broens oppdateringer har stoppet'
+            return 'Firefox bridge updates have stopped'
         return None
 
     def output(self, title, counts, now):
@@ -430,7 +430,7 @@ class MatchDiagnostics:
                 return []
             duration = now - self.started
             self.started = self.signature = None
-            return [f'MATCH-DIAG: samsvar gjenopprettet etter {duration:.1f} s']
+            return [f'MATCH-DIAG: matching restored after {duration:.1f} s']
         first = self.started is None
         if first:
             self.started = now
@@ -442,7 +442,7 @@ class MatchDiagnostics:
             return []
         self.signature, self.last_log = signature, now
         def age(stamp):
-            return 'ukjent' if stamp is None else f'{now - stamp:.1f} s'
+            return 'unknown' if stamp is None else f'{now - stamp:.1f} s'
         details = {
             'mangler_i_AT_SPI': missing,
             'bare_i_AT_SPI': sorted({title for title, _ in atspi} -
@@ -450,9 +450,9 @@ class MatchDiagnostics:
             'KWin': [{'tittel': title, 'skjerm': output} for title, output in kwin],
             'AT_SPI': [{'tittel': title, 'lyd': audio} for title, audio in atspi],
         }
-        return [f'MATCH-DIAG: avvik i {now - self.started:.1f} s; '
-                f'KWin-rapport alder {age(mapping.snapshot_stamp)}; '
-                f'AT-SPI-resultat alder {age(scan_stamp)}',
+        return [f'MATCH-DIAG: mismatch for {now - self.started:.1f} s; '
+                f'KWin report age {age(mapping.snapshot_stamp)}; '
+                f'AT-SPI result age {age(scan_stamp)}',
                 'MATCH-DIAG: ' + json.dumps(details, ensure_ascii=False)]
 
 
@@ -460,7 +460,7 @@ def decode_scan(output, errors, returncode):
     """stderr is diagnostic text, not the scanner's structured result."""
     result = json.loads(output)
     if returncode or result.get('ok') is not True:
-        raise RuntimeError(result.get('error', 'AT-SPI-skanning feilet'))
+        raise RuntimeError(result.get('error', 'AT-SPI scan failed'))
     frames = result.get('frames')
     if not isinstance(frames, list) or any(
         not isinstance(frame, dict)
@@ -468,9 +468,9 @@ def decode_scan(output, errors, returncode):
         or not isinstance(frame.get('audio'), bool)
         for frame in frames
     ):
-        raise RuntimeError('Ugyldig AT-SPI-resultat')
+        raise RuntimeError('Invalid AT-SPI result')
     if errors.strip() and not frames:
-        raise RuntimeError('AT-SPI-advarsel og ingen lesbare Firefox-frames')
+        raise RuntimeError('AT-SPI warning and no readable Firefox frames')
     return frames
 
 
@@ -485,11 +485,11 @@ def scan_atspi(mute_labels):
         nonlocal visited
         visited += 1
         if visited > 12000:
-            raise RuntimeError('AT-SPI-treet er for stort; ufullstendig skanning')
+            raise RuntimeError('AT-SPI tree is too large; incomplete scan')
         if node is None:
-            raise RuntimeError('AT-SPI returnerte tom node')
+            raise RuntimeError('AT-SPI returned an empty node')
         if node.getState().contains(pyatspi.STATE_DEFUNCT):
-            raise RuntimeError('AT-SPI-node forsvant under skanning')
+            raise RuntimeError('AT-SPI node disappeared during scan')
         role = node.getRoleName()
         # Do not mistake webpage buttons named Mute tab for browser tab audio.
         if role in ('document web', 'document frame', 'internal frame'):
@@ -507,7 +507,7 @@ def scan_atspi(mute_labels):
     for index in range(desktop.childCount):
         app = desktop.getChildAtIndex(index)
         if app is None:
-            raise RuntimeError('AT-SPI-applikasjon mangler')
+            raise RuntimeError('AT-SPI application is missing')
         if 'firefox' not in (app.name or '').casefold():
             continue
         found = False
@@ -527,10 +527,10 @@ def scan_atspi(mute_labels):
                 continue
             tabs, sounding = walk(frame)
             if tabs == 0:
-                raise RuntimeError('Firefox-frame uten lesbare page tabs: ' + title)
+                raise RuntimeError('Firefox frame has no readable page tabs: ' + title)
             frames.append({'title': title, 'audio': bool(sounding)})
         if not found:
-            raise RuntimeError('Firefox funnet, men ingen tilgjengelige frames')
+            raise RuntimeError('Firefox found, but no accessible frames')
     return frames
 
 
@@ -543,8 +543,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         from gi.repository import GLib
         from evdev import InputDevice, ecodes
     except ImportError as error:
-        log('Mangler Python-avhengighet: ' + str(error))
-        log('Trenger dbus-python, PyGObject/GLib, evdev og pyatspi i vertens Python.')
+        log('Missing Python dependency: ' + str(error))
+        log('Host Python requires dbus-python, PyGObject/GLib, evdev and pyatspi.')
         return 2
 
     DBusGMainLoop(set_as_default=True)
@@ -567,7 +567,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     worker_started = next_scan = 0.0
     frames = []
     scan_stamp = None
-    scan_error = 'venter på første AT-SPI-skanning'
+    scan_error = 'Waiting for the first AT-SPI scan'
     previous_status = None
     warning_reported = False
     previous_playback = False
@@ -622,25 +622,25 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                         for axis in state['axes'].values():
                             axis.reset()
             elif message == 'TV-aktivitet: mus':
-                activity('mus (TV-melding fra KWin)')
+                activity('mouse (TV activity report from KWin)')
             elif message.startswith("Desktop-snapshot: "):
                 first = mapping.snapshot_stamp is None
                 try:
                     payload = firefox_window_snapshot(message[len("Desktop-snapshot: "):])
                 except (ValueError, TypeError, OSError) as error:
-                    mapping.snapshot_error = "Vindusprosesser kunne ikke verifiseres: " + str(error)
+                    mapping.snapshot_error = "Window processes could not be verified: " + str(error)
                 else:
                     if mapping.snapshot(payload, time.monotonic()) and first:
-                        log("Firefox-livebro tilkoblet; prosessidentitet verifisert")
+                        log("Firefox live bridge connected; process identity verified")
             elif message.startswith('Firefox-snapshot: '):
                 first = mapping.snapshot_stamp is None
                 if mapping.snapshot(message[len('Firefox-snapshot: '):], time.monotonic()):
                     if first:
-                        log('Firefox-livebro tilkoblet; komplette vindusrapporter mottas')
+                        log('Firefox live bridge connected; receiving complete window reports')
             elif message.startswith('Firefox-media-snapshot: '):
                 if not webextension_media.update(
                         message[len('Firefox-media-snapshot: '):], time.monotonic()):
-                    log('Ugyldig Firefox WebExtension-snapshot; bruker AT-SPI-fallback')
+                    log('Invalid Firefox WebExtension snapshot; using AT-SPI fallback')
             elif message.startswith('Firefox-vindu: '):
                 payload = message[len('Firefox-vindu: '):]
                 if ' | ' in payload:
@@ -704,7 +704,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                                    do_not_queue=True)
         receiver = Receiver(bus, '/net/local/CecActivity')
     except dbus.DBusException as error:
-        log('Kan ikke eie D-Bus-navnet. Stopp gammel monitor først: ' + str(error))
+        log('Cannot own the D-Bus name. Stop the existing monitor first: ' + str(error))
         return 2
 
     if activity_provider_factory is None:
@@ -723,7 +723,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 raise
             devices[device.fd] = {'device': device, 'axes': axes, 'dropped': False}
     except OSError as error:
-        log('Kan ikke lese input; testen stoppes uten endringer: ' + str(error))
+        log('Cannot read input; monitor stopped without changes: ' + str(error))
         for state in devices.values():
             state['device'].close()
         selector.close()
@@ -774,8 +774,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     try:
                         frames = media_provider.decode_scan(output, errors, worker.returncode)
                         if errors.strip() and not warning_reported:
-                            log('AT-SPI-advarsel, men skanningen returnerte lesbare '
-                                'Firefox-frames. Advarsel vises bare én gang:')
+                            log('AT-SPI warning, but the scan returned readable '
+                                'Firefox frames. Warning shown only once:')
                             log(errors.strip()[:800])
                             warning_reported = True
                         scan_stamp = now
@@ -788,7 +788,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     worker.kill()
                     worker.communicate()
                     worker = None
-                    scan_error = 'AT-SPI svarte ikke innen 5 sekunder'
+                    scan_error = 'AT-SPI did not respond within 5 seconds'
                     next_scan = now + SCAN_INTERVAL
             if worker is None and now >= next_scan:
                 command = [sys.executable, str(Path(__file__).resolve()), '--atspi-scan']
@@ -810,7 +810,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             else:
                 reason = scan_error
                 if scan_stamp is None or now - scan_stamp > SCAN_MAX_AGE:
-                    reason = reason or 'AT-SPI-resultat mangler eller er foreldet'
+                    reason = reason or 'AT-SPI result is missing or stale'
                 if reason is None:
                     if mapping.health(now, required=True) is None:
                         for message in match_diagnostics.update(
@@ -827,9 +827,9 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                         if now - stamp <= mapping.ttl}
                     scanned_titles = {frame['title'] for frame in frames}
                     if recent_titles - scanned_titles:
-                        reason = 'KWin-vinduer mangler i AT-SPI; venter på samsvar'
+                        reason = 'KWin windows are missing from AT-SPI; waiting for a match'
                     if not frames and mapping.reports:
-                        reason = 'KWin har meldt Firefox, men AT-SPI finner ingen frames'
+                        reason = 'KWin reported Firefox, but AT-SPI found no frames'
             reason = reason or mapping.health(now, args.require_snapshot)
             if kde_settings:
                 settings_error = kde_settings.poll(timer, now)
@@ -844,21 +844,21 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 power.poll()
                 reason = reason or power.fault
                 if power.process is not None:
-                    reason = reason or 'venter på CEC-status fra TV'
+                    reason = reason or 'Waiting for CEC power status from TV'
             if focus is None:
-                reason = reason or 'venter på Fokus-melding fra KWin'
+                reason = reason or 'Waiting for a focus report from KWin'
             if any(state['dropped'] for state in devices.values()):
-                reason = reason or 'venter på input-resynkronisering'
+                reason = reason or 'Waiting for input resynchronization'
             if audible:
-                activity('Firefox: Mute tab i frame på ' + target_output)
+                activity('Firefox audio in a window on ' + target_output)
             # Logging state is separate from activity and fail-safe decisions.
             # Unknown monitoring state must not be reported as playback stopping.
             if reason is None and audible != previous_playback:
-                log('Firefox-avspilling på TV ' + ('startet' if audible else 'stoppet'))
+                log('Firefox playback on TV ' + ('started' if audible else 'stopped'))
                 previous_playback = audible
             if reason != previous_status:
-                log('FAIL-SAFE: ' + reason + '; AV sperret' if reason else
-                    'FAIL-SAFE opphevet; overvåking gjenopprettet')
+                log('FAIL-SAFE: ' + reason + '; standby blocked' if reason else
+                    'FAIL-SAFE cleared; monitoring restored')
                 previous_status = reason
             message = timer.tick(now, uncertain=bool(reason))
             if message:
@@ -883,15 +883,19 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         except Exception as error:
             # An input disconnect or callback failure must never become silence.
             runtime_failed = True
-            log('Testen stoppes fail-safe: ' + repr(error))
+            log('Monitor stopped fail-safe: ' + repr(error))
             loop.quit()
             return False
         return True
 
-    log(('FAKTISK CEC — følger KDE (nettstrøm).' if kde_settings else
-         'FAKTISK CEC — 60 sekunder.') if power else
-        'SIMULERING — 60 sekunder. Ingen CEC sendes. Ctrl+C avslutter.')
-    log('Forventer eksisterende KWin-bro. Mute tab må være eksponert av Firefox.')
+    timeout_description = (
+        'KDE-managed display timeout (AC power)' if kde_settings else
+        'automatic standby disabled' if timer.timeout is None else
+        f'{timer.timeout:g}-second inactivity timeout')
+    log(('LIVE CEC; ' if power else 'SIMULATION; ') + timeout_description + '.')
+    if not power:
+        log('No CEC commands will be sent. Press Ctrl+C to stop.')
+    log('Requires an existing KWin bridge. Firefox must expose configured mute-tab labels for AT-SPI fallback.')
     GLib.timeout_add(100, poll)
     try:
         loop.run()
@@ -911,7 +915,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             kde_settings.close()
         if power:
             power.close()
-        log('Monitor avsluttet.' if power else 'Test avsluttet. Ingen CEC sendt.')
+        log('Monitor stopped.' if power else 'Simulation stopped. No CEC commands sent.')
     return 2 if runtime_failed else 0
 
 
@@ -933,16 +937,16 @@ def self_test():
         def test_timer(self):
             timer = Timer(0)
             self.assertIsNone(timer.tick(59.9))
-            self.assertIn('AV TV', timer.tick(60))
+            self.assertIn('TV in standby', timer.tick(60))
             self.assertIsNone(timer.tick(61))
-            self.assertIn('PÅ TV', timer.activity(62))
+            self.assertIn('TV on', timer.activity(62))
             self.assertIsNone(timer.activity(63))
 
         def test_fail_safe(self):
             timer = Timer(0)
             self.assertIsNone(timer.tick(100, True))
             self.assertIsNone(timer.tick(159))
-            self.assertIn('AV TV', timer.tick(160))
+            self.assertIn('TV in standby', timer.tick(160))
             self.assertIsNone(timer.tick(170, True))
             self.assertTrue(timer.expired)  # Uncertainty alone never wakes TV.
 
@@ -1108,14 +1112,15 @@ def self_test():
             # Diagnostics must not change the matching input or its result.
             self.assertEqual(m.output('New title', Counter({'New title': 1}), 14), TARGET)
 
-        def run_monitor_steps(self, steps, diagnostics_enabled=True, config_path=None):
+        def run_monitor_steps(self, steps, diagnostics_enabled=True, config_path=None,
+                              timeout=int(DEFAULT_TIMEOUT)):
             from unittest.mock import Mock, patch
 
             clock = SimpleNamespace(now=0)
             context = SimpleNamespace(receiver=None, poll=None)
             workers = []
             messages = []
-            timer = Timer(0)
+            timer = Timer(0, timeout=timeout)
             mapping = Mapping(15)
             diagnostics = MatchDiagnostics()
             update = Mock(wraps=diagnostics.update) if diagnostics_enabled else Mock(return_value=[])
@@ -1181,6 +1186,7 @@ def self_test():
                                    mapping_ttl=15, require_snapshot=True, device=['unused'],
                                    mute_label=['Mute tab'], axis_deadzone_percent=2.0,
                                    rz_deadzone_percent=5.0,
+                                   timeout_seconds=timeout,
                                    config=str(config_path) if config_path else None)
             with patch.dict(sys.modules, modules), \
                     patch.dict(globals(), {
@@ -1202,6 +1208,19 @@ def self_test():
                 receiver=context.receiver, power=power, command_run=command_run,
                 status=json.loads(context.receiver.GetStatus()))
 
+        def test_runtime_startup_messages_reflect_configured_timeout(self):
+            custom = self.run_monitor_steps([(0, None, None)], timeout=600)
+            self.assertIn('LIVE CEC; 600-second inactivity timeout.',
+                          custom.all_messages)
+            disabled = self.run_monitor_steps([(0, None, None)], timeout=None)
+            self.assertIn('LIVE CEC; automatic standby disabled.',
+                          disabled.all_messages)
+            self.assertEqual(
+                Mapping(15).health(0, required=True),
+                'Waiting for Firefox snapshot from the live bridge')
+            self.assertIn('Waiting for the first AT-SPI scan',
+                          custom.status['fail_safe_reason'])
+
         def test_runtime_match_diagnostics(self):
             snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
             mismatch = (json.dumps({'ok': True, 'frames': [
@@ -1214,12 +1233,12 @@ def self_test():
                               if now % 3 == 1 else None))
             result = self.run_monitor_steps(steps)
             self.assertEqual(len(result.messages), 5)
-            self.assertIn('avvik i 0.0 s', result.messages[0])
-            self.assertIn('avvik i 30.0 s', result.messages[2])
-            self.assertIn('samsvar gjenopprettet etter 33.0 s', result.messages[4])
+            self.assertIn('mismatch for 0.0 s', result.messages[0])
+            self.assertIn('mismatch for 30.0 s', result.messages[2])
+            self.assertIn('matching restored after 33.0 s', result.messages[4])
             self.assertIsNone(result.diagnostics.started)
             self.assertIsNone(result.diagnostics.signature)
-            self.assertTrue(any('KWin-vinduer mangler i AT-SPI' in message
+            self.assertTrue(any('KWin windows are missing from AT-SPI' in message
                                 for message in result.all_messages))
             baseline = self.run_monitor_steps(steps, diagnostics_enabled=False)
             self.assertEqual(result.timer, baseline.timer)
@@ -1252,7 +1271,7 @@ def self_test():
                         (0, snapshot, None), (1, None, mismatch),
                         (3, None, None), (4, '[]', invalid),
                         (6, None, None), (7, snapshot, match)])
-                    self.assertIn('samsvar gjenopprettet', recovered.messages[-1])
+                    self.assertIn('matching restored', recovered.messages[-1])
 
         def test_runtime_stale_observations_preserve_match_diagnostics(self):
             snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
@@ -1370,26 +1389,26 @@ def self_test():
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--config', help='JSON-konfigurasjonsfil med versjonert skjema')
-    parser.add_argument('--target', help='Skjermutgang som styrer TV-en')
+    parser.add_argument('--config', help='JSON configuration file with a versioned schema')
+    parser.add_argument('--target', help='Display output controlling the TV')
     parser.add_argument('--timeout-seconds', type=int,
-                        help='Inaktivitet før standby; nullkonfigurasjon deaktiverer')
+                        help='Seconds of inactivity before standby; null in configuration disables it')
     parser.add_argument('--rz-deadzone-percent', type=float, default=None,
-                        help='Deadzone for ABS_RZ i prosent (standard: 5)')
+                        help='ABS_RZ deadzone percentage (default: 5)')
     parser.add_argument('--axis-deadzone-percent', type=float, default=None,
-                        help='Minste aksebevegelse i prosent av området (standard: 2)')
+                        help='Minimum axis movement as a percentage of its range (default: 2)')
     parser.add_argument('--kde-timeout', action=argparse.BooleanOptionalAction, default=None,
-                        help='Følg KDEs skjermtidsgrense for nettstrøm')
+                        help='Follow KDE display timeout for AC power')
     parser.add_argument('--cec', action=argparse.BooleanOptionalAction, default=None,
-                        help='Send faktisk CEC av/på')
+                        help='Send real CEC standby/on commands')
     parser.add_argument('--cec-port')
-    parser.add_argument('--device', action='append', help='Inputsti; kan gjentas')
+    parser.add_argument('--device', action='append', help='Input device path; may be repeated')
     parser.add_argument('--mapping-ttl', type=float, default=None,
-                        help='Sekunder før vindusrapport blir usikker (standard: 15)')
+                        help='Seconds before a window report becomes stale (default: 15)')
     parser.add_argument('--mute-label', action='append', default=None,
-                        help='Eksakt AT-SPI-knappnavn (standard: Mute tab)')
+                        help='Exact Firefox AT-SPI button label (default: Mute tab)')
     parser.add_argument('--require-snapshot', action=argparse.BooleanOptionalAction, default=None,
-                        help='Sperr AV uten ferske rapporter fra Firefox-livebroen')
+                        help='Block standby without fresh Firefox live-bridge reports')
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--atspi-scan', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -1413,11 +1432,11 @@ def main():
     if args.cec:
         args.require_snapshot = True
     if not math.isfinite(args.rz_deadzone_percent) or not 0 < args.rz_deadzone_percent <= 25:
-        parser.error('--rz-deadzone-percent må være større enn 0 og høyst 25')
+        parser.error('--rz-deadzone-percent must be greater than 0 and at most 25')
     if not math.isfinite(args.axis_deadzone_percent) or not 0 < args.axis_deadzone_percent <= 25:
-        parser.error('--axis-deadzone-percent må være større enn 0 og høyst 25')
+        parser.error('--axis-deadzone-percent must be greater than 0 and at most 25')
     if not math.isfinite(args.mapping_ttl) or args.mapping_ttl <= 0:
-        parser.error('--mapping-ttl må være positiv og endelig')
+        parser.error('--mapping-ttl must be positive and finite')
     if args.self_test:
         return self_test()
     if args.atspi_scan:
@@ -1430,7 +1449,7 @@ def main():
     try:
         return run(args)
     except Exception as error:
-        log('Kunne ikke starte testen: ' + repr(error))
+        log('Could not start monitor: ' + repr(error))
         return 2
 
 

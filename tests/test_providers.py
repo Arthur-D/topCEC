@@ -36,10 +36,10 @@ class ProviderInterfaceChecks(unittest.TestCase):
         event = SimpleNamespace(type=ecodes.EV_ABS, code=0, value=200)
         self.assertIsNone(provider.event_activity(state, event, False))
         event.value = 220
-        self.assertIn('ratt/pedal', provider.event_activity(state, event, True))
+        self.assertIn('wheel/pedal', provider.event_activity(state, event, True))
         key = SimpleNamespace(type=ecodes.EV_KEY, value=1)
         self.assertIsNone(provider.event_activity(state, key, False))
-        self.assertEqual(provider.event_activity(state, key, True), 'tastatur/ratt')
+        self.assertEqual(provider.event_activity(state, key, True), 'keyboard/wheel')
 
 
 if __name__ == '__main__':

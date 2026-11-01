@@ -22,6 +22,7 @@ modules:
       - install -D -m 0644 cec-tv/topcec.qml /app/lib/topcec/topcec.qml
       - install -D -m 0755 packaging/flatpak/topcec-gui /app/bin/topcec-gui
       - install -D -m 0644 packaging/topcec-gui.desktop /app/share/applications/net.local.topcec.desktop
+      - install -D -m 0644 cec-tv/net.local.topcec.svg /app/share/icons/hicolor/scalable/apps/net.local.topcec.svg
     sources:
       - type: dir
         path: .

@@ -18,6 +18,7 @@ PROJECT_FILES = (
     'cec-tv/start.py',
     'cec-tv/topcec.qml',
     'cec-tv/topcec_gui.py',
+    'cec-tv/net.local.topcec.svg',
     'cec-tv/activity.js',
     'cec-tv/firefox.js',
     'packaging/install-user.sh',

@@ -4,6 +4,6 @@ Type=Application
 Name=topCEC
 Comment=Configure per-display TV power management
 Exec=topcec-gui
-Icon=video-display
+Icon=net.local.topcec
 Terminal=false
 Categories=Settings;HardwareSettings;

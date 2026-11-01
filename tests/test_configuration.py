@@ -1,12 +1,15 @@
 """Hardware-free tests for versioned monitor configuration."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
+import io
+import runpy
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from contextlib import redirect_stdout, redirect_stderr
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'cec-tv'))
@@ -19,6 +22,52 @@ import start
 
 
 class ConfigurationChecks(unittest.TestCase):
+    def test_monitor_help_and_validation_errors_are_english(self):
+        output = io.StringIO()
+        with patch('sys.argv', ['monitor.py', '--help']), \
+                patch.object(monitor, 'run') as run, redirect_stdout(output):
+            with self.assertRaises(SystemExit) as exit:
+                monitor.main()
+        self.assertEqual(exit.exception.code, 0)
+        run.assert_not_called()
+        for text in ('Display output controlling the TV',
+                     'Follow KDE display timeout for AC power',
+                     'Block standby without fresh Firefox live-bridge reports'):
+            self.assertIn(text, ' '.join(output.getvalue().split()))
+        output = io.StringIO()
+        with patch('sys.argv', ['monitor.py', '--mapping-ttl', '0']), \
+                patch.object(monitor, 'run') as run, redirect_stderr(output):
+            with self.assertRaises(SystemExit) as exit:
+                monitor.main()
+        self.assertEqual(exit.exception.code, 2)
+        self.assertIn('mapping_ttl_seconds must be a positive finite number',
+                      output.getvalue())
+        run.assert_not_called()
+
+    def test_launcher_reports_existing_monitor_in_english(self):
+        with patch('sys.argv', ['start.py']), \
+                patch.object(start, 'qdbus', return_value='true'), \
+                patch.object(start.os, 'execv') as execv:
+            with self.assertRaisesRegex(
+                    RuntimeError, 'Another activity monitor owns the D-Bus name'):
+                start.main()
+        execv.assert_not_called()
+
+    def test_helper_errors_are_english_without_hardware_access(self):
+        kde = runpy.run_path(str(ROOT / 'cec-tv' / 'cec-kde-settings.py'))
+        with self.assertRaisesRegex(ValueError, 'Invalid TurnOffDisplayWhenIdle value'):
+            kde['parse']('invalid', '600')
+        command = runpy.run_path(str(ROOT / 'cec-tv' / 'cec-power-command.py'))
+        main = command['main']
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict('os.environ', {'XDG_RUNTIME_DIR': directory}), \
+                patch('sys.argv', ['cec-power-command.py', 'off', '--port', 'MOCK']), \
+                patch.dict(main.__globals__, {
+                    'cec': lambda *args: 'power status: on',
+                }), patch.object(command['time'], 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'TV reports on; expected standby'):
+                main()
+
     def test_default_config_path_uses_xdg_config_home(self):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.dict('os.environ', {'XDG_CONFIG_HOME': directory}):

@@ -14,14 +14,14 @@ class ActivityPolicyChecks(unittest.TestCase):
         policy = ActivityPolicy(0)
         self.assertEqual(policy.timeout, DEFAULT_TIMEOUT)
         self.assertIsNone(policy.tick(59.9))
-        self.assertIn('AV TV', policy.tick(60))
+        self.assertIn('TV in standby', policy.tick(60))
         self.assertIsNone(policy.tick(61))
         self.assertTrue(policy.expired)
 
     def test_activity_after_standby_requests_wake_once(self):
         policy = ActivityPolicy(0, timeout=10)
         policy.tick(10)
-        self.assertIn('PÅ TV', policy.activity(11))
+        self.assertIn('TV on', policy.activity(11))
         self.assertIsNone(policy.activity(12))
         self.assertFalse(policy.expired)
 
@@ -29,7 +29,7 @@ class ActivityPolicyChecks(unittest.TestCase):
         policy = ActivityPolicy(0, timeout=60)
         self.assertIsNone(policy.tick(100, uncertain=True))
         self.assertIsNone(policy.tick(159.9))
-        self.assertIn('AV TV', policy.tick(160))
+        self.assertIn('TV in standby', policy.tick(160))
 
     def test_disabled_timeout_never_expires(self):
         policy = ActivityPolicy(0, timeout=None)
