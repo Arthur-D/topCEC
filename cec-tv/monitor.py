@@ -290,7 +290,10 @@ def audio_state(frames, mapping, now):
 
 
 class MatchDiagnostics:
-    """Read-only diagnostics. Never changes mapping, activity or timeout state."""
+    """Read-only diagnostics; caller must supply fresh, valid scans and snapshots.
+
+    Never changes mapping, activity or timeout state.
+    """
     def __init__(self):
         self.started = None
         self.signature = None
@@ -419,6 +422,7 @@ def run(args):
     kde_settings = KdeTimeout() if args.kde_timeout else None
     power = CecPower(args.cec_port) if args.cec else None
     mapping = Mapping(args.mapping_ttl)
+    match_diagnostics = MatchDiagnostics()
     selector = selectors.DefaultSelector()
     devices = {}
     focus = None
@@ -577,6 +581,9 @@ def run(args):
                 reason = reason or 'AT-SPI-resultat mangler eller er foreldet'
             audible = False
             if reason is None:
+                if mapping.health(now, required=True) is None:
+                    for message in match_diagnostics.update(frames, mapping, now, scan_stamp):
+                        log(message)
                 audible, uncertain_audio = audio_state(frames, mapping, now)
                 if uncertain_audio:
                     reason = 'lyd i Firefox, men vindusmatching er ukjent/tvetydig/foreldet'
@@ -826,6 +833,161 @@ def self_test():
             self.assertEqual(diag.update(resolved, m, 14, 12), [])
             # Diagnostics must not change the matching input or its result.
             self.assertEqual(m.output('New title', Counter({'New title': 1}), 14), TARGET)
+
+        def run_monitor_steps(self, steps, diagnostics_enabled=True):
+            from unittest.mock import Mock, patch
+
+            clock = SimpleNamespace(now=0)
+            context = SimpleNamespace(receiver=None, poll=None)
+            workers = []
+            messages = []
+            timer = Timer(0)
+            mapping = Mapping(15)
+            diagnostics = MatchDiagnostics()
+            update = Mock(wraps=diagnostics.update) if diagnostics_enabled else Mock(return_value=[])
+            power = Mock(fault=None, process=None, pending=None)
+
+            class Object:
+                def __init__(self, *args):
+                    context.receiver = self
+
+            def timeout_add(interval, callback):
+                context.poll = callback
+
+            def main_loop():
+                for now, snapshot, scan in steps:
+                    clock.now = now
+                    if snapshot is not None:
+                        context.receiver.Report('Firefox-snapshot: ' + snapshot)
+                    if scan is not None:
+                        output, errors, returncode = scan
+                        workers[-1].poll.return_value = returncode
+                        workers[-1].returncode = returncode
+                        workers[-1].communicate.return_value = (output, errors)
+                    self.assertTrue(context.poll())
+
+            def start_worker(*args, **kwargs):
+                worker = Mock(returncode=0)
+                worker.poll.return_value = None
+                worker.communicate.return_value = ('', '')
+                workers.append(worker)
+                return worker
+
+            service = SimpleNamespace(
+                Object=Object, BusName=Mock(),
+                method=lambda *args, **kwargs: lambda method: method)
+            dbus = SimpleNamespace(service=service, SessionBus=Mock(), DBusException=RuntimeError)
+            loop = Mock()
+            loop.run.side_effect = main_loop
+            glib = SimpleNamespace(MainLoop=lambda: loop, timeout_add=timeout_add)
+            device = Mock(fd=10)
+            device.capabilities.return_value = {}
+            selector = Mock()
+            selector.select.return_value = []
+            modules = {
+                'dbus': dbus, 'dbus.service': service,
+                'dbus.mainloop': SimpleNamespace(),
+                'dbus.mainloop.glib': SimpleNamespace(DBusGMainLoop=Mock()),
+                'gi': SimpleNamespace(), 'gi.repository': SimpleNamespace(GLib=glib),
+                'evdev': SimpleNamespace(InputDevice=Mock(return_value=device),
+                                         ecodes=SimpleNamespace(EV_ABS=3, ABS_MT_SLOT=47)),
+            }
+            args = SimpleNamespace(kde_timeout=False, cec=True, cec_port='unused',
+                                   mapping_ttl=15, require_snapshot=True, device=['unused'],
+                                   mute_label=['Mute tab'])
+            with patch.dict(sys.modules, modules), \
+                    patch.dict(globals(), {
+                        'Timer': Mock(return_value=timer), 'CecPower': Mock(return_value=power),
+                        'Mapping': Mock(return_value=mapping),
+                        'MatchDiagnostics': Mock(return_value=diagnostics),
+                        'log': messages.append}), \
+                    patch.object(diagnostics, 'update', update), \
+                    patch.object(time, 'monotonic', lambda: clock.now), \
+                    patch.object(selectors, 'DefaultSelector', return_value=selector), \
+                    patch.object(subprocess, 'Popen', side_effect=start_worker):
+                self.assertEqual(run(args), 0)
+            return SimpleNamespace(
+                messages=[message for message in messages if message.startswith('MATCH-DIAG:')],
+                all_messages=messages, diagnostics=diagnostics, update=update,
+                timer=vars(timer), mapping=vars(mapping), power_calls=power.mock_calls)
+
+        def test_runtime_match_diagnostics(self):
+            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            mismatch = (json.dumps({'ok': True, 'frames': [
+                {'title': 'Old title', 'audio': False}]}), '', 0)
+            match = (json.dumps({'ok': True, 'frames': [
+                {'title': 'New title', 'audio': False}]}), '', 0)
+            steps = [(0, snapshot, None)]
+            for now in range(1, 36):
+                steps.append((now, snapshot, (match if now >= 34 else mismatch)
+                              if now % 3 == 1 else None))
+            result = self.run_monitor_steps(steps)
+            self.assertEqual(len(result.messages), 5)
+            self.assertIn('avvik i 0.0 s', result.messages[0])
+            self.assertIn('avvik i 30.0 s', result.messages[2])
+            self.assertIn('samsvar gjenopprettet etter 33.0 s', result.messages[4])
+            self.assertIsNone(result.diagnostics.started)
+            self.assertIsNone(result.diagnostics.signature)
+            self.assertTrue(any('KWin-vinduer mangler i AT-SPI' in message
+                                for message in result.all_messages))
+            baseline = self.run_monitor_steps(steps, diagnostics_enabled=False)
+            self.assertEqual(result.timer, baseline.timer)
+            self.assertEqual(result.mapping, baseline.mapping)
+            self.assertEqual(result.power_calls, baseline.power_calls)
+            self.assertEqual([message for message in result.all_messages
+                              if not message.startswith('MATCH-DIAG:')], baseline.all_messages)
+
+        def test_runtime_invalid_scans_preserve_match_diagnostics(self):
+            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            mismatch = (json.dumps({'ok': True, 'frames': []}), '', 0)
+            match = (json.dumps({'ok': True, 'frames': [
+                {'title': 'New title', 'audio': False}]}), '', 0)
+            invalid_scans = [
+                ('invalid JSON', '', 0),
+                (json.dumps({'ok': False, 'error': 'unreadable'}), '', 1),
+                (json.dumps({'ok': True, 'frames': [{}]}), '', 0),
+                (json.dumps({'ok': True, 'frames': []}), 'warning', 0),
+            ]
+            for invalid in invalid_scans:
+                with self.subTest(scan=invalid):
+                    result = self.run_monitor_steps([
+                        (0, snapshot, None), (1, None, mismatch),
+                        (3, None, None), (4, '[]', invalid),
+                        (5, None, None)])
+                    self.assertEqual(len(result.messages), 2)
+                    self.assertEqual(result.diagnostics.started, 1)
+                    self.assertEqual(result.update.call_count, 2)
+                    recovered = self.run_monitor_steps([
+                        (0, snapshot, None), (1, None, mismatch),
+                        (3, None, None), (4, '[]', invalid),
+                        (6, None, None), (7, snapshot, match)])
+                    self.assertIn('samsvar gjenopprettet', recovered.messages[-1])
+
+        def test_runtime_stale_observations_preserve_match_diagnostics(self):
+            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            mismatch = (json.dumps({'ok': True, 'frames': []}), '', 0)
+            cases = {
+                'no scan': [(0, snapshot, None)],
+                'no snapshot': [(0, None, None), (1, None, mismatch)],
+                'failed snapshot': [(0, snapshot, None), (1, None, mismatch),
+                                    (2, '[{}]', None)],
+                'stale snapshot': [(0, snapshot, None), (1, None, mismatch),
+                                   (16, None, mismatch)],
+                'stale scan': [(0, snapshot, None), (1, None, mismatch),
+                               (9, None, None), (10, '[]', None)],
+                'timed out scan': [(0, snapshot, None), (1, None, mismatch),
+                                   (3, None, None), (8, '[]', None)],
+            }
+            calls = {'no scan': 0, 'no snapshot': 0, 'failed snapshot': 1,
+                     'stale snapshot': 1, 'stale scan': 2, 'timed out scan': 2}
+            for name, steps in cases.items():
+                with self.subTest(case=name):
+                    result = self.run_monitor_steps(steps)
+                    expected = 0 if name in ('no scan', 'no snapshot') else 2
+                    self.assertEqual(len(result.messages), expected)
+                    self.assertEqual(result.diagnostics.started,
+                                     None if expected == 0 else 1)
+                    self.assertEqual(result.update.call_count, calls[name])
 
         def test_matching(self):
             m = Mapping(15)
