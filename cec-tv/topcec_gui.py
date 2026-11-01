@@ -148,11 +148,11 @@ class GuiBackend(QObject):
     def usesKdeTimeout(self):
         return self.config['kde_timeout']
 
-    @Slot(str, result=str)
+    @Slot(result=str)
     def deviceList(self):
         return '\n'.join(self.config['devices'])
 
-    @Slot(str, result=str)
+    @Slot(result=str)
     def muteLabelList(self):
         return '\n'.join(self.config['mute_labels'])
 
