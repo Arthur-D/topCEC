@@ -1,0 +1,12 @@
+[Unit]
+Description=Control TV power via CEC on Wayland idle
+After=plasma-kwin_wayland.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/cec-tv-swayidle
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

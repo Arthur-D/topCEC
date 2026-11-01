@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+timeout=$(/usr/bin/kreadconfig6 \
+    --file powerdevilrc \
+    --group AC \
+    --group Display \
+    --key TurnOffDisplayIdleTimeoutSec \
+    --default 600)
+
+# Ignore invalid values.
+[[ "$timeout" =~ ^[1-9][0-9]*$ ]] || exit 0
+
+# Read the timeout currently used by swayidle.
+pid=$(/usr/bin/systemctl --user show \
+    --property=MainPID --value cec-tv-power.service)
+
+[[ "$pid" =~ ^[1-9][0-9]*$ ]] || exit 0
+
+current=$(/usr/bin/tr '\0' '\n' < "/proc/$pid/cmdline" |
+    /usr/bin/awk '$0 == "timeout" { getline; print; exit }')
+
+if [[ "$timeout" != "$current" ]]; then
+    /usr/bin/logger -t cec-tv-power \
+        "Plasma timeout changed: ${current}s -> ${timeout}s"
+    /usr/bin/systemctl --user restart cec-tv-power.service
+fi

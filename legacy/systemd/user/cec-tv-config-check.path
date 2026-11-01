@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch KDE Plasma power settings for CEC timeout changes
+
+[Path]
+PathChanged=%h/.config/powerdevilrc
+Unit=cec-tv-config-check.service
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Build against the SDK's Qt private ABI, rather than a stale binary BaseApp.
+name: pyside
+buildsystem: simple
+build-options:
+  append-path: /usr/lib/sdk/llvm22/bin
+  append-ld-library-path: /usr/lib/sdk/llvm22/lib
+  env:
+    LLVM_INSTALL_DIR: /usr/lib/sdk/llvm22
+build-commands:
+  - python3 setup.py build --qtpaths=/usr/bin/qtpaths --ignore-git --parallel=4 --module-subset=Core,Gui,Network,DBus,OpenGL,Qml,Quick --no-qt-tools --flatpak
+  - python3 create_wheels.py --build-dir ./build/qfp-*-release
+  - pip3 install --no-index --no-deps --prefix=/app ./dist/shiboken6-*.whl ./dist/pyside6-*.whl ./dist/pyside6_essentials-*.whl ./dist/pyside6_addons-*.whl
+  - install -d /app/share/licenses/pyside
+  - install -m 0644 LICENSES/*.txt /app/share/licenses/pyside/
+  - python3 -c "from PySide6 import QtCore, QtDBus, QtGui, QtQml, QtQuick; print('Packaged Qt:', QtCore.qVersion())"
+sources:
+  - type: archive
+    url: https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.11.3-src/pyside-setup-everywhere-src-6.11.3.tar.xz
+    sha256: 050819cb05e14d6689f42b56e4fa9c8ff63be2bb339e0c094c45b990b7cabde1
+modules:
+  - name: patchelf
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --no-deps --prefix=/app patchelf-*.whl
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/2d/d3/92c27afa61ab5259d35f6283f1d401d61019d56a77ca00d29ba77ffd36df/patchelf-0.17.2.0-py2.py3-none-manylinux_2_5_x86_64.manylinux1_x86_64.musllinux_1_1_x86_64.whl
+        sha256: 1b9fd14f300341dc020ae05c49274dd1fa6727eabb4e61dd7fb6fb3600acd26e
+        only-arches:
+          - x86_64
+      - type: file
+        url: https://files.pythonhosted.org/packages/cb/c8/059d8b660636951f7de76f04920b2ef759f4e1ed354aab452cbdc73d0a0b/patchelf-0.17.2.0-py2.py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl
+        sha256: b8d86f32e1414d6964d5d166ddd2cf829d156fba0d28d32a3bd0192f987f4529
+        only-arches:
+          - aarch64
+  - name: python-build
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --no-deps --prefix=/app build-*.whl pyproject_hooks-*.whl
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/cb/8c/2b30c12155ad8de0cf641d76a8b396a16d2c36bc6d50b621a62b7c4567c1/build-1.3.0-py3-none-any.whl
+        sha256: 7145f0b5061ba90a1500d60bd1b13ca0a8a4cebdd0cc16ed8adf1c0e739f43b4
+      - type: file
+        url: https://files.pythonhosted.org/packages/bd/24/12818598c362d7f300f18e74db45963dbcb85150324092410c8b49405e42/pyproject_hooks-1.2.0-py3-none-any.whl
+        sha256: 9e5c6bfa8dcc30091c74b0cf803c81fdd29d94f01992a7707bc97babb1141913

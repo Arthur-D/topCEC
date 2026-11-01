@@ -1,0 +1,9 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+import runpy
+import sys
+import os
+
+sys.path.insert(0, '/app/lib/topcec')
+os.environ['TOPCEC_DBUS_ONLY'] = '1'
+runpy.run_path('/app/lib/topcec/topcec_gui.py', run_name='__main__')

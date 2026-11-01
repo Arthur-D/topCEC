@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[Unit]
+Description=topCEC TV CEC power from screen activity and Firefox audio
+After=plasma-kwin_wayland.service
+PartOf=graphical-session.target plasma-kwin_wayland.service
+Conflicts=cec-tv-power.service cec-activity-live.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/share/topcec/cec-tv/start.py
+Restart=on-failure
+RestartSec=15
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=280
+
+[Install]
+WantedBy=graphical-session.target
