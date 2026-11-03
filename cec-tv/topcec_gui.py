@@ -8,8 +8,12 @@ import re
 import subprocess
 import sys
 
-from PySide6.QtCore import QObject, Property, QStandardPaths, QUrl, Signal, Slot
-from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
+from PySide6.QtCore import (
+    QObject, Property, QProcess, QStandardPaths, QUrl, Signal, Slot,
+)
+from PySide6.QtDBus import (
+    QDBusConnection, QDBusInterface, QDBusMessage, QDBusPendingCallWatcher,
+)
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -94,9 +98,23 @@ class GuiBackend(QObject):
         self._power_state = 'unknown'
         self._standby_reason = 'Waiting for service status'
         self._diagnostics = 'No service diagnostics received.'
+        self._connection_state = 'connecting'
+        self._connection_message = 'Connecting to the topCEC host service.'
         self._action_message = ''
         self._simulation_mode = False
         self._service_data = {}
+        self._refresh_in_flight = False
+        self._refresh_generation = 0
+        self._owner_watch_registered = False
+        self._pending_watchers = []
+        self._native_probe = QProcess(self)
+        self._native_probe.finished.connect(
+            lambda *_: self._native_service_probe_finished())
+        self._native_probe.errorOccurred.connect(
+            lambda *_: self._native_service_probe_failed())
+        self._native_probe_running = False
+        self._native_probe_generation = 0
+        self._ensure_owner_watch()
         self.outputs = available_outputs() if not self.dbus_only else []
         self.adapters = available_adapters() if not self.dbus_only else []
         if not self.dbus_only and self.config_path.exists():
@@ -112,6 +130,22 @@ class GuiBackend(QObject):
     @Property(str, notify=changed)
     def serviceStatus(self):
         return self._service_status
+
+    @Property(str, notify=changed)
+    def connectionState(self):
+        return self._connection_state
+
+    @Property(str, notify=changed)
+    def connectionMessage(self):
+        return self._connection_message
+
+    @Property(bool, notify=changed)
+    def backendAvailable(self):
+        return self._connection_state == 'connected'
+
+    @Property(bool, notify=changed)
+    def dbusOnly(self):
+        return self.dbus_only
 
     @Property(str, notify=changed)
     def powerState(self):
@@ -135,7 +169,8 @@ class GuiBackend(QObject):
 
     @Property(bool, notify=changed)
     def settingsEnabled(self):
-        return not self.dbus_only or self._service_status in ('active', 'running')
+        return not self.dbus_only or (
+            self.backendAvailable and self._service_status in ('active', 'running'))
 
     @Property('QVariantList', notify=changed)
     def outputOptions(self):
@@ -177,66 +212,188 @@ class GuiBackend(QObject):
         return QDBusInterface(
             SERVICE, OBJECT, INTERFACE, QDBusConnection.sessionBus())
 
+    def _ensure_owner_watch(self):
+        if self._owner_watch_registered:
+            return
+        bus = QDBusConnection.sessionBus()
+        if bus.isConnected():
+            self._owner_watch_registered = bus.connect(
+                'org.freedesktop.DBus', '/org/freedesktop/DBus',
+                'org.freedesktop.DBus', 'NameOwnerChanged', self,
+                '1_name_owner_changed(QString,QString,QString)')
+
+    @Slot(str, str, str)
+    def _name_owner_changed(self, name, old_owner, new_owner):
+        if name != SERVICE or old_owner == new_owner:
+            return
+        self._refresh_generation += 1
+        self._refresh_in_flight = False
+        self._service_data = {}
+        self._power_state = 'unavailable'
+        if self._action_message == 'Saving settings through the host service.':
+            self._action_message = (
+                'The connection changed while saving settings. Reconnect and '
+                'verify the saved configuration.')
+        if new_owner:
+            self._connection_state = 'connecting'
+            self._connection_message = 'The topCEC service appeared; reconnecting.'
+            self._service_status = 'Connecting'
+            self._standby_reason = self._connection_message
+            self._diagnostics = self._connection_message
+            self.changed.emit()
+            self.refresh()
+        else:
+            self._set_unavailable()
+
     @staticmethod
     def _reply_error(reply):
         if reply.type() == QDBusMessage.MessageType.ErrorMessage:
             return reply.errorMessage()
         return None
 
-    @Slot()
-    def refresh(self):
-        unit_state = 'unavailable'
-        if not self.dbus_only:
-            try:
-                result = subprocess.run(
-                    ['systemctl', '--user', 'is-active', 'topcec.service'],
-                    capture_output=True, text=True, timeout=3)
-                unit_state = result.stdout.strip() or 'inactive'
-                self._service_status = unit_state
-            except (OSError, subprocess.TimeoutExpired) as error:
-                unit_state = 'unknown'
-                self._service_status = 'systemd status unavailable: ' + str(error)
+    def _async_call(self, interface, method, callback, *arguments):
+        watcher = QDBusPendingCallWatcher(
+            interface.asyncCall(method, *arguments), self)
+        self._pending_watchers.append(watcher)
 
-        interface = self._service_interface()
-        if not interface.isValid():
-            self._service_data = {}
-            self._power_state = 'unavailable'
-            self._standby_reason = 'Monitor D-Bus service is not available'
-            self._diagnostics = (
-                self._standby_reason if self.dbus_only else
-                f'Service: {unit_state}\n{self._standby_reason}')
-            self.changed.emit()
+        def finished(completed):
+            if completed in self._pending_watchers:
+                self._pending_watchers.remove(completed)
+            callback(completed.reply())
+
+        watcher.finished.connect(finished)
+
+    def _start_native_service_probe(self):
+        if self._native_probe_running:
+            self._native_probe_generation = self._refresh_generation
             return
-        reply = interface.call('GetStatus')
+        self._native_probe_running = True
+        self._native_probe_generation = self._refresh_generation
+        self._native_probe.start(
+            'systemctl', [
+                '--user', 'show', '--property=LoadState',
+                '--property=ActiveState', '--value', 'topcec.service',
+            ])
+
+    def _native_service_probe_finished(self):
+        generation = self._native_probe_generation
+        self._native_probe_running = False
+        if generation != self._refresh_generation or self.backendAvailable:
+            return
+        output = bytes(self._native_probe.readAllStandardOutput()).decode(
+            'utf-8', errors='replace')
+        error_output = bytes(self._native_probe.readAllStandardError()).decode(
+            'utf-8', errors='replace').strip()
+        values = output.splitlines()
+        if self._native_probe.exitCode() or len(values) < 2:
+            details = error_output or output.strip()
+            self._service_status = 'unknown'
+            self._connection_message = (
+                'The topCEC service is unavailable; systemd status could not be '
+                'determined' + (': ' + details if details else '.'))
+        else:
+            load_state, active_state = values[:2]
+            if load_state == 'not-found':
+                self._service_status = 'not-installed'
+                self._connection_message = (
+                    'The topCEC user service is not installed.')
+            elif load_state == 'loaded' and active_state != 'active':
+                self._service_status = 'stopped'
+                self._connection_message = (
+                    'The topCEC user service is installed but stopped '
+                    f'({active_state or "inactive"}).')
+            else:
+                self._service_status = 'unknown'
+                self._connection_message = (
+                    'The topCEC service is not reachable over session D-Bus.')
+        self._standby_reason = self._connection_message
+        self._diagnostics = self._connection_message
+        self.changed.emit()
+
+    def _native_service_probe_failed(self):
+        generation = self._native_probe_generation
+        self._native_probe_running = False
+        if generation != self._refresh_generation or self.backendAvailable:
+            return
+        self._service_status = 'unknown'
+        self._connection_message = (
+            'The topCEC service is unavailable; systemd status could not be determined.')
+        self._standby_reason = self._connection_message
+        self._diagnostics = self._connection_message
+        self.changed.emit()
+
+    def _set_unavailable(self):
+        self._service_data = {}
+        self._power_state = 'unavailable'
+        if self.dbus_only:
+            self._service_status = 'unavailable'
+            self._connection_message = (
+                'The topCEC service is unavailable. The Flatpak cannot determine '
+                'whether it is installed or stopped.')
+        else:
+            self._service_status = 'Checking service'
+            self._connection_message = (
+                'The topCEC service is unavailable; checking the user systemd unit.')
+            self._start_native_service_probe()
+        self._connection_state = 'unavailable'
+        self._standby_reason = self._connection_message
+        self._diagnostics = self._connection_message
+        self._refresh_in_flight = False
+        self.changed.emit()
+
+    def _set_connection_error(self, message):
+        self._service_data = {}
+        self._service_status = 'connection error'
+        self._power_state = 'unavailable'
+        self._connection_state = 'error'
+        self._connection_message = message
+        self._standby_reason = message
+        self._diagnostics = message
+        self._refresh_in_flight = False
+        self.changed.emit()
+
+    def _connection_failed(self, generation, error):
+        if generation != self._refresh_generation:
+            return
+        self._set_connection_error(
+            'Unable to use the topCEC service: ' + str(error) +
+            '. Check the session D-Bus connection and service logs.')
+
+    def _status_reply(self, generation, interface, reply):
+        if generation != self._refresh_generation:
+            return
         error = self._reply_error(reply)
         if error:
-            self._standby_reason = 'Cannot read monitor status: ' + error
-            self._diagnostics = self._standby_reason
-            self.changed.emit()
+            self._connection_failed(generation, error)
             return
         try:
             self._service_data = json.loads(str(reply.arguments()[0]))
         except (IndexError, TypeError, json.JSONDecodeError) as error:
-            self._standby_reason = 'Invalid monitor status response: ' + str(error)
-            self._diagnostics = self._standby_reason
-            self.changed.emit()
+            self._connection_failed(
+                generation, 'Invalid monitor status response: ' + str(error))
             return
+        self._async_call(
+            interface, 'GetConfig',
+            lambda config_reply: self._config_reply(
+                generation, config_reply))
 
+    def _config_reply(self, generation, reply):
+        if generation != self._refresh_generation:
+            return
+        error = self._reply_error(reply)
+        if error:
+            self._connection_failed(
+                generation, 'Cannot read service configuration: ' + error)
+            return
         try:
-            config_reply = interface.call('GetConfig')
-            config_error = self._reply_error(config_reply)
-            if config_error:
-                raise ValueError(config_error)
-            self.config = validate_config(json.loads(
-                str(config_reply.arguments()[0])))
-            self.outputs = [self.config['target_output']]
-            self.adapters = [self.config['cec_port']]
+            self.config = validate_config(json.loads(str(reply.arguments()[0])))
         except (IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
-            self._standby_reason = 'Cannot read service configuration: ' + str(error)
-            self._diagnostics = self._standby_reason
-            self.changed.emit()
+            self._connection_failed(
+                generation, 'Cannot read service configuration: ' + str(error))
             return
 
+        self.outputs = [self.config['target_output']]
+        self.adapters = [self.config['cec_port']]
         self._service_status = self._service_data.get('service', 'running')
         self._power_state = self._service_data.get('power_state', 'unknown')
         reason = self._service_data.get('fail_safe_reason')
@@ -250,7 +407,41 @@ class GuiBackend(QObject):
             f"Pending action: {self._service_data.get('pending_action') or 'none'}",
         ]
         self._diagnostics = '\n'.join(diagnostic_items)
+        self._connection_state = 'connected'
+        self._connection_message = 'Connected to the topCEC host service.'
+        self._refresh_in_flight = False
         self.changed.emit()
+
+    @Slot()
+    def refresh(self):
+        if self._refresh_in_flight:
+            return
+        self._ensure_owner_watch()
+        self._refresh_generation += 1
+        generation = self._refresh_generation
+        self._refresh_in_flight = True
+        if not self.backendAvailable:
+            self._connection_state = 'connecting'
+            self._connection_message = 'Connecting to the topCEC host service.'
+        bus = QDBusConnection.sessionBus()
+        if not bus.isConnected():
+            self._connection_failed(generation, 'session D-Bus is disconnected')
+            return
+        interface = self._service_interface()
+        if not interface.isValid():
+            self._set_unavailable()
+            return
+        self._async_call(
+            interface, 'GetStatus',
+            lambda reply: self._status_reply(generation, interface, reply))
+
+    @Slot()
+    def retryConnection(self):
+        self._refresh_in_flight = False
+        self._connection_state = 'connecting'
+        self._connection_message = 'Retrying the topCEC host service connection.'
+        self.changed.emit()
+        self.refresh()
 
     @Slot(str)
     def requestPower(self, action):
@@ -259,15 +450,46 @@ class GuiBackend(QObject):
             self._action_message = 'Unsupported manual action: ' + action
         elif self._simulation_mode:
             self._action_message = f'Simulation: would request TV {description}. No command sent.'
+        elif not self.backendAvailable:
+            self._action_message = 'Cannot control the TV while the topCEC service is disconnected.'
         elif not self._service_data.get('cec_enabled'):
             self._action_message = 'Live CEC control is unavailable.'
         else:
-            reply = self._service_interface().call('RequestPower', action)
-            error = self._reply_error(reply)
-            self._action_message = (
-                'Request queued: TV ' + description if error is None
-                else 'Request rejected: ' + error)
+            interface = self._service_interface()
+            if not interface.isValid():
+                self._set_unavailable()
+                self._action_message = (
+                    'Cannot control the TV because the topCEC service disconnected.')
+            else:
+                generation = self._refresh_generation
+                self._action_message = 'Sending TV power request.'
+                self._async_call(
+                    interface, 'RequestPower',
+                    lambda reply: self._power_reply(
+                        generation, description, reply), action)
         self.changed.emit()
+
+    def _power_reply(self, generation, description, reply):
+        if generation != self._refresh_generation:
+            return
+        error = self._reply_error(reply)
+        self._action_message = (
+            'Request queued: TV ' + description if error is None
+            else 'Request rejected: ' + error)
+        self.changed.emit()
+
+    def _settings_reply(self, generation, validated, reply):
+        if generation != self._refresh_generation:
+            return
+        error = self._reply_error(reply)
+        if error:
+            self._action_message = 'Could not apply settings: ' + error
+            self.changed.emit()
+            return
+        self.config = validated
+        self._action_message = 'Settings saved; topcec.service restart queued.'
+        self.changed.emit()
+        self.refresh()
 
     @Slot('QVariantMap')
     def applySettings(self, values):
@@ -275,15 +497,23 @@ class GuiBackend(QObject):
         try:
             validated = config_from_settings(self.config, values)
             if self.dbus_only:
+                if not self.backendAvailable:
+                    raise RuntimeError('topCEC host service is not available')
                 interface = self._service_interface()
                 if not interface.isValid():
+                    self._set_unavailable()
                     raise RuntimeError('topCEC host service is not available')
-                reply = interface.call('ApplySettings', json.dumps({
+                serialized = json.dumps({
                     'schema_version': 1, **validated,
-                }, sort_keys=True))
-                error = self._reply_error(reply)
-                if error:
-                    raise RuntimeError(error)
+                }, sort_keys=True)
+                self._action_message = 'Saving settings through the host service.'
+                self.changed.emit()
+                generation = self._refresh_generation
+                self._async_call(
+                    interface, 'ApplySettings',
+                    lambda reply: self._settings_reply(
+                        generation, validated, reply), serialized)
+                return
             else:
                 save_config(
                     self.config_path, {'schema_version': 1, **validated})

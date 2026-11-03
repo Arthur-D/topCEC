@@ -267,7 +267,62 @@ host configuration files. The client uses only the `net.local.CecActivity`
 session-D-Bus name. The host service exposes `GetStatus`, `GetConfig`,
 `RequestPower`, and `ApplySettings`; the host validates and atomically saves
 configuration, then asks the user systemd manager to restart `topcec.service`.
-The service must already be installed and running to view or change settings.
+The Flatpak contains only the GUI: the host service and its hardware dependencies
+must be installed separately, outside the sandbox. The setup view in the GUI
+provides these same steps and a retry action:
+
+1. In a terminal, clone the official repository and enter its root directory:
+
+   ```sh
+   git clone https://github.com/Arthur-D/topCEC.git
+   cd topCEC
+   ```
+
+2. From the repository root, install the host files and user service. Calling
+   the script through `bash` works even when the interactive shell is fish:
+
+   ```sh
+   bash packaging/install-user.sh
+   ```
+
+3. Configure the correct KWin display, CEC adapter, and input devices with the
+   native host GUI installed by the script:
+
+   ```sh
+   ~/.local/bin/topcec-gui
+   ```
+
+4. Enable and start the host service:
+
+   ```sh
+   systemctl --user enable --now topcec.service
+   ```
+
+5. Return to the Flatpak GUI. It reconnects when the D-Bus service appears, with
+   a low-frequency retry as a fallback; use **Retry Connection** to retry
+   immediately.
+
+The installer installs the unit but does not enable or start it. The native GUI
+continues to work independently of Flatpak and can save the host configuration
+before the service is first started.
+
+For connection problems on the host, inspect the user unit and its current-boot
+logs, then verify that its D-Bus name is owned:
+
+```sh
+systemctl --user status topcec.service
+journalctl --user -u topcec.service -b
+busctl --user list | grep -F net.local.CecActivity
+```
+
+The Flatpak is granted only the `net.local.CecActivity` session-bus name. Its
+sandbox cannot inspect host systemd units or files, so an unavailable name is
+reported as generic and the GUI does not claim that the service is uninstalled.
+The native GUI can distinguish a definitely missing unit or an installed but
+stopped unit when the user systemd manager reports that state; D-Bus failures
+and other uncertain states remain connection errors/unavailable rather than
+being misreported as an installation problem. Neither client adds host
+filesystem/device access, broad D-Bus permissions, or a host-command bridge.
 The root-level manifest uses KDE Platform/SDK 6.11 and builds the required
 PySide6 modules from checksum-pinned upstream source against that SDK.
 PySide uses Qt's private ABI: the previous PySide BaseApp 6.11.2 failed to

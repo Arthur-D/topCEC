@@ -25,6 +25,54 @@ from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    class FakeWatcher:
+        def __init__(self, pending, parent):
+            self.pending = pending
+            self.callback = None
+            self.result = None
+            self.finished = SimpleNamespace(connect=self._connect)
+
+        def _connect(self, callback):
+            self.callback = callback
+
+        def reply(self):
+            return self.result
+
+        def complete(self, reply):
+            self.result = reply
+            self.callback(self)
+
+    class FakeProcess:
+        def __init__(self):
+            self.finished_callback = None
+            self.output = b''
+            self.error_output = b''
+            self.code = 0
+            self.finished = SimpleNamespace(connect=self._connect_finished)
+            self.errorOccurred = SimpleNamespace(connect=Mock())
+
+        def _connect_finished(self, callback):
+            self.finished_callback = callback
+
+        def start(self, program, arguments):
+            self.program = program
+            self.arguments = arguments
+
+        def readAllStandardOutput(self):
+            return self.output
+
+        def readAllStandardError(self):
+            return self.error_output
+
+        def exitCode(self):
+            return self.code
+
+        def complete(self, output='', error='', code=0):
+            self.output = output.encode()
+            self.error_output = error.encode()
+            self.code = code
+            self.finished_callback(code, 0)
+
     def test_original_application_icon_renders_at_small_and_large_sizes(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         icon = topcec_gui.application_icon()
@@ -154,31 +202,225 @@ class GuiChecks(unittest.TestCase):
         }
         interface = Mock()
         interface.isValid.return_value = True
-        interface.call.side_effect = [
-            SimpleNamespace(arguments=lambda: [json.dumps(status)]),
-            SimpleNamespace(arguments=lambda: [json.dumps({
-                'schema_version': 1, **DEFAULT_CONFIG,
-            })]),
-        ]
+        bus = Mock()
+        bus.isConnected.return_value = True
+        watchers = []
+
+        def make_watcher(pending, parent):
+            watcher = self.FakeWatcher(pending, parent)
+            watchers.append(watcher)
+            return watcher
+
         with patch.object(backend, '_service_interface', return_value=interface), \
-                patch.object(backend, '_reply_error', return_value=None):
+                patch.object(topcec_gui.QDBusConnection, 'sessionBus',
+                             return_value=bus), \
+                patch.object(topcec_gui, 'QDBusPendingCallWatcher',
+                             side_effect=make_watcher):
             backend.refresh()
+            watchers[0].complete(SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: [json.dumps(status)]))
+            watchers[1].complete(SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: [json.dumps({
+                    'schema_version': 1, **DEFAULT_CONFIG,
+                })]))
         self.assertEqual(
             backend.standbyReason,
             'Automatic standby blocked: Waiting for Firefox snapshot from the live bridge')
         self.assertIn('Scan: Waiting for Firefox snapshot from the live bridge',
                       backend.diagnostics)
 
+    def test_flatpak_missing_service_is_generic_and_actionable(self):
+        bus = Mock()
+        bus.isConnected.return_value = True
+        interface = Mock()
+        interface.isValid.return_value = False
+        with patch.object(topcec_gui.QDBusConnection, 'sessionBus',
+                          return_value=bus), \
+                patch.object(GuiBackend, '_service_interface',
+                             return_value=interface):
+            backend = GuiBackend(dbus_only=True)
+            backend.refresh()
+        self.assertEqual(backend.connectionState, 'unavailable')
+        self.assertIn('cannot determine whether it is installed or stopped',
+                      backend.connectionMessage)
+        self.assertNotIn('not installed', backend.connectionMessage)
+        self.assertFalse(backend.settingsEnabled)
+
+    def test_native_gui_detects_installed_but_stopped_service(self):
+        bus = Mock()
+        bus.isConnected.return_value = True
+        interface = Mock()
+        interface.isValid.return_value = False
+        probes = []
+
+        def make_process(parent):
+            probe = self.FakeProcess()
+            probes.append(probe)
+            return probe
+
+        with patch.object(topcec_gui.QDBusConnection, 'sessionBus',
+                          return_value=bus), \
+                patch.object(topcec_gui, 'available_outputs', return_value=[]), \
+                patch.object(topcec_gui, 'available_adapters', return_value=[]), \
+                patch.object(topcec_gui, 'QProcess', side_effect=make_process), \
+                patch.object(GuiBackend, '_service_interface',
+                             return_value=interface):
+            backend = GuiBackend(dbus_only=False)
+            backend.refresh()
+            probes[0].complete('loaded\ninactive\n')
+        self.assertEqual(backend.serviceStatus, 'stopped')
+        self.assertIn('installed but stopped', backend.connectionMessage)
+        self.assertTrue(backend.settingsEnabled)
+
+    def test_native_gui_detects_a_missing_user_service(self):
+        bus = Mock()
+        bus.isConnected.return_value = True
+        interface = Mock()
+        interface.isValid.return_value = False
+        probes = []
+
+        def make_process(parent):
+            probe = self.FakeProcess()
+            probes.append(probe)
+            return probe
+
+        with patch.object(topcec_gui.QDBusConnection, 'sessionBus',
+                          return_value=bus), \
+                patch.object(topcec_gui, 'available_outputs', return_value=[]), \
+                patch.object(topcec_gui, 'available_adapters', return_value=[]), \
+                patch.object(topcec_gui, 'QProcess', side_effect=make_process), \
+                patch.object(GuiBackend, '_service_interface',
+                             return_value=interface):
+            backend = GuiBackend(dbus_only=False)
+            backend.refresh()
+            probes[0].complete('not-found\ninactive\n')
+        self.assertEqual(backend.serviceStatus, 'not-installed')
+        self.assertIn('service is not installed', backend.connectionMessage)
+
+    def test_dbus_connection_error_is_distinct_from_missing_service(self):
+        bus = Mock()
+        bus.isConnected.return_value = False
+        with patch.object(topcec_gui.QDBusConnection, 'sessionBus',
+                          return_value=bus):
+            backend = GuiBackend(dbus_only=True)
+            backend.refresh()
+        self.assertEqual(backend.connectionState, 'error')
+        self.assertIn('session D-Bus is disconnected', backend.connectionMessage)
+
+    def test_backend_appearance_and_disappearance_recover_without_restart(self):
+        bus = Mock()
+        bus.isConnected.return_value = True
+        interface = Mock()
+        interface.isValid.return_value = False
+        watchers = []
+
+        def make_watcher(pending, parent):
+            watcher = self.FakeWatcher(pending, parent)
+            watchers.append(watcher)
+            return watcher
+
+        with patch.object(topcec_gui.QDBusConnection, 'sessionBus',
+                          return_value=bus), \
+                patch.object(topcec_gui, 'QDBusPendingCallWatcher',
+                             side_effect=make_watcher), \
+                patch.object(GuiBackend, '_service_interface',
+                             return_value=interface):
+            backend = GuiBackend(dbus_only=True)
+            backend.refresh()
+            self.assertEqual(backend.connectionState, 'unavailable')
+
+            interface.isValid.return_value = True
+            backend._name_owner_changed(topcec_gui.SERVICE, '', ':1.42')
+            self.assertEqual(len(watchers), 1)
+            status = {
+                'service': 'running', 'power_state': 'on',
+                'cec_enabled': True,
+            }
+            watchers[0].complete(SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: [json.dumps(status)]))
+            self.assertEqual(len(watchers), 2)
+            watchers[1].complete(SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: [json.dumps({
+                    'schema_version': 1, **DEFAULT_CONFIG,
+                })]))
+            self.assertEqual(backend.connectionState, 'connected')
+            self.assertEqual(backend.powerState, 'on')
+            self.assertTrue(backend.settingsEnabled)
+
+            backend._name_owner_changed(topcec_gui.SERVICE, ':1.42', '')
+            self.assertEqual(backend.connectionState, 'unavailable')
+            self.assertEqual(backend.powerState, 'unavailable')
+            self.assertFalse(backend.settingsEnabled)
+
+            backend._name_owner_changed(topcec_gui.SERVICE, '', ':1.43')
+            watchers[2].complete(SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: [json.dumps(status)]))
+            watchers[3].complete(SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: [json.dumps({
+                    'schema_version': 1, **DEFAULT_CONFIG,
+                })]))
+            self.assertEqual(backend.connectionState, 'connected')
+            self.assertTrue(backend.settingsEnabled)
+
+    def test_name_owner_signal_is_registered_only_once(self):
+        bus = Mock()
+        bus.isConnected.return_value = True
+        bus.connect.return_value = True
+        with patch.object(topcec_gui.QDBusConnection, 'sessionBus',
+                          return_value=bus):
+            backend = GuiBackend(dbus_only=True)
+            backend._ensure_owner_watch()
+            backend._ensure_owner_watch()
+        self.assertEqual(bus.connect.call_count, 1)
+        self.assertEqual(bus.connect.call_args.args[3], 'NameOwnerChanged')
+
+    def test_setup_view_and_flatpak_permissions_are_documented(self):
+        qml = (ROOT / 'cec-tv/topcec.qml').read_text(encoding='utf-8')
+        self.assertIn('topCEC Backend Not Available', qml)
+        self.assertIn('Retry Connection', qml)
+        self.assertIn('bash packaging/install-user.sh', qml)
+        self.assertIn('systemctl --user enable --now topcec.service', qml)
+        self.assertIn('interval: topcec.backendAvailable ? 5000 : 30000', qml)
+        self.assertIn('visible: !topcec.backendAvailable', qml)
+        manifest = (ROOT / 'net.local.topcec.yml').read_text(encoding='utf-8')
+        self.assertIn('--talk-name=net.local.CecActivity', manifest)
+        for forbidden_permission in (
+                '--filesystem=host', '--device=all',
+                '--talk-name=org.freedesktop.systemd1'):
+            self.assertNotIn(forbidden_permission, manifest)
+
     def test_settings_are_applied_through_host_service(self):
         backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
         interface = Mock()
         interface.isValid.return_value = True
-        interface.call.return_value = Mock()
+        bus = Mock()
+        bus.isConnected.return_value = True
+        watchers = []
+
+        def make_watcher(pending, parent):
+            watcher = self.FakeWatcher(pending, parent)
+            watchers.append(watcher)
+            return watcher
+
         with patch.object(backend, '_service_interface', return_value=interface), \
                 patch.object(backend, 'refresh') as refresh, \
-                patch.object(backend, '_reply_error', return_value=None):
+                patch.object(topcec_gui.QDBusConnection, 'sessionBus',
+                             return_value=bus), \
+                patch.object(topcec_gui, 'QDBusPendingCallWatcher',
+                             side_effect=make_watcher):
             backend.applySettings(self.values)
-        name, serialized = interface.call.call_args.args
+            name, serialized = interface.asyncCall.call_args.args
+            watchers[0].complete(SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: ['{}']))
         self.assertEqual(name, 'ApplySettings')
         config = validate_config(json.loads(serialized))
         self.assertEqual(config['target_output'], 'HDMI-A-2')
@@ -187,9 +429,17 @@ class GuiChecks(unittest.TestCase):
         refresh.assert_called_once()
 
     def test_native_gui_can_configure_before_service_starts(self):
+        probes = []
+
+        def make_process(parent):
+            probe = self.FakeProcess()
+            probes.append(probe)
+            return probe
+
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(topcec_gui, 'available_outputs', return_value=[]), \
                 patch.object(topcec_gui, 'available_adapters', return_value=[]), \
+                patch.object(topcec_gui, 'QProcess', side_effect=make_process), \
                 patch.object(topcec_gui.subprocess, 'run', return_value=SimpleNamespace(
                     returncode=0, stdout='', stderr='')) as run:
             path = Path(directory) / 'config.json'
@@ -203,9 +453,17 @@ class GuiChecks(unittest.TestCase):
                 capture_output=True, text=True, timeout=60)
 
     def test_native_gui_reports_saved_config_if_service_restart_fails(self):
+        probes = []
+
+        def make_process(parent):
+            probe = self.FakeProcess()
+            probes.append(probe)
+            return probe
+
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(topcec_gui, 'available_outputs', return_value=[]), \
                 patch.object(topcec_gui, 'available_adapters', return_value=[]), \
+                patch.object(topcec_gui, 'QProcess', side_effect=make_process), \
                 patch.object(topcec_gui.subprocess, 'run', return_value=SimpleNamespace(
                     returncode=1, stdout='', stderr='unit not installed')):
             path = Path(directory) / 'config.json'
