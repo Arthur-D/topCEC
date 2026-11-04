@@ -230,6 +230,13 @@ running background service.
 The GUI's hardware-free settings, manual-control safety, and QML-load checks run
 with `python3 -B tests/run.py gui`.
 
+GUI headings, explanations, status, diagnostics, commands and text fields support
+selection and copying with Ctrl+C. Right-click a button caption, checkbox,
+selector or numeric value and choose **Copy text** without activating it (the
+keyboard Menu key opens the same action). **Copy page text** copies the current
+page, including disabled control captions and the window title; it excludes
+the hidden setup/configuration page.
+
 ## User-level installation and packaging
 
 Install the current checkout without root using:
