@@ -10,9 +10,11 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
-from PySide6.QtCore import QMetaObject, QObject, QUrl, QStandardPaths
+from PySide6.QtCore import QMetaObject, QObject, QPointF, Qt, QUrl, QStandardPaths, SIGNAL
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQml import QQmlApplicationEngine, QQmlExpression
+from PySide6.QtTest import QSignalSpy, QTest
+from PySide6.QtQuick import QQuickItem
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'cec-tv'))
@@ -25,6 +27,92 @@ from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    def test_gui_readonly_text_can_be_selected_and_copied(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        self.addCleanup(app.clipboard().setText, app.clipboard().text())
+        backend = GuiBackend(dbus_only=True)
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        for name in ('setupHeading', 'setupExplanation', 'setupCommands',
+                     'setupDiagnostics', 'backendDiagnostics'):
+            with self.subTest(name=name):
+                field = window.findChild(QObject, name)
+                self.assertTrue(field.property('selectByMouse'))
+                self.assertTrue(field.property('readOnly'))
+                QMetaObject.invokeMethod(field, 'selectAll')
+                self.assertEqual(field.property('selectedText'), field.property('text'))
+                QMetaObject.invokeMethod(field, 'copy')
+                self.assertEqual(app.clipboard().text(), field.property('text'))
+        for name in ('devicesField',):
+            field = window.findChild(QObject, name)
+            self.assertTrue(field.property('selectByMouse'))
+            self.assertFalse(field.property('readOnly'))
+        engine.deleteLater()
+
+    def test_caption_copy_preserves_button_clicks_and_page_copy_covers_disabled_text(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        self.addCleanup(app.clipboard().setText, app.clipboard().text())
+        backend = GuiBackend(dbus_only=True)
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.resize(900, 1400)
+        window.show()
+        app.processEvents()
+        button = window.findChild(QQuickItem, 'repositoryButton')
+        point = button.mapToScene(QPointF(button.width() / 2, button.height() / 2)).toPoint()
+        with patch.object(backend, 'retryConnection'):
+            QTest.mouseClick(window, Qt.RightButton, Qt.NoModifier, point)
+            app.processEvents()
+        menu = window.findChild(QObject, 'captionCopyMenu')
+        self.assertEqual(menu.property('caption'), 'Open topCEC repository')
+        self.assertTrue(menu.property('visible'))
+        action = window.findChild(QObject, 'copyCaptionAction')
+        QMetaObject.invokeMethod(action, 'clicked')
+        self.assertEqual(app.clipboard().text(), 'Open topCEC repository')
+        QMetaObject.invokeMethod(menu, 'close')
+        QTest.qWait(250)
+        backend._connection_state = 'unavailable'
+        backend.changed.emit()
+        app.processEvents()
+        retry = window.findChild(QQuickItem, 'retryConnectionButton')
+        clicked = QSignalSpy(retry, SIGNAL('clicked()'))
+        self.assertTrue(clicked.isValid())
+        interface = Mock()
+        interface.isValid.return_value = False
+        point = retry.mapToScene(QPointF(retry.width() / 2, retry.height() / 2)).toPoint()
+        with patch.object(backend, '_service_interface', return_value=interface):
+            QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
+        self.assertEqual(clicked.count(), 1)
+
+        page = window.findChild(QObject, 'pageContent')
+        engine.rootContext().setContextProperty('testPageContent', page)
+        expression = QQmlExpression(
+            engine.rootContext(), window, 'displayedText(testPageContent)')
+        text, undefined = expression.evaluate()
+        self.assertFalse(expression.hasError(), expression.error().toString())
+        self.assertFalse(undefined)
+        self.assertIn('topCEC Backend Not Available', text)
+        self.assertIn('Open topCEC repository', text)
+        self.assertIn('Retry Connection', text)
+        self.assertNotIn('TV power control', text)
+        page_action = window.findChild(QObject, 'copyPageAction')
+        QMetaObject.invokeMethod(page_action, 'trigger')
+        self.assertIn(text, app.clipboard().text())
+        backend._connection_state = 'connected'
+        backend._service_status = 'starting'
+        backend.changed.emit()
+        app.processEvents()
+        text, undefined = expression.evaluate()
+        self.assertIn('Save settings and restart service', text)
+        self.assertNotIn('topCEC Backend Not Available', text)
+        self.assertFalse(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
+        self.assertIn(backend.deviceList(), text)
+        engine.deleteLater()
+
     class FakeWatcher:
         def __init__(self, pending, parent):
             self.pending = pending

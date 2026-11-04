@@ -211,6 +211,10 @@ class GuiBackend(QObject):
             if enabled else '')
         self.changed.emit()
 
+    @Slot(str)
+    def copyText(self, text):
+        QGuiApplication.clipboard().setText(text)
+
     def _service_interface(self):
         return QDBusInterface(
             SERVICE, OBJECT, INTERFACE, QDBusConnection.sessionBus())

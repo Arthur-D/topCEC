@@ -12,6 +12,88 @@ Kirigami.ApplicationWindow {
     minimumHeight: 680
     property bool settingsDirty: false
 
+    component SelectableLabel: Controls.TextArea {
+        readOnly: true
+        selectByMouse: true
+        textFormat: TextEdit.PlainText
+        padding: 0
+        background: null
+        color: Kirigami.Theme.textColor
+        wrapMode: TextEdit.Wrap
+    }
+
+    component SelectableHeading: SelectableLabel {
+        property int level: 2
+        font: headingStyle.font
+        Kirigami.Heading {
+            id: headingStyle
+            visible: false
+            level: parent.level
+        }
+    }
+
+    function showCaption(text) {
+        captionMenu.caption = text
+        captionMenu.popup()
+    }
+
+    function displayedText(item) {
+        if (!item.visible)
+            return ""
+        if (typeof item.text === "string" && item.text.length)
+            return item.text
+        let parts = []
+        for (let child of item.children) {
+            let text = displayedText(child)
+            if (text.length)
+                parts.push(text)
+        }
+        return parts.join("\n")
+    }
+
+    Controls.Menu {
+        id: captionMenu
+        objectName: "captionCopyMenu"
+        property string caption: ""
+        Controls.MenuItem {
+            objectName: "copyCaptionAction"
+            text: "Copy text"
+            onTriggered: topcec.copyText(captionMenu.caption)
+        }
+    }
+
+    component CopyableButton: Controls.Button {
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onTapped: root.showCaption(parent.text)
+        }
+        Keys.onMenuPressed: root.showCaption(text)
+    }
+
+    component CopyableCheckBox: Controls.CheckBox {
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onTapped: root.showCaption(parent.text)
+        }
+        Keys.onMenuPressed: root.showCaption(text)
+    }
+
+    component CopyableComboBox: Controls.ComboBox {
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onTapped: root.showCaption(parent.editable ? parent.editText : parent.currentText)
+        }
+        Keys.onMenuPressed: root.showCaption(editable ? editText : currentText)
+    }
+
+    component CopyableSpinBox: Controls.SpinBox {
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onTapped: root.showCaption(parent.textFromValue(parent.value, parent.locale))
+        }
+        Keys.onMenuPressed: root.showCaption(textFromValue(value, locale))
+    }
+
     function loadSettings() {
         if (settingsDirty)
             return
@@ -40,8 +122,18 @@ Kirigami.ApplicationWindow {
 
     pageStack.initialPage: Kirigami.ScrollablePage {
         title: "topCEC"
+        actions: [
+            Kirigami.Action {
+                objectName: "copyPageAction"
+                text: "Copy page text"
+                icon.name: "edit-copy"
+                onTriggered: topcec.copyText(root.title + "\n" + root.displayedText(pageContent))
+            }
+        ]
 
         ColumnLayout {
+            id: pageContent
+            objectName: "pageContent"
             width: parent.width
             spacing: Kirigami.Units.largeSpacing
 
@@ -53,32 +145,35 @@ Kirigami.ApplicationWindow {
                     width: parent.width
                     spacing: Kirigami.Units.largeSpacing
 
-                    Kirigami.Heading {
+                    SelectableHeading {
+                        objectName: "setupHeading"
                         level: 2
                         text: "topCEC Backend Not Available"
                     }
-                    Controls.Label {
+                    SelectableLabel {
+                        objectName: "setupExplanation"
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         text: "The topCEC background service is required to monitor displays and control HDMI-CEC devices. It runs outside the Flatpak sandbox."
                     }
-                    Controls.Label {
+                    SelectableLabel {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         font.bold: true
                         text: topcec.connectionMessage
                     }
-                    Controls.Label {
+                    SelectableLabel {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         text: "To install the host service, open a terminal and clone the official repository. Then enter the topCEC repository root before running the installer."
                     }
-                    Controls.Label {
+                    SelectableLabel {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         text: "1. Clone the repository and enter it:"
                     }
                     Controls.TextArea {
+                        objectName: "setupCommands"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 58
                         readOnly: true
@@ -86,7 +181,7 @@ Kirigami.ApplicationWindow {
                         wrapMode: TextEdit.NoWrap
                         text: "git clone https://github.com/Arthur-D/topCEC.git\ncd topCEC"
                     }
-                    Controls.Label {
+                    SelectableLabel {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         text: "2. From the repository root, install the host service and GUI:"
@@ -99,7 +194,7 @@ Kirigami.ApplicationWindow {
                         wrapMode: TextEdit.NoWrap
                         text: "bash packaging/install-user.sh"
                     }
-                    Controls.Label {
+                    SelectableLabel {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         text: "3. Before first start, configure the correct display, CEC adapter, and input devices with the native host GUI. Once the service is started, you can configure it here even if input initialization fails:"
@@ -112,7 +207,7 @@ Kirigami.ApplicationWindow {
                         wrapMode: TextEdit.NoWrap
                         text: "~/.local/bin/topcec-gui"
                     }
-                    Controls.Label {
+                    SelectableLabel {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         text: "4. Enable and start the user service:"
@@ -125,30 +220,34 @@ Kirigami.ApplicationWindow {
                         wrapMode: TextEdit.NoWrap
                         text: "systemctl --user enable --now topcec.service"
                     }
-                    Controls.Label {
+                    SelectableLabel {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         text: "5. Return here. The GUI reconnects when the service appears; you can also retry now."
                     }
                     RowLayout {
-                        Controls.Button {
+                        CopyableButton {
+                            objectName: "retryConnectionButton"
                             text: "Retry Connection"
                             enabled: topcec.connectionState !== "connecting"
                             onClicked: topcec.retryConnection()
                         }
-                        Controls.Button {
+                        CopyableButton {
+                            objectName: "repositoryButton"
                             text: "Open topCEC repository"
                             onClicked: Qt.openUrlExternally("https://github.com/Arthur-D/topCEC")
                         }
                     }
-                    Kirigami.Heading {
+                    SelectableHeading {
                         level: 3
                         text: "Diagnostics"
                     }
                     Controls.TextArea {
+                        objectName: "setupDiagnostics"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 78
                         readOnly: true
+                        selectByMouse: true
                         text: topcec.diagnostics
                     }
                 }
@@ -157,44 +256,44 @@ Kirigami.ApplicationWindow {
                     width: parent.width
                     spacing: Kirigami.Units.largeSpacing
 
-                    Kirigami.Heading {
+                    SelectableHeading {
                         level: 2
                         text: "TV power control"
                     }
 
-                    Controls.Label {
+                    SelectableLabel {
                         text: "Service: " + topcec.serviceStatus
                         font.bold: true
                     }
-                    Controls.Label {
+                    SelectableLabel {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         text: topcec.connectionMessage
                     }
-                    Controls.Button {
+                    CopyableButton {
                         text: "Retry Connection"
                         visible: !topcec.backendAvailable
                         enabled: topcec.connectionState !== "connecting"
                         onClicked: topcec.retryConnection()
                     }
-                    Controls.Label {
+                    SelectableLabel {
                         text: "TV power: " + topcec.powerState
                     }
-                    Controls.Label {
+                    SelectableLabel {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         text: topcec.standbyReason
                     }
 
                     RowLayout {
-                        Controls.Button {
+                        CopyableButton {
                             text: "TV on"
                             enabled: topcec.simulationMode
                                      || (topcec.backendAvailable
                                          && topcec.serviceStatus === "running")
                             onClicked: topcec.requestPower("on")
                         }
-                        Controls.Button {
+                        CopyableButton {
                             text: "TV standby"
                             enabled: topcec.simulationMode
                                      || (topcec.backendAvailable
@@ -204,12 +303,12 @@ Kirigami.ApplicationWindow {
                         }
                     }
 
-                    Controls.CheckBox {
+                    CopyableCheckBox {
                         text: "Simulate manual actions"
                         checked: topcec.simulationMode
                         onToggled: topcec.setSimulationMode(checked)
                     }
-                    Controls.Label {
+                    SelectableLabel {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         text: topcec.actionMessage
@@ -219,13 +318,13 @@ Kirigami.ApplicationWindow {
                         Layout.fillWidth: true
                     }
 
-                    Kirigami.Heading {
+                    SelectableHeading {
                         level: 3
                         text: "Configuration"
                     }
 
-                    Controls.Label { text: "TV display (KWin output name)" }
-                    Controls.ComboBox {
+                    SelectableLabel { text: "TV display (KWin output name)" }
+                    CopyableComboBox {
                         id: outputField
                         objectName: "outputField"
                         Layout.fillWidth: true
@@ -236,8 +335,8 @@ Kirigami.ApplicationWindow {
                         onActivated: root.settingsDirty = true
                     }
 
-                    Controls.Label { text: "CEC adapter" }
-                    Controls.ComboBox {
+                    SelectableLabel { text: "CEC adapter" }
+                    CopyableComboBox {
                         id: adapterField
                         objectName: "adapterField"
                         Layout.fillWidth: true
@@ -248,14 +347,14 @@ Kirigami.ApplicationWindow {
                         onActivated: root.settingsDirty = true
                     }
 
-                    Controls.Label { text: "Inactivity timeout" }
-                    Controls.ComboBox {
+                    SelectableLabel { text: "Inactivity timeout" }
+                    CopyableComboBox {
                         id: timeoutMode
                         Layout.fillWidth: true
                         model: ["KDE-managed", "Custom (minutes)", "Disabled"]
                         onActivated: root.settingsDirty = true
                     }
-                    Controls.SpinBox {
+                    CopyableSpinBox {
                         id: timeoutMinutes
                         from: 1
                         to: 1440
@@ -263,44 +362,46 @@ Kirigami.ApplicationWindow {
                         enabled: timeoutMode.currentIndex === 1
                     }
 
-                    Controls.Label { text: "Input devices (one path per line)" }
+                    SelectableLabel { text: "Input devices (one path per line)" }
                     Controls.TextArea {
                         id: devicesField
                         objectName: "devicesField"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 72
+                        selectByMouse: true
                         onTextChanged: {
                             if (activeFocus) root.settingsDirty = true
                         }
                         wrapMode: TextEdit.NoWrap
                     }
 
-                    Controls.Label { text: "Firefox mute-tab labels (one per line)" }
+                    SelectableLabel { text: "Firefox mute-tab labels (one per line)" }
                     Controls.TextArea {
                         id: labelsField
                         Layout.fillWidth: true
                         Layout.preferredHeight: 56
+                        selectByMouse: true
                         onTextChanged: {
                             if (activeFocus) root.settingsDirty = true
                         }
                     }
 
-                    Controls.Label { text: "Axis deadzone (%)" }
-                    Controls.SpinBox {
+                    SelectableLabel { text: "Axis deadzone (%)" }
+                    CopyableSpinBox {
                         id: deadzoneField
                         from: 1
                         to: 25
                         onValueModified: root.settingsDirty = true
                     }
-                    Controls.Label { text: "ABS_RZ deadzone (%)" }
-                    Controls.SpinBox {
+                    SelectableLabel { text: "ABS_RZ deadzone (%)" }
+                    CopyableSpinBox {
                         id: rzDeadzoneField
                         from: 1
                         to: 25
                         onValueModified: root.settingsDirty = true
                     }
 
-                    Controls.Button {
+                    CopyableButton {
                         objectName: "saveSettingsButton"
                         text: "Save settings and restart service"
                         Layout.fillWidth: true
@@ -318,14 +419,16 @@ Kirigami.ApplicationWindow {
                         })
                     }
 
-                    Kirigami.Heading {
+                    SelectableHeading {
                         level: 3
                         text: "Diagnostics"
                     }
                     Controls.TextArea {
+                        objectName: "backendDiagnostics"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 110
                         readOnly: true
+                        selectByMouse: true
                         text: topcec.diagnostics
                     }
                 }
