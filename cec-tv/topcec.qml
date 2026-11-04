@@ -10,6 +10,33 @@ Kirigami.ApplicationWindow {
         ? "topCEC Backend Not Available" : "topCEC"
     minimumWidth: 620
     minimumHeight: 680
+    property bool settingsDirty: false
+
+    function loadSettings() {
+        if (settingsDirty)
+            return
+        outputField.model = topcec.outputOptions
+        outputField.editText = topcec.setting("target_output")
+        adapterField.model = topcec.adapterOptions
+        adapterField.editText = topcec.setting("cec_port")
+        timeoutMode.currentIndex = topcec.usesKdeTimeout() ? 0
+            : (topcec.setting("timeout_seconds") === null ? 2 : 1)
+        timeoutMinutes.value = topcec.timeoutMinutes()
+        devicesField.text = topcec.deviceList()
+        labelsField.text = topcec.muteLabelList()
+        deadzoneField.value = Math.round(topcec.setting("axis_deadzone_percent"))
+        rzDeadzoneField.value = Math.round(topcec.setting("rz_deadzone_percent"))
+    }
+
+    Component.onCompleted: loadSettings()
+    Connections {
+        target: topcec
+        function onConfigurationChanged() { root.loadSettings() }
+        function onSettingsSaved() {
+            root.settingsDirty = false
+            root.loadSettings()
+        }
+    }
 
     pageStack.initialPage: Kirigami.ScrollablePage {
         title: "topCEC"
@@ -75,7 +102,7 @@ Kirigami.ApplicationWindow {
                     Controls.Label {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
-                        text: "3. Configure the correct display, CEC adapter, and input devices with the native host GUI:"
+                        text: "3. Before first start, configure the correct display, CEC adapter, and input devices with the native host GUI. Once the service is started, you can configure it here even if input initialization fails:"
                     }
                     Controls.TextArea {
                         Layout.fillWidth: true
@@ -200,19 +227,25 @@ Kirigami.ApplicationWindow {
                     Controls.Label { text: "TV display (KWin output name)" }
                     Controls.ComboBox {
                         id: outputField
+                        objectName: "outputField"
                         Layout.fillWidth: true
                         editable: true
-                        model: topcec.outputOptions
-                        Component.onCompleted: editText = topcec.setting("target_output")
+                        onEditTextChanged: {
+                            if (activeFocus) root.settingsDirty = true
+                        }
+                        onActivated: root.settingsDirty = true
                     }
 
                     Controls.Label { text: "CEC adapter" }
                     Controls.ComboBox {
                         id: adapterField
+                        objectName: "adapterField"
                         Layout.fillWidth: true
                         editable: true
-                        model: topcec.adapterOptions
-                        Component.onCompleted: editText = topcec.setting("cec_port")
+                        onEditTextChanged: {
+                            if (activeFocus) root.settingsDirty = true
+                        }
+                        onActivated: root.settingsDirty = true
                     }
 
                     Controls.Label { text: "Inactivity timeout" }
@@ -220,23 +253,25 @@ Kirigami.ApplicationWindow {
                         id: timeoutMode
                         Layout.fillWidth: true
                         model: ["KDE-managed", "Custom (minutes)", "Disabled"]
-                        currentIndex: topcec.usesKdeTimeout() ? 0
-                            : (topcec.setting("timeout_seconds") === null ? 2 : 1)
+                        onActivated: root.settingsDirty = true
                     }
                     Controls.SpinBox {
                         id: timeoutMinutes
                         from: 1
                         to: 1440
-                        value: topcec.timeoutMinutes()
+                        onValueModified: root.settingsDirty = true
                         enabled: timeoutMode.currentIndex === 1
                     }
 
                     Controls.Label { text: "Input devices (one path per line)" }
                     Controls.TextArea {
                         id: devicesField
+                        objectName: "devicesField"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 72
-                        text: topcec.deviceList()
+                        onTextChanged: {
+                            if (activeFocus) root.settingsDirty = true
+                        }
                         wrapMode: TextEdit.NoWrap
                     }
 
@@ -245,7 +280,9 @@ Kirigami.ApplicationWindow {
                         id: labelsField
                         Layout.fillWidth: true
                         Layout.preferredHeight: 56
-                        text: topcec.muteLabelList()
+                        onTextChanged: {
+                            if (activeFocus) root.settingsDirty = true
+                        }
                     }
 
                     Controls.Label { text: "Axis deadzone (%)" }
@@ -253,17 +290,18 @@ Kirigami.ApplicationWindow {
                         id: deadzoneField
                         from: 1
                         to: 25
-                        value: Math.round(topcec.setting("axis_deadzone_percent"))
+                        onValueModified: root.settingsDirty = true
                     }
                     Controls.Label { text: "ABS_RZ deadzone (%)" }
                     Controls.SpinBox {
                         id: rzDeadzoneField
                         from: 1
                         to: 25
-                        value: Math.round(topcec.setting("rz_deadzone_percent"))
+                        onValueModified: root.settingsDirty = true
                     }
 
                     Controls.Button {
+                        objectName: "saveSettingsButton"
                         text: "Save settings and restart service"
                         Layout.fillWidth: true
                         enabled: topcec.settingsEnabled
