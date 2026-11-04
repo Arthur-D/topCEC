@@ -306,6 +306,22 @@ The installer installs the unit but does not enable or start it. The native GUI
 continues to work independently of Flatpak and can save the host configuration
 before the service is first started.
 
+If an input device is missing or unreadable when the service starts, the host
+stays available in **configuration-only** mode instead of exiting. The Flatpak
+then shows the normal configuration panel and the input error. Choose the
+correct keyboard/wheel paths (prefer stable `/dev/input/by-id/` paths), then use
+**Save settings and restart service** to retry monitoring. No CEC commands or
+monitoring run in this mode, and both live manual power actions are rejected.
+Unsaved GUI edits are retained across connection loss and reconnection.
+
+The host user must have read access to the selected input devices. Changing a
+path does not grant access; if the intended device is still permission-denied,
+arrange appropriately scoped host permissions with your system administrator.
+Do not grant device access to Flatpak or run the GUI as root. The installer
+copies files but does not configure device permissions or install host
+dependencies. This recovery requires the updated host backend as well as the
+updated GUI; an older backend still exits on input initialization failure.
+
 For connection problems on the host, inspect the user unit and its current-boot
 logs, then verify that its D-Bus name is owned:
 

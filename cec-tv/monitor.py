@@ -599,8 +599,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'axis_deadzone_percent': args.axis_deadzone_percent,
         'rz_deadzone_percent': args.rz_deadzone_percent,
     })
+    startup_error = None
 
     def activity(source):
+        if startup_error:
+            return
         now = time.monotonic()
         message = timer.activity(now)
         if power:
@@ -697,6 +700,9 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='s')
         def RequestPower(self, action):
             try:
+                if startup_error:
+                    raise RuntimeError(
+                        'Monitor is configuration-only: ' + startup_error)
                 request_manual_power(power, str(action),
                                      status_snapshot.get('fail_safe_reason'))
             except (RuntimeError, ValueError) as error:
@@ -728,11 +734,17 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 raise
             devices[device.fd] = {'device': device, 'axes': axes, 'dropped': False}
     except OSError as error:
-        log('Cannot read input; monitor stopped without changes: ' + str(error))
+        startup_error = 'Cannot read input: ' + str(error)
+        log(startup_error + '; configuration-only mode. No CEC commands will be sent.')
         for state in devices.values():
             state['device'].close()
-        selector.close()
-        return 2
+        devices.clear()
+        status_snapshot.update({
+            'service': 'configuration-only',
+            'cec_enabled': False,
+            'fail_safe_reason': startup_error,
+            'scan_status': 'Monitoring has not started',
+        })
 
     loop = GLib.MainLoop()
     runtime_failed = False
@@ -897,11 +909,15 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'KDE-managed display timeout (AC power)' if kde_settings else
         'automatic standby disabled' if timer.timeout is None else
         f'{timer.timeout:g}-second inactivity timeout')
-    log(('LIVE CEC; ' if power else 'SIMULATION; ') + timeout_description + '.')
-    if not power:
-        log('No CEC commands will be sent. Press Ctrl+C to stop.')
-    log('Requires an existing KWin bridge. Firefox must expose configured mute-tab labels for AT-SPI fallback.')
-    GLib.timeout_add(100, poll)
+    if startup_error:
+        log('Configuration remains available over D-Bus; save corrected settings '
+            'in the GUI to restart the service.')
+    else:
+        log(('LIVE CEC; ' if power else 'SIMULATION; ') + timeout_description + '.')
+        if not power:
+            log('No CEC commands will be sent. Press Ctrl+C to stop.')
+        log('Requires an existing KWin bridge. Firefox must expose configured mute-tab labels for AT-SPI fallback.')
+        GLib.timeout_add(100, poll)
     try:
         loop.run()
     except KeyboardInterrupt:
@@ -918,7 +934,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         del receiver, name
         if kde_settings:
             kde_settings.close()
-        if power:
+        if power and not startup_error:
             power.close()
         log('Monitor stopped.' if power else 'Simulation stopped. No CEC commands sent.')
     return 2 if runtime_failed else 0
@@ -1118,7 +1134,9 @@ def self_test():
             self.assertEqual(m.output('New title', Counter({'New title': 1}), 14), TARGET)
 
         def run_monitor_steps(self, steps, diagnostics_enabled=True, config_path=None,
-                              timeout=int(DEFAULT_TIMEOUT), target=TARGET):
+                              timeout=int(DEFAULT_TIMEOUT), target=TARGET,
+                              input_error=None, recovery_action=None,
+                              input_error_after=0):
             from unittest.mock import Mock, patch
 
             clock = SimpleNamespace(now=0)
@@ -1139,6 +1157,11 @@ def self_test():
                 context.poll = callback
 
             def main_loop():
+                if recovery_action:
+                    recovery_action(context.receiver)
+                if input_error:
+                    self.assertIsNone(context.poll)
+                    return
                 for step in steps:
                     now, snapshot, scan, *optional = step
                     clock.now = now
@@ -1190,6 +1213,9 @@ def self_test():
                                                                 ABS_RZ=2, ABS_MT_SLOT=47,
                                                                 ABS={})),
             }
+            if input_error:
+                modules['evdev'].InputDevice.side_effect = (
+                    [device] * input_error_after + [input_error])
             args = SimpleNamespace(kde_timeout=False, cec=True, cec_port='unused',
                                    mapping_ttl=15, require_snapshot=True, device=['unused'],
                                    mute_label=['Mute tab'], axis_deadzone_percent=2.0,
@@ -1197,6 +1223,8 @@ def self_test():
                                    timeout_seconds=timeout,
                                    target=target,
                                    config=str(config_path) if config_path else None)
+            if input_error_after:
+                args.device = ['first-input', 'unreadable-input']
             with patch.dict(sys.modules, modules), \
                     patch.dict(globals(), {
                         'Timer': Mock(return_value=timer), 'CecPower': Mock(return_value=power),
@@ -1215,7 +1243,63 @@ def self_test():
                 all_messages=messages, diagnostics=diagnostics, update=update,
                 timer=vars(timer), mapping=vars(mapping), power_calls=power.mock_calls,
                 receiver=context.receiver, power=power, command_run=command_run,
+                device=device, selector=selector, workers=workers,
                 status=json.loads(context.receiver.GetStatus()))
+
+        def test_input_startup_failure_keeps_configuration_api_without_cec(self):
+            import tempfile
+
+            for error in (
+                    PermissionError(13, 'Permission denied', '/dev/input/event10'),
+                    FileNotFoundError(2, 'No such file', '/dev/input/event10')):
+                with self.subTest(error=error), tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / 'config.json'
+
+                    def configure(receiver):
+                        status = json.loads(receiver.GetStatus())
+                        self.assertEqual(status['service'], 'configuration-only')
+                        self.assertFalse(status['cec_enabled'])
+                        self.assertIn(str(error), status['fail_safe_reason'])
+                        initial = json.loads(receiver.GetConfig())
+                        self.assertTrue(initial['cec_enabled'])
+                        for action in ('on', 'off'):
+                            with self.assertRaisesRegex(RuntimeError, 'configuration-only'):
+                                receiver.RequestPower(action)
+                        receiver.Report('Mouse-activity: ' + TARGET)
+                        config = {
+                            **initial, 'target_output': 'DP-1',
+                            'devices': ['/dev/input/by-id/selected-keyboard'],
+                        }
+                        result = json.loads(receiver.ApplySettings(json.dumps(config)))
+                        self.assertTrue(result['accepted'])
+                        self.assertEqual(
+                            json.loads(receiver.GetConfig())['devices'],
+                            config['devices'])
+
+                    result = self.run_monitor_steps(
+                        [], config_path=path, input_error=error,
+                        recovery_action=configure)
+                    result.power.request.assert_not_called()
+                    result.power.activity.assert_not_called()
+                    result.power.poll.assert_not_called()
+                    result.power.close.assert_not_called()
+                    result.command_run.assert_called_once_with(
+                        ['/usr/bin/systemctl', '--user', 'restart', '--no-block',
+                         'topcec.service'],
+                        capture_output=True, text=True, timeout=10)
+                    self.assertEqual(
+                        json.loads(path.read_text())['target_output'], 'DP-1')
+
+        def test_partial_input_initialization_is_closed_before_configuration_only(self):
+            result = self.run_monitor_steps(
+                [], input_error=PermissionError(13, 'Permission denied'),
+                input_error_after=1)
+            self.assertEqual(result.status['service'], 'configuration-only')
+            result.device.close.assert_called_once()
+            result.selector.close.assert_called_once()
+            self.assertEqual(result.workers, [])
+            result.power.poll.assert_not_called()
+            result.power.close.assert_not_called()
 
         def test_mouse_reports_follow_configured_target_not_default_display(self):
             for report, expected in (

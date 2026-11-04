@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
-from PySide6.QtCore import QUrl, QStandardPaths
+from PySide6.QtCore import QMetaObject, QObject, QUrl, QStandardPaths
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -417,7 +417,8 @@ class GuiChecks(unittest.TestCase):
                 patch.object(topcec_gui, 'QDBusPendingCallWatcher',
                              side_effect=make_watcher):
             backend.applySettings(self.values)
-            name, serialized = interface.asyncCall.call_args.args
+            name, arguments = interface.asyncCallWithArgumentList.call_args.args
+            serialized, = arguments
             watchers[0].complete(SimpleNamespace(
                 type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
                 arguments=lambda: ['{}']))
@@ -427,6 +428,95 @@ class GuiChecks(unittest.TestCase):
         self.assertTrue(config['require_snapshot'])
         self.assertIn('restart queued', backend.actionMessage)
         refresh.assert_called_once()
+
+    def test_configuration_only_backend_enables_flatpak_settings_not_power(self):
+        backend = GuiBackend(dbus_only=True)
+        backend._service_data = {
+            'service': 'configuration-only', 'cec_enabled': False,
+            'fail_safe_reason': 'Cannot read input: Permission denied',
+        }
+        config = {
+            'schema_version': 1, **DEFAULT_CONFIG,
+            'target_output': 'DP-1',
+            'devices': ['/dev/input/by-id/host-keyboard'],
+        }
+        backend._config_reply(0, SimpleNamespace(
+            type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+            arguments=lambda: [json.dumps(config)]))
+        self.assertTrue(backend.backendAvailable)
+        self.assertTrue(backend.settingsEnabled)
+        self.assertEqual(backend.serviceStatus, 'configuration-only')
+        self.assertIn('configuration only', backend.connectionMessage)
+        self.assertIn('Permission denied', backend.standbyReason)
+        with patch.object(backend, '_service_interface') as interface:
+            backend.requestPower('on')
+            interface.assert_not_called()
+        self.assertEqual(backend.actionMessage, 'Live CEC control is unavailable.')
+
+    def test_qml_loads_host_config_and_preserves_draft_across_recovery(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        devices = window.findChild(QObject, 'devicesField')
+        output = window.findChild(QObject, 'outputField')
+        save = window.findChild(QObject, 'saveSettingsButton')
+        self.assertIsNotNone(devices)
+        self.assertIsNotNone(output)
+        self.assertIsNotNone(save)
+
+        def connect(config):
+            backend._service_data = {
+                'service': 'configuration-only', 'cec_enabled': False,
+                'fail_safe_reason': 'Cannot read input: Permission denied',
+            }
+            backend._config_reply(backend._refresh_generation, SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: [json.dumps(config)]))
+            app.processEvents()
+
+        config = {
+            'schema_version': 1, **DEFAULT_CONFIG,
+            'target_output': 'DP-1',
+            'devices': ['/dev/input/by-id/host-keyboard'],
+        }
+        connect(config)
+        self.assertEqual(devices.property('text'), config['devices'][0])
+        self.assertEqual(output.property('editText'), 'DP-1')
+        self.assertTrue(save.property('enabled'))
+        self.assertTrue(save.property('visible'))
+        QMetaObject.invokeMethod(devices, 'forceActiveFocus')
+        devices.setProperty('text', '/dev/input/by-id/draft-keyboard')
+        self.assertTrue(window.property('settingsDirty'))
+        output.setProperty('editText', 'DRAFT-1')
+        backend._name_owner_changed(topcec_gui.SERVICE, ':1.42', '')
+        connect({**config, 'target_output': 'CHANGED-1'})
+        self.assertEqual(devices.property('text'), '/dev/input/by-id/draft-keyboard')
+        self.assertEqual(output.property('editText'), 'DRAFT-1')
+        self.assertTrue(window.property('settingsDirty'))
+        engine.deleteLater()
+
+    def test_native_qml_configuration_is_visible_and_editable_offline(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(topcec_gui, 'available_outputs', return_value=[]), \
+                patch.object(topcec_gui, 'available_adapters', return_value=[]):
+            backend = GuiBackend(Path(directory) / 'config.json', dbus_only=False)
+            backend._connection_state = 'unavailable'
+            engine = QQmlApplicationEngine()
+            engine.rootContext().setContextProperty('topcec', backend)
+            engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+            window = engine.rootObjects()[0]
+            save = window.findChild(QObject, 'saveSettingsButton')
+            self.assertTrue(save.property('visible'))
+            self.assertTrue(save.property('enabled'))
+            devices = window.findChild(QObject, 'devicesField')
+            self.assertTrue(devices.property('visible'))
+            self.assertFalse(devices.property('readOnly'))
+            self.assertIsNotNone(app)
+            engine.deleteLater()
 
     def test_native_gui_can_configure_before_service_starts(self):
         probes = []

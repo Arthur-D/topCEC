@@ -86,6 +86,8 @@ def config_from_settings(current, values):
 
 class GuiBackend(QObject):
     changed = Signal()
+    configurationChanged = Signal()
+    settingsSaved = Signal()
 
     def __init__(self, config_path=None, dbus_only=None):
         super().__init__()
@@ -170,7 +172,8 @@ class GuiBackend(QObject):
     @Property(bool, notify=changed)
     def settingsEnabled(self):
         return not self.dbus_only or (
-            self.backendAvailable and self._service_status in ('active', 'running'))
+            self.backendAvailable and self._service_status in (
+                'active', 'running', 'configuration-only'))
 
     @Property('QVariantList', notify=changed)
     def outputOptions(self):
@@ -253,7 +256,7 @@ class GuiBackend(QObject):
 
     def _async_call(self, interface, method, callback, *arguments):
         watcher = QDBusPendingCallWatcher(
-            interface.asyncCall(method, *arguments), self)
+            interface.asyncCallWithArgumentList(method, list(arguments)), self)
         self._pending_watchers.append(watcher)
 
         def finished(completed):
@@ -386,14 +389,16 @@ class GuiBackend(QObject):
                 generation, 'Cannot read service configuration: ' + error)
             return
         try:
-            self.config = validate_config(json.loads(str(reply.arguments()[0])))
+            config = validate_config(json.loads(str(reply.arguments()[0])))
         except (IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
             self._connection_failed(
                 generation, 'Cannot read service configuration: ' + str(error))
             return
 
-        self.outputs = [self.config['target_output']]
-        self.adapters = [self.config['cec_port']]
+        config_changed = config != self.config or not self.backendAvailable
+        self.config = config
+        self.outputs = list(dict.fromkeys([config['target_output'], *self.outputs]))
+        self.adapters = list(dict.fromkeys([config['cec_port'], *self.adapters]))
         self._service_status = self._service_data.get('service', 'running')
         self._power_state = self._service_data.get('power_state', 'unknown')
         reason = self._service_data.get('fail_safe_reason')
@@ -408,9 +413,16 @@ class GuiBackend(QObject):
         ]
         self._diagnostics = '\n'.join(diagnostic_items)
         self._connection_state = 'connected'
-        self._connection_message = 'Connected to the topCEC host service.'
+        self._connection_message = (
+            'Connected for configuration only. Monitoring could not start. '
+            'Correct the input devices and their host read permissions, then '
+            'save settings to restart the service.'
+            if self._service_status == 'configuration-only'
+            else 'Connected to the topCEC host service.')
         self._refresh_in_flight = False
         self.changed.emit()
+        if config_changed:
+            self.configurationChanged.emit()
 
     @Slot()
     def refresh(self):
@@ -489,6 +501,7 @@ class GuiBackend(QObject):
         self.config = validated
         self._action_message = 'Settings saved; topcec.service restart queued.'
         self.changed.emit()
+        self.settingsSaved.emit()
         self.refresh()
 
     @Slot('QVariantMap')
@@ -525,6 +538,7 @@ class GuiBackend(QObject):
                 if result.returncode:
                     raise RuntimeError(result.stderr.strip() or result.stdout.strip())
             self.config = validated
+            self.settingsSaved.emit()
             self._action_message = (
                 'Settings saved; topcec.service restart queued.')
         except (KeyError, OSError, TypeError, ValueError, RuntimeError,
