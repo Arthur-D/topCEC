@@ -158,6 +158,14 @@ class GuiBackend(QObject):
         return self._standby_reason
 
     @Property(str, notify=changed)
+    def inputPermissionMessage(self):
+        return self._service_data.get('input_permission_help', {}).get('message', '')
+
+    @Property(str, notify=changed)
+    def inputPermissionCommand(self):
+        return self._service_data.get('input_permission_help', {}).get('command', '')
+
+    @Property(str, notify=changed)
     def diagnostics(self):
         return self._diagnostics
 

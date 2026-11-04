@@ -285,6 +285,37 @@ Kirigami.ApplicationWindow {
                         text: topcec.standbyReason
                     }
 
+                    ColumnLayout {
+                        objectName: "inputPermissionHelp"
+                        Layout.fillWidth: true
+                        visible: topcec.inputPermissionMessage.length > 0
+                        spacing: Kirigami.Units.smallSpacing
+
+                        SelectableHeading {
+                            level: 3
+                            text: "Input device access"
+                        }
+                        SelectableLabel {
+                            Layout.fillWidth: true
+                            text: topcec.inputPermissionMessage
+                        }
+                        Controls.TextArea {
+                            objectName: "inputPermissionCommand"
+                            Layout.fillWidth: true
+                            visible: topcec.inputPermissionCommand.length > 0
+                            text: topcec.inputPermissionCommand
+                            readOnly: true
+                            selectByMouse: true
+                            wrapMode: TextEdit.Wrap
+                        }
+                        CopyableButton {
+                            objectName: "copyInputPermissionCommand"
+                            visible: topcec.inputPermissionCommand.length > 0
+                            text: "Copy input-group command"
+                            onClicked: topcec.copyText(topcec.inputPermissionCommand)
+                        }
+                    }
+
                     RowLayout {
                         CopyableButton {
                             text: "TV on"

@@ -323,7 +323,26 @@ Unsaved GUI edits are retained across connection loss and reconnection.
 
 The host user must have read access to the selected input devices. Changing a
 path does not grant access; if the intended device is still permission-denied,
-arrange appropriately scoped host permissions with your system administrator.
+the GUI shows **Input device access** guidance supplied by the host. When the
+host verifies that the device is group-readable by the existing `input` group
+and your account is not a member, it offers **Copy input-group command**.
+Paste the displayed `sudo usermod -aG input -- YOUR_USERNAME` command into a
+host terminal and run it yourself; `YOUR_USERNAME` is replaced with the backend
+account name in the GUI. This command works with fish as well as Bash. It needs
+administrator authorization and is never executed by the GUI.
+
+Membership in `input` grants access to keyboard and other input events, not just
+the selected device. Consider scoped device permissions with your administrator
+instead if that broad access is inappropriate. Fully log out and back in so the
+desktop and user service inherit the new group. If the user manager persists
+across logout (for example with lingering), reboot. Then use **Retry Connection**
+and **Save settings and restart service** to retry monitoring. If your account is
+already a member but the running backend has not inherited it, the GUI explains
+the session restart instead of offering a duplicate membership command. If the
+backend already has that group, or the device ownership/read bits do not support
+this remedy, check the selected device, ACLs and host security policy instead;
+the GUI does not claim that every permission error is a missing group.
+
 Do not grant device access to Flatpak or run the GUI as root. The installer
 copies files but does not configure device permissions or install host
 dependencies. This recovery requires the updated host backend as well as the
