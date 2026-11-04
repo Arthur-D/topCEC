@@ -6,9 +6,14 @@ adapter failures. Use start-cec-live.fish to exclude the old idle controller.
 """
 import argparse
 from collections import Counter
+import grp
 import json
 import math
+import os
+import pwd
 import selectors
+import shlex
+import stat
 import subprocess
 import subprocess
 import sys
@@ -34,6 +39,54 @@ SCAN_MAX_AGE = 8.0
 
 def log(message):
     print(time.strftime('[%H:%M:%S]'), message, flush=True)
+
+
+def input_permission_help(error):
+    help_text = (
+        'Check that the selected input path belongs to the intended keyboard or '
+        'controller. Choose a stable /dev/input/by-id/ path in Configuration. '
+        'The host user needs read access to that device; changing the path does '
+        'not grant access. Ask your administrator for scoped device permissions.')
+    result = {'message': help_text, 'command': ''}
+    if not isinstance(error, PermissionError) or not error.filename:
+        return result
+    try:
+        device = os.stat(error.filename)
+        group = grp.getgrnam('input')
+        user = pwd.getpwuid(os.getuid())
+        process_groups = {*os.getgroups(), os.getgid()}
+    except (OSError, KeyError) as diagnostic_error:
+        log('Could not inspect input permission recovery: ' + str(diagnostic_error))
+        return result
+    if (not stat.S_ISCHR(device.st_mode) or device.st_gid != group.gr_gid
+            or not device.st_mode & stat.S_IRGRP):
+        return result
+    warning = (
+        'The input group grants access to keyboard and other input events, '
+        'not just this device. Only join it if you trust applications running '
+        'as your user; scoped device permissions are a narrower alternative. ')
+    session = (
+        'Fully log out and log back in after changing membership so the desktop '
+        'and user service inherit it. If the user manager persists across logout, '
+        'reboot. Retry Connection after signing back in, then save settings and '
+        'restart service to retry monitoring.')
+    if group.gr_gid in process_groups:
+        result['message'] = (
+            help_text + '\nThe backend already has the input group. Joining it '
+            'again will not fix this error; check device ACLs or other host '
+            'security policy.')
+    elif user.pw_gid == group.gr_gid or user.pw_name in group.gr_mem:
+        result['message'] = (
+            'Your account already belongs to input, but the backend session '
+            'has not inherited that membership. ' + warning + session)
+    else:
+        result['message'] = (
+            'This device is group-readable by input, and the backend user is '
+            'not a member. First confirm this is the intended input device. '
+            'To join input, run the command below manually in a host terminal '
+            '(administrator password required). ' + warning + session)
+        result['command'] = 'sudo usermod -aG input -- ' + shlex.quote(user.pw_name)
+    return result
 
 
 class CecPower:
@@ -744,6 +797,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             'cec_enabled': False,
             'fail_safe_reason': startup_error,
             'scan_status': 'Monitoring has not started',
+            'input_permission_help': input_permission_help(error),
         })
 
     loop = GLib.MainLoop()
@@ -945,6 +999,66 @@ def self_test():
     from types import SimpleNamespace
 
     class Checks(unittest.TestCase):
+        def permission_guidance(self, *, device_gid=50, mode=stat.S_IFCHR | 0o660,
+                                members=(), process_groups=(), primary_gid=100,
+                                group_exists=True):
+            from unittest.mock import patch
+
+            group = SimpleNamespace(gr_gid=50, gr_mem=members)
+            user = SimpleNamespace(pw_name='test-user', pw_gid=primary_gid)
+            with patch.object(os, 'stat', return_value=SimpleNamespace(
+                    st_gid=device_gid, st_mode=mode)), \
+                    patch.object(grp, 'getgrnam', return_value=group,
+                                 side_effect=None if group_exists else KeyError('input')), \
+                    patch.object(pwd, 'getpwuid', return_value=user), \
+                    patch.object(os, 'getgroups', return_value=list(process_groups)), \
+                    patch.object(os, 'getgid', return_value=primary_gid), \
+                    patch.dict(globals(), {'log': lambda message: None}):
+                return input_permission_help(PermissionError(
+                    13, 'Permission denied', '/dev/input/event10'))
+
+        def test_input_group_command_requires_verified_device_permissions(self):
+            result = self.permission_guidance()
+            self.assertEqual(result['command'], 'sudo usermod -aG input -- test-user')
+            self.assertIn('keyboard and other input events', result['message'])
+            self.assertIn('Fully log out and log back in', result['message'])
+            self.assertIn('user manager persists', result['message'])
+            self.assertIn('intended input device', result['message'])
+            self.assertIn('host terminal', result['message'])
+            for arguments in (
+                    {'group_exists': False}, {'device_gid': 70},
+                    {'mode': stat.S_IFCHR | 0o600},
+                    {'mode': stat.S_IFREG | 0o660}):
+                with self.subTest(arguments=arguments):
+                    self.assertEqual(
+                        self.permission_guidance(**arguments)['command'], '')
+
+        def test_input_group_membership_and_session_are_distinguished(self):
+            result = self.permission_guidance(members=['test-user'])
+            self.assertEqual(result['command'], '')
+            self.assertIn('already belongs to input', result['message'])
+            self.assertIn('log out and log back in', result['message'])
+            result = self.permission_guidance(process_groups=[50])
+            self.assertEqual(result['command'], '')
+            self.assertIn('already has the input group', result['message'])
+            self.assertIn('ACLs', result['message'])
+            result = self.permission_guidance(primary_gid=50)
+            self.assertEqual(result['command'], '')
+            self.assertIn('already has the input group', result['message'])
+
+        def test_uninspectable_or_missing_input_does_not_suggest_group_changes(self):
+            from unittest.mock import patch
+
+            with patch.object(os, 'stat', side_effect=OSError('unavailable')), \
+                    patch.dict(globals(), {'log': lambda message: None}):
+                result = input_permission_help(PermissionError(
+                    13, 'Permission denied', '/dev/input/event10'))
+            self.assertEqual(result['command'], '')
+            self.assertIn('selected input path', result['message'])
+            result = input_permission_help(FileNotFoundError(
+                2, 'No such file', '/dev/input/event10'))
+            self.assertEqual(result['command'], '')
+
         def test_configurable_timeout(self):
             timer = Timer(0, timeout=600)
             self.assertIsNone(timer.tick(60))
@@ -1230,6 +1344,8 @@ def self_test():
                         'Timer': Mock(return_value=timer), 'CecPower': Mock(return_value=power),
                         'Mapping': Mock(return_value=mapping),
                         'MatchDiagnostics': Mock(return_value=diagnostics),
+                        'input_permission_help': Mock(return_value={
+                            'message': 'Host input permission guidance', 'command': ''}),
                         'log': messages.append}), \
                     patch.object(diagnostics, 'update', update), \
                     patch.object(time, 'monotonic', lambda: clock.now), \
@@ -1260,6 +1376,8 @@ def self_test():
                         self.assertEqual(status['service'], 'configuration-only')
                         self.assertFalse(status['cec_enabled'])
                         self.assertIn(str(error), status['fail_safe_reason'])
+                        self.assertEqual(status['input_permission_help']['message'],
+                                         'Host input permission guidance')
                         initial = json.loads(receiver.GetConfig())
                         self.assertTrue(initial['cec_enabled'])
                         for action in ('on', 'off'):

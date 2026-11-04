@@ -27,6 +27,44 @@ from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    def test_host_verified_input_permission_command_is_displayed_and_copied(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        self.addCleanup(app.clipboard().setText, app.clipboard().text())
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'configuration-only'
+        backend._service_data = {
+            'input_permission_help': {
+                'message': 'Host verified input group access. Log out and back in.',
+                'command': 'sudo usermod -aG input -- test-user',
+            },
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        help_item = window.findChild(QObject, 'inputPermissionHelp')
+        command = window.findChild(QObject, 'inputPermissionCommand')
+        copy = window.findChild(QObject, 'copyInputPermissionCommand')
+        self.assertTrue(help_item.property('visible'))
+        self.assertEqual(command.property('text'), backend.inputPermissionCommand)
+        self.assertTrue(command.property('selectByMouse'))
+        self.assertTrue(command.property('readOnly'))
+        with patch.object(topcec_gui.subprocess, 'run',
+                          side_effect=AssertionError('must not execute command')):
+            QMetaObject.invokeMethod(copy, 'clicked')
+        self.assertEqual(app.clipboard().text(), 'sudo usermod -aG input -- test-user')
+        self.assertTrue(backend.settingsEnabled)
+        backend._service_data['input_permission_help']['command'] = ''
+        backend.changed.emit()
+        self.assertFalse(copy.property('visible'))
+        self.assertFalse(command.property('visible'))
+        self.assertTrue(help_item.property('visible'))
+        backend._service_data = {}
+        backend.changed.emit()
+        self.assertFalse(help_item.property('visible'))
+        engine.deleteLater()
+
     def test_gui_readonly_text_can_be_selected_and_copied(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         self.addCleanup(app.clipboard().setText, app.clipboard().text())
