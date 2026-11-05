@@ -346,7 +346,25 @@ the GUI does not claim that every permission error is a missing group.
 Do not grant device access to Flatpak or run the GUI as root. The installer
 copies files but does not configure device permissions or install host
 dependencies. This recovery requires the updated host backend as well as the
-updated GUI; an older backend still exits on input initialization failure.
+updated GUI; a backend predating configuration-only recovery still exits on
+input initialization failure. If configuration-only mode is available but the
+permission guidance is missing, the installed host backend may predate that
+guidance even when the Flatpak is current. Update the host separately from an
+existing checkout of the official repository:
+
+```sh
+cd /path/to/topCEC
+git pull --ff-only
+bash packaging/install-user.sh
+systemctl --user restart topcec.service
+```
+
+Replace `/path/to/topCEC` with your actual checkout path. The installer preserves
+configuration and group membership; restarting loads the updated host code.
+Return to the GUI and use **Retry Connection**. Updating or rebuilding only the
+Flatpak does not update the files used by `topcec.service`. Clients without
+detailed host permission diagnostics provide generic input-access guidance
+instead of recommending an unverified group change.
 
 For connection problems on the host, inspect the user unit and its current-boot
 logs, then verify that its D-Bus name is owned:

@@ -159,11 +159,27 @@ class GuiBackend(QObject):
 
     @Property(str, notify=changed)
     def inputPermissionMessage(self):
-        return self._service_data.get('input_permission_help', {}).get('message', '')
+        help_data = self._service_data.get('input_permission_help')
+        if isinstance(help_data, dict) and help_data.get('message'):
+            return help_data['message']
+        reason = self._service_data.get('fail_safe_reason', '')
+        if (self._service_status == 'configuration-only'
+                and isinstance(reason, str) and reason.startswith('Cannot read input:')):
+            return (
+                'The host backend reported an input-access error but did not '
+                'provide detailed permission guidance. Check that the selected '
+                'device is correct and readable by the host user. Update the '
+                'host backend from the repository root with '
+                'bash packaging/install-user.sh, then restart topcec.service '
+                'to obtain host-verified guidance. Updating only the Flatpak '
+                'does not update the host backend. No input-group command can '
+                'be recommended without checking device ownership and membership.')
+        return ''
 
     @Property(str, notify=changed)
     def inputPermissionCommand(self):
-        return self._service_data.get('input_permission_help', {}).get('command', '')
+        help_data = self._service_data.get('input_permission_help')
+        return help_data.get('command', '') if isinstance(help_data, dict) else ''
 
     @Property(str, notify=changed)
     def diagnostics(self):

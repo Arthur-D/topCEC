@@ -27,6 +27,36 @@ from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    def test_legacy_backend_input_error_shows_guidance_without_unverified_command(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'configuration-only'
+        backend._service_data = {
+            'service': 'configuration-only',
+            'fail_safe_reason': "Cannot read input: [Errno 13] Permission denied: '/dev/input/event10'",
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        self.assertTrue(window.findChild(QObject, 'inputPermissionHelp').property('visible'))
+        self.assertIn('Updating only the Flatpak', backend.inputPermissionMessage)
+        self.assertIn('bash packaging/install-user.sh', backend.inputPermissionMessage)
+        self.assertEqual(backend.inputPermissionCommand, '')
+        self.assertFalse(window.findChild(QObject, 'copyInputPermissionCommand').property('visible'))
+        self.assertTrue(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
+        for missing_help in (None, {}):
+            backend._service_data['input_permission_help'] = missing_help
+            backend.changed.emit()
+            self.assertTrue(backend.inputPermissionMessage)
+            self.assertEqual(backend.inputPermissionCommand, '')
+        backend._service_data['fail_safe_reason'] = 'Waiting for Firefox snapshot'
+        backend.changed.emit()
+        self.assertFalse(window.findChild(QObject, 'inputPermissionHelp').property('visible'))
+        self.assertIsNotNone(app)
+        engine.deleteLater()
+
     def test_host_verified_input_permission_command_is_displayed_and_copied(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         self.addCleanup(app.clipboard().setText, app.clipboard().text())
