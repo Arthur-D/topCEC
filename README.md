@@ -363,6 +363,11 @@ Unsaved GUI edits are retained across connection loss and reconnection.
 
 ### Configured values and detected equipment
 
+Input checkbox changes save automatically and restart the host service. Rapid
+changes are queued until the service reconnects. Pending selections are retained
+locally across closing and reopening the GUI. Deselecting every input saves an
+empty list. Other configuration fields still use the Save button.
+
 The configured display, adapter and input paths are saved settings (or legacy
 defaults when no settings have been saved), **not evidence of detected hardware**.
 The host backend supplies the actual configuration selectors with detected

@@ -51,7 +51,7 @@ def validate_config(value):
     config['mapping_ttl_seconds'] = float(ttl)
     for key in ('devices', 'mute_labels'):
         values = config[key]
-        if (not isinstance(values, list) or not values
+        if (not isinstance(values, list) or (key == 'mute_labels' and not values)
                 or any(not isinstance(item, str) or not item.strip() for item in values)):
             raise ValueError(f'{key} must be a non-empty array of non-empty strings')
     for key in ('cec_enabled', 'kde_timeout', 'require_snapshot'):

@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from PySide6.QtCore import (
-    QObject, Property, QProcess, QStandardPaths, QUrl, Signal, Slot,
+    QObject, Property, QProcess, QSettings, QTimer, QStandardPaths, QUrl, Signal, Slot,
 )
 from PySide6.QtDBus import (
     QDBusConnection, QDBusInterface, QDBusMessage, QDBusPendingCallWatcher,
@@ -124,6 +124,13 @@ class GuiBackend(QObject):
         self._action_message = ''
         self._settings_in_flight = False
         self._settings_generation = 0
+        self._saving_inputs_only = False
+        self._input_preferences = QSettings(
+            str(self.config_path) + '.input-draft.ini', QSettings.Format.IniFormat)
+        self._input_save_timer = QTimer(self)
+        self._input_save_timer.setInterval(500)
+        self._input_save_timer.timeout.connect(self._save_pending_inputs)
+        self._input_save_timer.start()
         self._config_source = 'unknown' if self.dbus_only else 'defaults'
         self._simulation_mode = False
         self._service_data = {}
@@ -315,7 +322,25 @@ class GuiBackend(QObject):
 
     @Slot(result=str)
     def deviceList(self):
+        pending = self._input_preferences.value('pending')
+        if pending is not None:
+            return pending
         return '' if self._config_source == 'defaults' else '\n'.join(self.config['devices'])
+
+    @Slot(str)
+    def rememberInputDraft(self, devices):
+        self._input_preferences.setValue('pending', devices)
+        self._input_preferences.sync()
+        self._save_pending_inputs()
+
+    @Slot(result=bool)
+    def hasInputDraft(self):
+        return self._input_preferences.contains('pending')
+
+    def _save_pending_inputs(self):
+        if not self.hasInputDraft() or self._settings_in_flight or not self.backendAvailable:
+            return
+        self.applySettings({'devices': self.deviceList()}, inputs_only=True)
 
     @Slot(result=str)
     def muteLabelList(self):
@@ -700,16 +725,27 @@ class GuiBackend(QObject):
         self._config_source = 'saved'
         self._action_message = 'Settings saved; topcec.service restart queued.'
         self.changed.emit()
-        self.settingsSaved.emit()
+        if self._input_preferences.value('pending') == '\n'.join(saved['devices']):
+            self._input_preferences.remove('pending')
+            self._input_preferences.sync()
+        if not self.hasInputDraft():
+            if self._saving_inputs_only:
+                self.configurationChanged.emit()
+            else:
+                self.settingsSaved.emit()
         self.refresh()
 
     @Slot('QVariantMap')
-    def applySettings(self, values):
+    def applySettings(self, values, inputs_only=False):
         if self._settings_in_flight:
             return
         config_saved = False
+        self._saving_inputs_only = inputs_only
         try:
-            validated = config_from_settings(self.config, values)
+            validated = (validate_config({
+                'schema_version': SCHEMA_VERSION, **self.config,
+                'devices': values['devices'].splitlines(),
+            }) if inputs_only else config_from_settings(self.config, values))
             if self.dbus_only:
                 if not self.backendAvailable:
                     raise RuntimeError('topCEC host service is not available')
@@ -744,7 +780,13 @@ class GuiBackend(QObject):
                 if result.returncode:
                     raise RuntimeError(result.stderr.strip() or result.stdout.strip())
             self.config = validated
-            self.settingsSaved.emit()
+            if self._input_preferences.value('pending') == '\n'.join(validated['devices']):
+                self._input_preferences.remove('pending')
+                self._input_preferences.sync()
+            if inputs_only:
+                self.configurationChanged.emit()
+            else:
+                self.settingsSaved.emit()
             self._action_message = (
                 'Settings saved; topcec.service restart queued.')
         except (KeyError, OSError, TypeError, ValueError, RuntimeError,
