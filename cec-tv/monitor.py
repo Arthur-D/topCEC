@@ -24,7 +24,7 @@ from pathlib import Path
 from activity_policy import ActivityPolicy, DEFAULT_TIMEOUT
 from cec_power_state import CecPowerStateMachine
 from configuration import (
-    DEFAULT_CONFIG, default_config_path, load_config, merge_cli, save_config,
+    DEFAULT_CONFIG, SCHEMA_VERSION, default_config_path, load_config, merge_cli, save_config,
     validate_config,
 )
 from firefox_media import FirefoxWebExtensionProvider
@@ -840,7 +840,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     'queued: ' + str(error))
             return json.dumps({
                 'accepted': True,
-                'config': saved,
+                'config': {'schema_version': SCHEMA_VERSION, **saved},
             }, sort_keys=True)
 
         @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='s')
@@ -870,7 +870,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         ecodes, args.axis_deadzone_percent, args.rz_deadzone_percent)
 
     try:
-        for path in dict.fromkeys(args.device or DEFAULT_CONFIG['devices']):
+        for path in dict.fromkeys(DEFAULT_CONFIG['devices'] if args.device is None else args.device):
             device = InputDevice(path)
             try:
                 axes = activity_provider.seed(device)
@@ -1775,6 +1775,7 @@ def self_test():
                         result.receiver.ApplySettings(json.dumps(request)))
                 saved = json.loads(path.read_text(encoding='utf-8'))
                 self.assertTrue(response['accepted'])
+                self.assertEqual(response['config'], saved)
                 self.assertEqual(saved['target_output'], 'DP-1')
                 self.assertTrue(saved['require_snapshot'])
                 self.assertEqual(

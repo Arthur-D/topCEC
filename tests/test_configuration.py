@@ -123,7 +123,6 @@ class ConfigurationChecks(unittest.TestCase):
             {'schema_version': SCHEMA_VERSION, 'devices': ['/dev/input/event0', '']},
             {'schema_version': SCHEMA_VERSION, 'cec_enabled': 1},
             {'schema_version': SCHEMA_VERSION, 'axis_deadzone_percent': 26},
-            {'schema_version': SCHEMA_VERSION, 'devices': []},
         )
         for value in invalid:
             with self.subTest(value=value), self.assertRaises(ValueError):

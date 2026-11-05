@@ -77,7 +77,7 @@ Kirigami.ApplicationWindow {
         if (selected)
             paths.push(device.path)
         devicesField.text = paths.join("\n")
-        settingsDirty = true
+        topcec.rememberInputDraft(root.savedInputPaths())
     }
 
     component SelectableLabel: Controls.TextArea {
@@ -161,7 +161,16 @@ Kirigami.ApplicationWindow {
         property bool manualEntry: false
         property string prompt: "Choose a detected device"
         readonly property bool detected: equipment.some(item => item.path === editText)
-        readonly property bool acceptable: editText.trim().length > 0 && (manualEntry || detected)
+        property string configuredValue: ""
+        property string initialValue: ""
+        readonly property bool acceptable: (editText.trim().length > 0 && (manualEntry || detected))
+            || (!manualEntry && editText === initialValue && configuredValue.length > 0)
+        readonly property string valueToSave: editText.trim().length ? editText : configuredValue
+        function load(value, showConfigured) {
+            configuredValue = value
+            initialValue = showConfigured ? value : ""
+            synchronize(initialValue)
+        }
         editable: manualEntry
         displayText: currentIndex < 0 ? prompt : currentText
         textRole: "label"
@@ -196,8 +205,9 @@ Kirigami.ApplicationWindow {
     function loadSettings() {
         if (settingsDirty)
             return
-        outputField.synchronize(topcec.configurationSource === "defaults" ? "" : topcec.setting("target_output"))
-        adapterField.synchronize(topcec.configurationSource === "defaults" ? "" : topcec.setting("cec_port"))
+        let showConfigured = topcec.configurationSource !== "defaults"
+        outputField.load(topcec.setting("target_output"), showConfigured)
+        adapterField.load(topcec.setting("cec_port"), showConfigured)
         timeoutMode.currentIndex = topcec.usesKdeTimeout() ? 0
             : (topcec.setting("timeout_seconds") === null ? 2 : 1)
         timeoutMinutes.value = topcec.timeoutMinutes()
@@ -481,7 +491,7 @@ Kirigami.ApplicationWindow {
                     }
                     SelectableLabel {
                         Layout.fillWidth: true
-                        text: "Choose detected equipment below. Undetected saved values and drafts are retained in notices, not selected as available hardware. Nothing is selected automatically."
+                        text: "Choose detected equipment below. You can save input selections while keeping the current display and adapter settings, even when those devices are unavailable."
                     }
                     SelectableLabel {
                         Layout.fillWidth: true
@@ -625,7 +635,7 @@ Kirigami.ApplicationWindow {
                     }
                     SelectableLabel {
                         Layout.fillWidth: true
-                        text: "Select detected devices to monitor, then save below. Detected selections are saved using stable paths when available. Detection does not guarantee read access."
+                        text: "Input selections save automatically and restart the service. Stable device paths are used when available."
                     }
                     SelectableLabel {
                         objectName: "retainedInputs"
@@ -693,7 +703,7 @@ Kirigami.ApplicationWindow {
                         objectName: "equipmentSaveGuidance"
                         Layout.fillWidth: true
                         visible: !root.equipmentReady
-                        text: "Before saving, choose a detected display, adapter and at least one input. Remove unlisted input values or deliberately enable manual entry to keep them. Existing settings are not changed until you save."
+                        text: "Before saving, choose at least one input. Remove unlisted input values or enable manual entry to keep them. If you change the display or adapter, choose a detected device or enter its value manually."
                     }
                     CopyableButton {
                         objectName: "saveSettingsButton"
@@ -705,6 +715,8 @@ Kirigami.ApplicationWindow {
                                 return
                             let values = root.settingsValues()
                             root.submittedSettings = JSON.stringify(values)
+                            values.targetOutput = outputField.valueToSave
+                            values.adapter = adapterField.valueToSave
                             values.devices = root.savedInputPaths()
                             topcec.applySettings(values)
                         }
