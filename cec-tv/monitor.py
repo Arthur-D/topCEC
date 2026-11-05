@@ -89,8 +89,8 @@ def input_permission_help(error):
     session = (
         'Fully log out and log back in after changing membership so the desktop '
         'and user service inherit it. If the user manager persists across logout, '
-        'reboot. Retry Connection after signing back in, then save settings and '
-        'restart service to retry monitoring.')
+        'reboot. Retry Connection after signing back in, then save and apply '
+        'settings to retry monitoring.')
     if group.gr_gid in process_groups:
         result['message'] = (
             help_text + '\nThe backend already has the input group. Joining it '
@@ -170,6 +170,14 @@ class CecPower:
     def activity(self, wake_requested=False):
         if wake_requested or self.may_be_off:
             self.request('on')
+
+    def validate_port(self):
+        fd = os.open(self.port, os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY)
+        try:
+            if not stat.S_ISCHR(os.fstat(fd).st_mode):
+                raise OSError('CEC adapter must be a host character device: ' + self.port)
+        finally:
+            os.close(fd)
 
     def poll(self):
         timed_out = False
@@ -646,6 +654,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     devices = {}
     focus = None
     worker = None
+    worker_labels = None
     worker_started = next_scan = 0.0
     frames = []
     scan_stamp = None
@@ -672,8 +681,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'target_output': target_output,
         'timeout_seconds': getattr(args, 'timeout_seconds', int(DEFAULT_TIMEOUT)),
         'mapping_ttl_seconds': getattr(args, 'mapping_ttl', 15.0),
-        'devices': getattr(args, 'device', None) or DEFAULT_CONFIG['devices'],
-        'mute_labels': getattr(args, 'mute_label', None) or DEFAULT_CONFIG['mute_labels'],
+        'devices': DEFAULT_CONFIG['devices'] if args.device is None else args.device,
+        'mute_labels': DEFAULT_CONFIG['mute_labels'] if args.mute_label is None else args.mute_label,
         'cec_enabled': bool(args.cec),
         'cec_port': args.cec_port,
         'kde_timeout': bool(args.kde_timeout),
@@ -751,6 +760,138 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         elif message:
             log(message)
 
+    def power_status():
+        state_machine = getattr(power, 'state_machine', None)
+        state = getattr(state_machine, 'state', None)
+        power_state = getattr(state, 'value', 'unknown')
+        return {
+            'power_state': power_state if isinstance(power_state, str) else 'unknown',
+            'pending_action': power.pending if power else None,
+            'cec_fault': power.fault if power else None,
+        }
+
+    def apply_live_settings(config):
+        nonlocal selector, devices, activity_provider, runtime_config, startup_error
+        nonlocal power, kde_settings, target_output, worker, frames, scan_stamp, scan_error, next_scan
+        nonlocal previous_status, previous_playback
+        replacing_power = (config['cec_enabled'] != (power is not None)
+                           or (power is not None and config['cec_port'] != runtime_config['cec_port']))
+        if replacing_power and power is not None and (
+                power.process is not None or power.pending is not None or power.may_be_off):
+            raise RuntimeError(
+                'Cannot change or disable the CEC adapter during a power operation '
+                'or while TV wake recovery is required. Turn the TV on successfully, then retry.')
+        staged_selector = selectors.DefaultSelector()
+        staged_devices = {}
+        opened = []
+        staged_kde = kde_settings
+        staged_power = power
+        cleanup_errors = []
+
+        def retire(resource, description):
+            try:
+                resource.close()
+            except (OSError, subprocess.SubprocessError) as error:
+                message = description + ': ' + str(error)
+                cleanup_errors.append(message)
+                log('Resource cleanup failed: ' + message)
+
+        try:
+            staged_provider = activity_provider_factory(
+                ecodes, config['axis_deadzone_percent'], config['rz_deadzone_percent'])
+            reseed = any(config[key] != runtime_config[key] for key in (
+                'axis_deadzone_percent', 'rz_deadzone_percent'))
+            current = {state['identity']: state for state in devices.values()}
+            selected_identities = set()
+            selected_paths = []
+            for path in dict.fromkeys(config['devices']):
+                identity = str(Path(path).resolve())
+                if identity in selected_identities:
+                    continue
+                selected_identities.add(identity)
+                selected_paths.append(path)
+                state = current.get(identity)
+                if state is None:
+                    device = InputDevice(path)
+                    opened.append(device)
+                    state = {'path': path, 'identity': identity, 'device': device,
+                             'axes': staged_provider.seed(device), 'dropped': False}
+                elif reseed:
+                    state = {**state, 'axes': staged_provider.seed(state['device'])}
+                if state['path'] != path:
+                    state = {**state, 'path': path}
+                staged_selector.register(state['device'], selectors.EVENT_READ)
+                staged_devices[state['device'].fd] = state
+            if replacing_power:
+                staged_power = cec_backend_factory(config['cec_port']) if config['cec_enabled'] else None
+                if staged_power is not None:
+                    staged_power.validate_port()
+            if config['kde_timeout'] and kde_settings is None:
+                staged_kde = KdeTimeout()
+            elif not config['kde_timeout']:
+                staged_kde = None
+            config = {**config, 'devices': selected_paths}
+            saved = save_config(config_path, {'schema_version': 1, **config})
+        except Exception:
+            retire(staged_selector, 'Uncommitted input selector')
+            for device in opened:
+                retire(device, 'Uncommitted input device')
+            if staged_power is not None and staged_power is not power:
+                retire(staged_power, 'Uncommitted CEC adapter')
+            if staged_kde is not None and staged_kde is not kde_settings:
+                retire(staged_kde, 'Uncommitted KDE timeout reader')
+            raise
+
+        old_selector, old_devices = selector, devices
+        selector, devices, activity_provider = staged_selector, staged_devices, staged_provider
+        old_power, power = power, staged_power
+        old_config = runtime_config
+        runtime_config = saved
+        target_output = saved['target_output']
+        args.mute_label = saved['mute_labels']
+        args.require_snapshot = saved['require_snapshot']
+        mapping.ttl = saved['mapping_ttl_seconds']
+        old_kde, kde_settings = kde_settings, staged_kde
+        if old_kde is not None and old_kde is not kde_settings:
+            retire(old_kde, 'Old KDE timeout reader')
+        if saved['mute_labels'] != old_config['mute_labels'] or startup_error:
+            frames, scan_stamp = [], None
+            scan_error = 'Waiting for a scan with the updated mute-tab labels'
+            next_scan = 0
+        if saved['target_output'] != old_config['target_output']:
+            for state in devices.values():
+                for axis in state['axes'].values():
+                    axis.reset()
+            previous_playback = False
+        startup_error = None
+        previous_status = None
+        timer.set_timeout(saved['timeout_seconds'], time.monotonic())
+        if kde_settings is not None:
+            kde_settings.value = 'unread'
+            kde_settings.next_read = 0
+        if power is not None and power.pending == 'off':
+            power.pending = None
+            timer.cancel_standby(time.monotonic())
+        status_snapshot.update({
+            'service': 'running', 'cec_enabled': power is not None,
+            'target_output': target_output, 'adapter': saved['cec_port'] if power else None,
+            'fail_safe_reason': 'Settings applied; waiting for a fresh monitoring poll',
+            'scan_status': scan_error, 'input_permission_help': None,
+            'settings_error': None, 'pending_action': power.pending if power else None,
+            'cec_fault': power.fault if power else None,
+            'power_state': 'unknown' if replacing_power else status_snapshot['power_state'],
+        })
+        retire(old_selector, 'Old input selector')
+        if old_power is not None and old_power is not power:
+            retire(old_power, 'Old CEC adapter')
+        for fd, state in old_devices.items():
+            if fd not in devices:
+                retire(state['device'], 'Removed input device')
+        if cleanup_errors:
+            status_snapshot['settings_error'] = '; '.join(cleanup_errors)
+        log('Settings saved and applied live; service not restarted.')
+        return saved
+
     class Receiver(dbus.service.Object):
         @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='')
         def Report(self, message):
@@ -800,18 +941,12 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         def GetStatus(self):
             return json.dumps({
                 **status_snapshot, 'configuration_saved': config_path.is_file(),
+                'settings_apply': 'live', 'process_id': os.getpid(),
             }, sort_keys=True)
 
         @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
         def GetConfig(self):
-            if config_path.exists():
-                try:
-                    config = load_config(config_path)
-                except ValueError as error:
-                    raise dbus.DBusException(str(error))
-            else:
-                config = runtime_config
-            return json.dumps({'schema_version': 1, **config}, sort_keys=True)
+            return json.dumps({'schema_version': 1, **runtime_config}, sort_keys=True)
 
         @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
         def GetEquipment(self):
@@ -823,23 +958,17 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 config = validate_config(json.loads(str(serialized_config)))
                 if config.get('cec_enabled'):
                     config['require_snapshot'] = True
-                saved = save_config(
-                    config_path, {'schema_version': 1, **config})
-            except (ValueError, TypeError, OSError) as error:
-                raise dbus.DBusException('Could not save settings: ' + str(error))
-            try:
-                result = subprocess.run(
-                    ['/usr/bin/systemctl', '--user', 'restart', '--no-block',
-                     'topcec.service'],
-                    capture_output=True, text=True, timeout=10)
-                if result.returncode:
-                    raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-            except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+                saved = apply_live_settings(config)
+            except (ValueError, TypeError, OSError, RuntimeError) as error:
+                status_snapshot['settings_error'] = str(error)
+                if isinstance(error, OSError) and error.filename in config['devices']:
+                    status_snapshot['input_permission_help'] = input_permission_help(error)
+                log('Live settings rejected; previous configuration retained: ' + str(error))
                 raise dbus.DBusException(
-                    'Settings were saved, but the service restart could not be '
-                    'queued: ' + str(error))
+                    'Settings not applied; previous configuration retained: ' + str(error))
             return json.dumps({
                 'accepted': True,
+                'applied_live': True,
                 'config': {'schema_version': SCHEMA_VERSION, **saved},
             }, sort_keys=True)
 
@@ -878,13 +1007,16 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             except Exception:
                 device.close()
                 raise
-            devices[device.fd] = {'device': device, 'axes': axes, 'dropped': False}
+            devices[device.fd] = {'path': path, 'identity': str(Path(path).resolve()),
+                                  'device': device, 'axes': axes, 'dropped': False}
     except OSError as error:
         startup_error = 'Cannot read input: ' + str(error)
         log(startup_error + '; configuration-only mode. No CEC commands will be sent.')
         for state in devices.values():
             state['device'].close()
         devices.clear()
+        selector.close()
+        selector = selectors.DefaultSelector()
         status_snapshot.update({
             'service': 'configuration-only',
             'cec_enabled': False,
@@ -894,11 +1026,29 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         })
 
     loop = GLib.MainLoop()
-    runtime_failed = False
-
     def poll():
-        nonlocal worker, worker_started, next_scan, frames, scan_stamp, runtime_failed
+        nonlocal worker, worker_started, next_scan, frames, scan_stamp
+        nonlocal worker_labels
         nonlocal scan_error, previous_status, warning_reported, previous_playback
+        nonlocal startup_error, selector
+        if startup_error:
+            try:
+                if power is not None and (power.process is not None or power.pending == 'on'):
+                    power.poll()
+                if worker is not None and (
+                        worker.poll() is not None or time.monotonic() - worker_started >= SCAN_TIMEOUT):
+                    if worker.poll() is None:
+                        worker.kill()
+                    worker.communicate()
+                    worker = None
+                    next_scan = 0
+                status_snapshot.update(power_status())
+            except (OSError, subprocess.SubprocessError) as error:
+                message = 'Paused monitor recovery failed: ' + str(error)
+                if status_snapshot.get('settings_error') != message:
+                    log(message)
+                status_snapshot['settings_error'] = message
+            return True
         try:
             for key, _ in selector.select(timeout=0):
                 device = key.fileobj
@@ -921,7 +1071,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                                             pass
                                     except BlockingIOError:
                                         break
-                                state['axes'] = seed(device)
+                                state['axes'] = activity_provider.seed(device)
                                 state['dropped'] = False
                                 break
                             continue
@@ -936,18 +1086,19 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 if worker.poll() is not None:
                     output, errors = worker.communicate()
                     try:
-                        frames = media_provider.decode_scan(output, errors, worker.returncode)
-                        if errors.strip() and not warning_reported:
+                        if worker_labels == args.mute_label:
+                            frames = media_provider.decode_scan(output, errors, worker.returncode)
+                            scan_stamp = now
+                            scan_error = None
+                        if worker_labels == args.mute_label and errors.strip() and not warning_reported:
                             log('AT-SPI warning, but the scan returned readable '
                                 'Firefox frames. Warning shown only once:')
                             log(errors.strip()[:800])
                             warning_reported = True
-                        scan_stamp = now
-                        scan_error = None
                     except Exception as error:
                         scan_error = str(error)
                     worker = None
-                    next_scan = now + SCAN_INTERVAL
+                    next_scan = now + SCAN_INTERVAL if worker_labels == args.mute_label else now
                 elif now - worker_started >= SCAN_TIMEOUT:
                     worker.kill()
                     worker.communicate()
@@ -961,6 +1112,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 worker = subprocess.Popen(command, stdout=subprocess.PIPE,
                                           stderr=subprocess.PIPE, text=True)
                 worker_started = now
+                worker_labels = list(args.mute_label)
             reason = None
             audible = False
             native_audio_state = webextension_media.audio_state(
@@ -1030,26 +1182,31 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     power.request('off')
                 else:
                     log(message)
-            state_machine = getattr(power, 'state_machine', None)
-            state = getattr(state_machine, 'state', None)
-            power_state = getattr(state, 'value', 'unknown')
-            if not isinstance(power_state, str):
-                power_state = 'unknown'
             status_snapshot.update({
                 'service': 'running',
-                'power_state': power_state,
-                'pending_action': power.pending if power else None,
-                'cec_fault': power.fault if power else None,
+                **power_status(),
                 'fail_safe_reason': reason,
                 'playback_active': audible,
                 'scan_status': scan_error,
             })
         except Exception as error:
             # An input disconnect or callback failure must never become silence.
-            runtime_failed = True
             log('Monitor stopped fail-safe: ' + repr(error))
-            loop.quit()
-            return False
+            startup_error = 'Monitoring input failed: ' + str(error)
+            selector.close()
+            selector = selectors.DefaultSelector()
+            for state in devices.values():
+                state['device'].close()
+            devices.clear()
+            if power is not None and power.pending == 'off':
+                power.pending = None
+                timer.cancel_standby(time.monotonic())
+            status_snapshot.update({
+                'service': 'configuration-only', 'cec_enabled': False,
+                'fail_safe_reason': startup_error, 'scan_status': 'Monitoring paused',
+                'input_permission_help': input_permission_help(error) if isinstance(error, OSError) else None,
+            })
+            return True
         return True
 
     timeout_description = (
@@ -1058,14 +1215,14 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         f'{timer.timeout:g}-second inactivity timeout')
     if startup_error:
         log('Configuration remains available over D-Bus; save corrected settings '
-            'in the GUI to restart the service.')
+            'in the GUI to resume monitoring without a restart.')
     else:
         log(('LIVE CEC; ' if power else 'SIMULATION; ') + timeout_description + '.')
         if not power:
             log('No CEC commands will be sent. Press Ctrl+C to stop.')
         log('Requires an existing KWin bridge. Firefox must expose configured mute-tab labels for AT-SPI fallback.')
-        GLib.timeout_add(100, poll)
     try:
+        GLib.timeout_add(100, poll)
         GLib.timeout_add(500, poll_equipment)
         loop.run()
     except KeyboardInterrupt:
@@ -1087,10 +1244,10 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         del receiver, name
         if kde_settings:
             kde_settings.close()
-        if power and not startup_error:
+        if power and (not startup_error or power.process is not None or power.may_be_off):
             power.close()
         log('Monitor stopped.' if power else 'Simulation stopped. No CEC commands sent.')
-    return 2 if runtime_failed else 0
+    return 0
 
 
 def self_test():
@@ -1381,7 +1538,7 @@ def self_test():
             mapping = Mapping(15)
             diagnostics = MatchDiagnostics()
             update = Mock(wraps=diagnostics.update) if diagnostics_enabled else Mock(return_value=[])
-            power = Mock(fault=None, process=None, pending=None)
+            power = Mock(fault=None, process=None, pending=None, may_be_off=False)
 
             class Object:
                 def __init__(self, *args):
@@ -1427,9 +1584,12 @@ def self_test():
                     context.equipment_poll()
                     self.assertEqual(len(workers), worker_count)
                 if recovery_action:
+                    modules['evdev'].InputDevice.side_effect = None
                     recovery_action(context.receiver)
                 if input_error:
-                    self.assertIsNone(context.poll)
+                    self.assertIsNotNone(context.poll)
+                    if not recovery_action:
+                        self.assertTrue(context.poll())
                     return
                 for step in steps:
                     now, snapshot, scan, *optional = step
@@ -1501,6 +1661,10 @@ def self_test():
                                    config=str(config_path) if config_path else None)
             if input_error_after:
                 args.device = ['first-input', 'unreadable-input']
+            if config_path and config_path.exists():
+                stored = load_config(config_path)
+                args.device = stored['devices']
+                args.target = stored['target_output']
             with patch.dict(sys.modules, modules), \
                     patch.dict(globals(), {
                         'Timer': Mock(return_value=timer), 'CecPower': Mock(return_value=power),
@@ -1511,7 +1675,8 @@ def self_test():
                         'log': messages.append}), \
                     patch.object(diagnostics, 'update', update), \
                     patch.object(time, 'monotonic', lambda: clock.now), \
-                    patch.object(selectors, 'DefaultSelector', return_value=selector), \
+                    patch.object(selectors, 'DefaultSelector',
+                                 side_effect=[selector] + [Mock(select=Mock(return_value=[])) for _ in range(10)]), \
                     patch.object(subprocess, 'run', return_value=SimpleNamespace(
                         returncode=0, stdout='', stderr='')) as command_run, \
                     patch.object(subprocess, 'Popen', side_effect=start_worker):
@@ -1606,11 +1771,8 @@ def self_test():
                     result.power.request.assert_not_called()
                     result.power.activity.assert_not_called()
                     result.power.poll.assert_not_called()
-                    result.power.close.assert_not_called()
-                    result.command_run.assert_called_once_with(
-                        ['/usr/bin/systemctl', '--user', 'restart', '--no-block',
-                         'topcec.service'],
-                        capture_output=True, text=True, timeout=10)
+                    result.power.close.assert_called_once()
+                    result.command_run.assert_not_called()
                     self.assertEqual(
                         json.loads(path.read_text())['target_output'], 'DP-1')
                     restarted = self.run_monitor_steps(
@@ -1748,42 +1910,33 @@ def self_test():
             result.receiver.RequestPower('on')
             result.power.request.assert_called_once_with('on')
 
-        def test_dbus_config_api_validates_persists_and_requests_user_restart(self):
+        def test_dbus_config_api_validates_persists_and_applies_live(self):
             import tempfile
             from pathlib import Path
             from unittest.mock import patch
 
             with tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / 'config.json'
-                result = self.run_monitor_steps([(0, None, None)], config_path=path)
-                initial = json.loads(result.receiver.GetConfig())
-                self.assertEqual(initial['schema_version'], 1)
-                self.assertTrue(initial['cec_enabled'])
-                invalid = json.dumps({'schema_version': 2})
-                with self.assertRaisesRegex(RuntimeError, 'Unsupported configuration'):
-                    result.receiver.ApplySettings(invalid)
-                result.command_run.assert_not_called()
-                request = {
-                    'schema_version': 1,
-                    'target_output': 'DP-1',
-                    'cec_enabled': True,
-                    'require_snapshot': False,
-                }
-                with patch.object(subprocess, 'run', return_value=SimpleNamespace(
-                        returncode=0, stdout='', stderr='')) as command_run:
+                def apply(receiver):
+                    initial = json.loads(receiver.GetConfig())
+                    self.assertEqual(initial['schema_version'], 1)
+                    self.assertTrue(initial['cec_enabled'])
+                    with self.assertRaisesRegex(RuntimeError, 'Unsupported configuration'):
+                        receiver.ApplySettings(json.dumps({'schema_version': 2}))
+                    request = {**initial, 'target_output': 'DP-1', 'require_snapshot': False}
                     response = json.loads(
-                        result.receiver.ApplySettings(json.dumps(request)))
+                        receiver.ApplySettings(json.dumps(request)))
+                    self.assertTrue(response['accepted'])
+                    self.assertTrue(response['applied_live'])
+                    self.assertEqual(response['config'], json.loads(path.read_text()))
+                result = self.run_monitor_steps(
+                    [(0, None, None)], config_path=path, recovery_action=apply)
                 saved = json.loads(path.read_text(encoding='utf-8'))
-                self.assertTrue(response['accepted'])
-                self.assertEqual(response['config'], saved)
                 self.assertEqual(saved['target_output'], 'DP-1')
                 self.assertTrue(saved['require_snapshot'])
                 self.assertEqual(
                     json.loads(result.receiver.GetConfig())['target_output'], 'DP-1')
-                command_run.assert_called_once_with(
-                    ['/usr/bin/systemctl', '--user', 'restart', '--no-block',
-                     'topcec.service'],
-                    capture_output=True, text=True, timeout=10)
+                result.command_run.assert_not_called()
 
         def test_webextension_audio_uses_active_window_display_without_atspi(self):
             window_map = json.dumps([

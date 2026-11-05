@@ -27,6 +27,88 @@ from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    def test_native_and_flatpak_live_apply_use_host_without_systemctl(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        for dbus_only in (False, True):
+            with self.subTest(dbus_only=dbus_only), \
+                    patch.object(topcec_gui, 'available_outputs', return_value=[]), \
+                    patch.object(topcec_gui, 'available_adapters', return_value=[]):
+                backend = GuiBackend(dbus_only=dbus_only)
+                backend._connection_state = 'connected'
+                backend._service_status = 'running'
+                engine = QQmlApplicationEngine()
+                engine.rootContext().setContextProperty('topcec', backend)
+                engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+                window = engine.rootObjects()[0]
+                helper = window.findChild(QObject, 'inputSaveHelp')
+                self.assertIn('may restart', helper.property('text'))
+                backend._service_data['settings_apply'] = 'live'
+                backend.changed.emit()
+                self.assertTrue(backend.liveSettingsAvailable)
+                self.assertIn('without restarting', helper.property('text'))
+                window.setProperty('settingsDirty', True)
+                requests = []
+                interface = Mock(isValid=Mock(return_value=True))
+                with patch.object(backend, '_service_interface', return_value=interface), \
+                        patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                                     requests.append((method, callback, args))), \
+                        patch.object(backend, 'refresh'), \
+                        patch.object(topcec_gui.subprocess, 'run',
+                                     side_effect=AssertionError('No systemctl')), \
+                        patch.object(topcec_gui, 'save_config',
+                                     side_effect=AssertionError('Connected GUI must not write host config')):
+                    backend.applySettings(self.values)
+                    method, callback, args = requests.pop()
+                    self.assertEqual(method, 'ApplySettings')
+                    self.assertFalse(backend.settingsEnabled)
+                    callback(self.reply({'accepted': True, 'applied_live': True,
+                                         'config': json.loads(args[0])}))
+                self.assertIn('applied live', backend.actionMessage)
+                self.assertFalse(window.property('settingsDirty'))
+                self.assertTrue(backend.settingsEnabled)
+                self.assertEqual(window.findChild(QObject, 'saveSettingsButton').property('text'),
+                                 'Save and apply settings')
+                backend._connection_state = 'unavailable'
+                backend.changed.emit()
+                self.assertFalse(backend.liveSettingsAvailable)
+                self.assertIn('remain pending', helper.property('text'))
+                engine.deleteLater()
+
+    def test_rejected_live_input_draft_is_retained_without_repeated_open_attempts(self):
+        self.autosave_patch.stop()
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        requests = []
+        interface = Mock(isValid=Mock(return_value=True))
+        with patch.object(backend, '_service_interface', return_value=interface), \
+                patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                             requests.append((method, callback, args))), \
+                patch.object(backend, 'refresh'):
+            original = dict(backend.config)
+            backend.rememberInputDraft('/dev/input/denied')
+            _, callback, _ = requests.pop()
+            callback(topcec_gui.QDBusMessage.createError(
+                'net.local.CecActivity.Error', 'Settings not applied: Permission denied'))
+            self.assertIn('Permission denied', backend.actionMessage)
+            self.assertTrue(backend.hasInputDraft())
+            self.assertEqual(backend.config, original)
+            for _ in range(3):
+                backend._save_pending_inputs()
+            self.assertEqual(requests, [])
+            backend.rememberInputDraft('/dev/input/second')
+            _, callback, _ = requests.pop()
+            backend.rememberInputDraft('/dev/input/latest')
+            callback(topcec_gui.QDBusMessage.createError(
+                'net.local.CecActivity.Error', 'Second input failed'))
+            backend._save_pending_inputs()
+            _, callback, arguments = requests.pop()
+            saved = json.loads(arguments[0])
+            self.assertEqual(saved['devices'], ['/dev/input/latest'])
+            callback(self.reply({'accepted': True, 'applied_live': True, 'config': saved}))
+            self.assertFalse(backend.hasInputDraft())
+            self.assertIn('applied live', backend.actionMessage)
+
     def test_auto_input_save_queues_latest_selection_and_preserves_other_settings(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         self.autosave_patch.stop()
@@ -312,7 +394,7 @@ class GuiChecks(unittest.TestCase):
         window.show()
         app.processEvents()
         for name, role, label in (
-                ('saveSettingsButton', QAccessible.Role.Button, 'Save settings and restart service'),
+                ('saveSettingsButton', QAccessible.Role.Button, 'Save and apply settings'),
                 ('outputField', QAccessible.Role.ComboBox, 'Choose a detected display'),
                 ('manualInputs', QAccessible.Role.CheckBox, 'Use manually entered input paths'),
                 ('devicesField', QAccessible.Role.EditableText, 'Input device paths (one per line)')):
@@ -925,7 +1007,7 @@ class GuiChecks(unittest.TestCase):
         backend.changed.emit()
         app.processEvents()
         text, undefined = expression.evaluate()
-        self.assertIn('Save settings and restart service', text)
+        self.assertIn('Save and apply settings', text)
         self.assertNotIn('topCEC Backend Not Available', text)
         self.assertFalse(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
         for path in backend.config['devices']:
@@ -1346,7 +1428,7 @@ class GuiChecks(unittest.TestCase):
         config = validate_config(json.loads(serialized))
         self.assertEqual(config['target_output'], 'HDMI-A-2')
         self.assertTrue(config['require_snapshot'])
-        self.assertIn('restart queued', backend.actionMessage)
+        self.assertIn('older backend', backend.actionMessage)
         refresh.assert_called_once()
 
     def test_configuration_only_backend_enables_flatpak_settings_not_power(self):
@@ -1466,11 +1548,10 @@ class GuiChecks(unittest.TestCase):
             backend.applySettings(self.values)
             self.assertEqual(validate_config(json.loads(
                 path.read_text(encoding='utf-8')))['target_output'], 'HDMI-A-2')
-            run.assert_any_call(
-                ['systemctl', '--user', 'restart', 'topcec.service'],
-                capture_output=True, text=True, timeout=60)
+            run.assert_not_called()
+            self.assertIn('next service start', backend.actionMessage)
 
-    def test_native_gui_reports_saved_config_if_service_restart_fails(self):
+    def test_native_gui_offline_save_does_not_execute_systemctl(self):
         probes = []
 
         def make_process(parent):
@@ -1482,13 +1563,13 @@ class GuiChecks(unittest.TestCase):
                 patch.object(topcec_gui, 'available_outputs', return_value=[]), \
                 patch.object(topcec_gui, 'available_adapters', return_value=[]), \
                 patch.object(topcec_gui, 'QProcess', side_effect=make_process), \
-                patch.object(topcec_gui.subprocess, 'run', return_value=SimpleNamespace(
-                    returncode=1, stdout='', stderr='unit not installed')):
+                patch.object(topcec_gui.subprocess, 'run',
+                             side_effect=AssertionError('Must not restart a service')):
             path = Path(directory) / 'config.json'
             backend = GuiBackend(path, dbus_only=False)
             backend.applySettings(self.values)
             self.assertTrue(path.is_file())
-            self.assertIn('Settings saved, but service restart failed',
+            self.assertIn('next service start',
                           backend.actionMessage)
 
     def test_dbus_only_client_does_not_access_host_paths_or_commands(self):

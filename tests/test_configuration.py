@@ -229,7 +229,10 @@ class ConfigurationChecks(unittest.TestCase):
                 return '1'
             return ''
 
-        with patch('sys.argv', ['start.py']), \
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(start, 'default_config_path',
+                             return_value=Path(directory) / 'missing-config.json'), \
+                patch('sys.argv', ['start.py']), \
                 patch.object(start, 'qdbus', side_effect=qdbus), \
                 patch.object(start.os, 'execv') as execv:
             start.main()
