@@ -1,6 +1,7 @@
 """Staged tests for the user-level installer and uninstaller."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+import ast
 import json
 from pathlib import Path
 import shutil
@@ -12,6 +13,68 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class UserPackagingChecks(unittest.TestCase):
+    def test_copyable_host_update_command_is_guarded_and_fail_fast(self):
+        source = ast.parse((ROOT / 'cec-tv/topcec_gui.py').read_text())
+        command = next(ast.literal_eval(node.value) for node in source.body
+                       if isinstance(node, ast.Assign)
+                       and any(isinstance(target, ast.Name) and target.id == 'HOST_UPDATE_COMMAND'
+                               for target in node.targets))
+        self.assertEqual(len(command.splitlines()), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools = root / 'tools'
+            tools.mkdir()
+            (root / 'packaging').mkdir()
+            (root / 'packaging/install-user.sh').touch()
+            log = root / 'calls'
+            scripts = {
+                'git': (
+                    'case "$1" in\n'
+                    'rev-parse) printf "%s" "$PREFIX"; exit "$ROOT_EXIT" ;;\n'
+                    'branch) printf "%s" "$BRANCH" ;;\n'
+                    'remote) printf "%s" "$ORIGIN" ;;\n'
+                    'pull) echo "pull $*" >> "$CALL_LOG"; exit "$PULL_EXIT" ;;\n'
+                    '*) exit 99 ;; esac\n'),
+                'bash': 'echo "install $*" >> "$CALL_LOG"; exit "$INSTALL_EXIT"\n',
+                'systemctl': 'echo "restart $*" >> "$CALL_LOG"; exit "$RESTART_EXIT"\n',
+            }
+            for name, script in scripts.items():
+                path = tools / name
+                path.write_text('#!/bin/sh\n' + script)
+                path.chmod(0o755)
+            environment = {
+                **os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'],
+                'CALL_LOG': str(log), 'PREFIX': '', 'ROOT_EXIT': '0',
+                'BRANCH': 'main', 'ORIGIN': 'https://github.com/Arthur-D/topCEC.git',
+                'PULL_EXIT': '0', 'INSTALL_EXIT': '0', 'RESTART_EXIT': '0',
+            }
+            # Run the literal copied one-liner, with only its tools replaced.
+            for changed, expected in (
+                    ({}, ['pull', 'install', 'restart']),
+                    ({'PULL_EXIT': '1'}, ['pull']),
+                    ({'INSTALL_EXIT': '1'}, ['pull', 'install']),
+                    ({'RESTART_EXIT': '1'}, ['pull', 'install', 'restart']),
+                    ({'PREFIX': 'cec-tv/'}, []),
+                    ({'ROOT_EXIT': '1'}, []),
+                    ({'BRANCH': 'feature'}, []),
+                    ({'ORIGIN': 'https://github.com/someone/another.git'}, [])):
+                with self.subTest(changed=changed):
+                    if log.exists():
+                        log.unlink()
+                    # Preserve the copied shell quoting; only the outer bash is real.
+                    result = subprocess.run(
+                        ['/bin/sh', '-c', command.replace('bash -c ', '/usr/bin/bash -c ', 1)],
+                        cwd=root, env={**environment, **changed}, capture_output=True, text=True)
+                    self.assertEqual(result.returncode == 0, not changed)
+                    calls = log.read_text().splitlines() if log.exists() else []
+                    self.assertEqual([line.split()[0] for line in calls], expected)
+                    if calls:
+                        self.assertEqual(calls[0], 'pull pull --ff-only origin main')
+            fish = shutil.which('fish')
+            if fish:
+                subprocess.run([fish, '--no-execute', '-c', command], check=True,
+                               capture_output=True, text=True)
+
     def test_publication_metadata_and_scoped_build_ignores(self):
         ignores = (ROOT / '.gitignore').read_text().splitlines()
         for pattern in (
@@ -49,6 +112,13 @@ class UserPackagingChecks(unittest.TestCase):
             unrelated_unit = unit_dir / 'other.service'
             unrelated_unit.parent.mkdir(parents=True)
             unrelated_unit.write_text('[Unit]\n', encoding='utf-8')
+            tools = root / 'tools'
+            tools.mkdir()
+            systemctl = tools / 'systemctl'
+            systemctl.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TOPCEC_TEST_SYSTEMCTL_LOG"\n')
+            systemctl.chmod(0o755)
+            systemctl_log = root / 'systemctl.log'
 
             environment = {
                 **os.environ,
@@ -56,12 +126,17 @@ class UserPackagingChecks(unittest.TestCase):
                 'TOPCEC_HOME': str(home),
                 'XDG_CONFIG_HOME': str(config_home),
                 'XDG_DATA_HOME': str(data_home),
-                'TOPCEC_SKIP_SYSTEMCTL': '1',
+                'TOPCEC_SKIP_SYSTEMCTL': '0',
+                'PATH': str(tools) + os.pathsep + os.environ['PATH'],
+                'TOPCEC_TEST_SYSTEMCTL_LOG': str(systemctl_log),
                 'TOPCEC_FIREFOX_NATIVE_DIR': str(root / 'mozilla/native-messaging-hosts'),
             }
-            subprocess.run(
+            installation = subprocess.run(
                 ['bash', str(ROOT / 'packaging/install-user.sh')],
                 check=True, env=environment, capture_output=True, text=True)
+            self.assertIn('daemon-reload does not reload its code', installation.stdout)
+            self.assertIn('systemctl --user restart topcec.service', installation.stdout)
+            self.assertEqual(systemctl_log.read_text(), '--user daemon-reload\n')
 
             for name in ('monitor.py', 'start.py', 'topcec_gui.py',
                          'activity.js', 'firefox.js', 'topcec.qml', 'equipment.py'):
@@ -82,6 +157,7 @@ class UserPackagingChecks(unittest.TestCase):
             custom_file = app_dir / 'keep-user-file'
             custom_file.write_text('keep', encoding='utf-8')
 
+            environment['TOPCEC_SKIP_SYSTEMCTL'] = '1'
             subprocess.run(
                 ['bash', str(ROOT / 'packaging/uninstall-user.sh')],
                 check=True, env=environment, capture_output=True, text=True)

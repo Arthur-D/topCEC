@@ -361,6 +361,30 @@ message instead of presenting defaults as detected choices. Update the host
 using the checkout/install/restart commands below; updating Flatpak alone is
 insufficient. No additional Flatpak permissions are needed.
 
+`UnknownMethod` for `GetEquipment` means the backend currently owning the D-Bus
+name lacks that API. It does **not** establish that any hardware is absent.
+The GUI reports **availability unknown** until discovery completes successfully;
+failed/incomplete discovery also leaves undetected selections unknown. A
+successful inventory can instead mark an absent selection **unavailable / not
+detected**. In either case configured paths and unsaved edits remain intact.
+The GUI detects compatibility by missing D-Bus capabilities, not matching cosmetic
+version numbers. An `UnknownMethod` response to `GetStatus`, `GetConfig`,
+`GetEquipment`, `ApplySettings` or `RequestPower` identifies an unsupported
+capability when it is used. Transport timeouts, denied access and invalid replies
+are errors, not proof of an old version. No speculative power/settings calls
+are made to test capabilities.
+
+The compatibility message includes **Copy host update command**, visible even
+when missing status/configuration capabilities require the setup view. Open a
+host terminal in your existing official repository checkout's root on `main`
+before pasting it. This single fish-compatible command invokes Bash explicitly,
+checks the repository root, `main` branch and official GitHub origin, pulls
+`origin main` with `--ff-only`, installs, then restarts the backend. It stops on
+any failed check, update or installation, so stale code is not restarted after a
+failed update. It does not infer a source checkout from the installed backend
+directory, download/run an installer automatically, or execute through Flatpak.
+Noncanonical mirrors/forks must be updated manually using a trusted workflow.
+
 ### Input-device access
 
 The host user must have read access to the selected input devices. Changing a
@@ -402,14 +426,21 @@ guidance even when the Flatpak is current. Update the host separately from an
 existing checkout of the official repository:
 
 ```sh
-cd /path/to/topCEC
-git pull --ff-only
-bash packaging/install-user.sh
+cd /path/to/topCEC &&
+git pull --ff-only origin main &&
+bash packaging/install-user.sh &&
 systemctl --user restart topcec.service
 ```
 
 Replace `/path/to/topCEC` with your actual checkout path. The installer preserves
 configuration and group membership; restarting loads the updated host code.
+Use an up-to-date checkout of the official default branch (`main`).
+The installer runs `systemctl --user daemon-reload` to reload unit definitions,
+but deliberately does not start or restart the backend. Neither `daemon-reload`
+nor `enable --now` replaces an already-running process. An existing service
+requires the explicit `restart` above, even if the new files are already on disk.
+The `&&` chain stops on failure and works in fish or Bash in a host terminal; these are
+instructions for the user, never commands executed by Flatpak.
 Return to the GUI and use **Retry Connection**. Updating or rebuilding only the
 Flatpak does not update the files used by `topcec.service`. Clients without
 detailed host permission diagnostics provide generic input-access guidance
@@ -422,7 +453,12 @@ logs, then verify that its D-Bus name is owned:
 systemctl --user status topcec.service
 journalctl --user -u topcec.service -b
 busctl --user list | grep -F net.local.CecActivity
+systemctl --user show topcec.service --property=ExecStart --property=MainPID
+busctl --user introspect net.local.CecActivity /net/local/CecActivity net.local.CecActivity
 ```
+
+The live introspection output should include `GetEquipment` after updating and
+restarting the host. This checks the running backend, not merely files on disk.
 
 The Flatpak is granted only the `net.local.CecActivity` session-bus name. Its
 sandbox cannot inspect host systemd units or files, so an unavailable name is
