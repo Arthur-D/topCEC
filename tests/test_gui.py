@@ -27,6 +27,119 @@ from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    def test_absent_hardware_is_not_selected_and_save_requires_explicit_resolution(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'configuration-only'
+        original = dict(backend.config)
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        output = window.findChild(QObject, 'outputField')
+        adapter = window.findChild(QObject, 'adapterField')
+        inputs = window.findChild(QObject, 'inputChoices')
+        paths = window.findChild(QObject, 'devicesField')
+        save = window.findChild(QObject, 'saveSettingsButton')
+        engine.rootContext().setContextProperty('choices', inputs)
+
+        def inventory(outputs, adapters, devices, errors=None):
+            backend._equipment_reply(0, SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: [json.dumps({
+                    'outputs': outputs, 'adapters': adapters, 'inputs': devices,
+                    'errors': errors or [],
+                })]))
+            app.processEvents()
+
+        def select(field):
+            field.setProperty('currentIndex', 0)
+            engine.rootContext().setContextProperty('selection', field)
+            expression = QQmlExpression(engine.rootContext(), window, 'selection.activated(0)')
+            expression.evaluate()
+            self.assertFalse(expression.hasError(), expression.error().toString())
+
+        detected_outputs = [{'path': 'DP-NEW', 'label': 'Connected display'}]
+        detected_adapters = [{'path': '/dev/real-CEC', 'label': 'Connected adapter'}]
+        detected_inputs = [{'path': '/dev/input/by-id/real', 'label': 'Connected keyboard'}]
+        inventory(detected_outputs, detected_adapters, detected_inputs)
+        for field in (output, adapter):
+            self.assertEqual(field.property('count'), 1)
+            self.assertEqual(field.property('currentIndex'), -1)
+            self.assertFalse(field.property('editable'))
+            self.assertIn('Choose a detected', field.property('displayText'))
+        device = QQmlExpression(
+            engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
+        self.assertFalse(device.property('checked'))
+        self.assertEqual(paths.property('text'), '\n'.join(original['devices']))
+        self.assertFalse(save.property('enabled'))
+        with patch.object(backend, 'applySettings') as apply:
+            QMetaObject.invokeMethod(save, 'clicked')
+            apply.assert_not_called()
+        self.assertEqual(backend.config, original)
+
+        select(output)
+        select(adapter)
+        device.setProperty('checked', True)
+        QMetaObject.invokeMethod(device, 'toggled')
+        # Choosing actual hardware must not silently erase the retained inputs.
+        self.assertFalse(save.property('enabled'))
+        self.assertIn(original['devices'][0], paths.property('text'))
+        QMetaObject.invokeMethod(window.findChild(QObject, 'removeUndetectedInputs'), 'clicked')
+        self.assertEqual(paths.property('text'), '/dev/input/by-id/real')
+        self.assertTrue(save.property('enabled'))
+        with patch.object(backend, 'applySettings') as apply:
+            QMetaObject.invokeMethod(save, 'clicked')
+        values = apply.call_args.args[0]
+        self.assertEqual(values['targetOutput'], 'DP-NEW')
+        self.assertEqual(values['adapter'], '/dev/real-CEC')
+        self.assertEqual(values['devices'], '/dev/input/by-id/real')
+        self.assertEqual(backend.config, original)
+
+        inventory([], [], [])
+        self.assertEqual(output.property('currentIndex'), -1)
+        self.assertEqual(adapter.property('currentIndex'), -1)
+        self.assertEqual(inputs.property('count'), 0)
+        self.assertEqual(paths.property('text'), '/dev/input/by-id/real')
+        self.assertEqual(output.property('editText'), 'DP-NEW')
+        self.assertFalse(save.property('enabled'))
+        self.assertTrue(window.property('settingsDirty'))
+        inventory([{'path': 'OTHER-DISPLAY', 'label': 'Another display'}],
+                  [{'path': '/dev/other-CEC', 'label': 'Another adapter'}],
+                  [{'path': '/dev/input/other', 'label': 'Another keyboard'}])
+        self.assertEqual(output.property('currentIndex'), -1)
+        self.assertEqual(adapter.property('currentIndex'), -1)
+        self.assertEqual(output.property('editText'), 'DP-NEW')
+        other = QQmlExpression(
+            engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
+        self.assertFalse(other.property('checked'))
+        self.assertFalse(save.property('enabled'))
+        inventory([], [], [], ['Display discovery unavailable'])
+        self.assertIn('availability unknown',
+                      window.findChild(QObject, 'retainedOutput').property('text'))
+        self.assertFalse(save.property('enabled'))
+        inventory(detected_outputs, detected_adapters, detected_inputs)
+        self.assertEqual(output.property('currentIndex'), 0)
+        self.assertEqual(adapter.property('currentIndex'), 0)
+        self.assertTrue(save.property('enabled'))
+
+        # Manual drafts survive refresh but are never substituted for a detected
+        # selection unless the user explicitly enables manual entry.
+        output.setProperty('editText', 'MANUAL-DRAFT')
+        inventory([], [], [])
+        self.assertFalse(save.property('enabled'))
+        for name in ('manualOutput', 'manualAdapter', 'manualInputs'):
+            window.findChild(QObject, name).setProperty('checked', True)
+        self.assertTrue(output.property('editable'))
+        self.assertEqual(output.property('editText'), 'MANUAL-DRAFT')
+        self.assertEqual(adapter.property('editText'), '/dev/real-CEC')
+        self.assertTrue(save.property('enabled'))
+        self.assertEqual(backend.config, original)
+        window.findChild(QObject, 'manualOutput').setProperty('checked', False)
+        self.assertFalse(save.property('enabled'))
+        engine.deleteLater()
+
     def test_missing_required_capabilities_show_update_without_guessing_from_transport_errors(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         methods = ('GetStatus', 'GetConfig', 'GetEquipment', 'ApplySettings', 'RequestPower')
@@ -102,11 +215,12 @@ class GuiChecks(unittest.TestCase):
         self.assertNotIn('/usr/lib64', backend.equipmentMessage)
         self.assertIn('availability is unknown', backend.equipmentMessage)
         self.assertFalse(backend.equipmentAvailabilityKnown)
-        self.assertIn('availability unknown', output.property('currentText'))
-        self.assertIn('availability unknown', adapter.property('currentText'))
-        input_choice = QQmlExpression(
-            engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
-        self.assertIn('availability unknown', input_choice.property('text'))
+        self.assertEqual(output.property('currentIndex'), -1)
+        self.assertEqual(adapter.property('currentIndex'), -1)
+        self.assertIn('availability unknown', window.findChild(QObject, 'retainedOutput').property('text'))
+        self.assertIn('availability unknown', window.findChild(QObject, 'retainedAdapter').property('text'))
+        self.assertEqual(repeater.property('count'), 0)
+        self.assertIn('availability unknown', window.findChild(QObject, 'retainedInputs').property('text'))
         commands = window.findChild(QObject, 'equipmentRecoveryCommands')
         copy = window.findChild(QObject, 'copyEquipmentRecoveryCommands')
         self.assertTrue(commands.property('visible'))
@@ -114,6 +228,12 @@ class GuiChecks(unittest.TestCase):
         self.assertTrue(commands.property('readOnly'))
         self.assertEqual(commands.property('text'), topcec_gui.HOST_UPDATE_COMMAND)
         self.assertEqual(len(commands.property('text').splitlines()), 1)
+        instructions = window.findChild(QObject, 'hostUpdateInstructions').property('text')
+        self.assertIn('from any directory', instructions)
+        self.assertIn('full absolute path', instructions)
+        self.assertIn('without quotes', instructions)
+        self.assertIn('read -r -p', commands.property('text'))
+        self.assertNotIn('.copilot', commands.property('text'))
         with patch.object(topcec_gui.subprocess, 'run',
                           side_effect=AssertionError('copy must not execute commands')):
             QMetaObject.invokeMethod(copy, 'clicked')
@@ -129,16 +249,14 @@ class GuiChecks(unittest.TestCase):
 
         inventory([])
         self.assertTrue(backend.equipmentAvailabilityKnown)
-        self.assertIn('not detected', output.property('currentText'))
+        self.assertIn('not detected', window.findChild(QObject, 'retainedOutput').property('text'))
         self.assertFalse(copy.property('visible'))
         self.assertEqual(backend.equipmentRecoveryCommands, '')
         inventory(['Display discovery: compositor not responding'])
         self.assertFalse(backend.equipmentAvailabilityKnown)
-        self.assertIn('availability unknown', output.property('currentText'))
-        self.assertIn('availability unknown', adapter.property('currentText'))
-        input_choice = QQmlExpression(
-            engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
-        self.assertIn('availability unknown', input_choice.property('text'))
+        self.assertIn('availability unknown', window.findChild(QObject, 'retainedOutput').property('text'))
+        self.assertIn('availability unknown', window.findChild(QObject, 'retainedAdapter').property('text'))
+        self.assertEqual(repeater.property('count'), 0)
         self.assertIn('compositor not responding', backend.equipmentMessage)
         self.assertNotIn('An empty list means no equipment', backend.equipmentMessage)
         with patch.object(topcec_gui.sys, 'stderr') as diagnostic_log:
@@ -187,7 +305,8 @@ class GuiChecks(unittest.TestCase):
 
         update_inventory(inventory)
         for field in (configured_output, configured_adapter):
-            self.assertEqual(field.property('count'), 2)
+            self.assertEqual(field.property('count'), 1)
+            self.assertEqual(field.property('currentIndex'), -1)
         self.assertEqual(configured_output.property('editText'), original_config['target_output'])
         self.assertEqual(configured_inputs.property('text'), '\n'.join(original_config['devices']))
         self.assertEqual(backend.config, original_config)
@@ -207,8 +326,11 @@ class GuiChecks(unittest.TestCase):
         update_inventory({'outputs': [], 'adapters': [], 'inputs': [], 'errors': []})
         self.assertEqual(configured_output.property('editText'), 'DP-NEW')
         self.assertEqual(configured_adapter.property('editText'), '/dev/serial/by-id/real-CEC')
-        self.assertEqual(configured_output.property('count'), 1)
-        self.assertEqual(configured_output.property('currentText'), 'DP-NEW (unavailable / not detected)')
+        self.assertEqual(configured_output.property('count'), 0)
+        self.assertEqual(configured_output.property('currentIndex'), -1)
+        self.assertEqual(configured_output.property('displayText'), 'Choose a detected display')
+        self.assertIn('DP-NEW (unavailable / not detected)',
+                      window.findChild(QObject, 'retainedOutput').property('text'))
         self.assertIn('/dev/input/by-id/real-kbd', configured_inputs.property('text'))
         # Replug updates the same configuration controls without losing drafts.
         update_inventory(inventory)
@@ -276,23 +398,21 @@ class GuiChecks(unittest.TestCase):
                 app.processEvents()
                 self.assertFalse(backend._refresh_in_flight)
                 if detected['outputs']:
-                    self.assertEqual(output.property('count'), 2)
-                    self.assertEqual(adapter.property('count'), 2)
+                    self.assertEqual(output.property('count'), 1)
+                    self.assertEqual(adapter.property('count'), 1)
                     # The detected stable alias represents configured event10,
                     # not a duplicate or a false unavailable device.
-                    self.assertEqual(repeater.property('count'), 2)
+                    self.assertEqual(repeater.property('count'), 1)
                     existing = QQmlExpression(
                         engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
                     self.assertIsNotNone(existing)
                     self.assertTrue(existing.property('checked'))
                     self.assertNotIn('unavailable', existing.property('text'))
                 else:
-                    self.assertEqual(output.property('count'), 1)
-                    self.assertEqual(adapter.property('count'), 1)
-                    existing = QQmlExpression(
-                        engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
-                    self.assertTrue(existing.property('checked'))
-                    self.assertIn('unavailable', existing.property('text'))
+                    self.assertEqual(output.property('count'), 0)
+                    self.assertEqual(adapter.property('count'), 0)
+                    self.assertEqual(repeater.property('count'), 0)
+                    self.assertIn('unavailable', window.findChild(QObject, 'retainedInputs').property('text'))
                 self.assertEqual(devices.property('text'), '\n'.join(DEFAULT_CONFIG['devices']))
                 self.assertFalse(window.property('settingsDirty'))
             existing.setProperty('checked', False)
@@ -361,7 +481,7 @@ class GuiChecks(unittest.TestCase):
         self.assertIn('bash packaging/install-user.sh', backend.inputPermissionMessage)
         self.assertEqual(backend.inputPermissionCommand, '')
         self.assertFalse(window.findChild(QObject, 'copyInputPermissionCommand').property('visible'))
-        self.assertTrue(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
+        self.assertFalse(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
         for missing_help in (None, {}):
             backend._service_data['input_permission_help'] = missing_help
             backend.changed.emit()
@@ -959,7 +1079,7 @@ class GuiChecks(unittest.TestCase):
         connect(config)
         self.assertEqual(devices.property('text'), config['devices'][0])
         self.assertEqual(output.property('editText'), 'DP-1')
-        self.assertTrue(save.property('enabled'))
+        self.assertFalse(save.property('enabled'))
         self.assertTrue(save.property('visible'))
         window.findChild(QObject, 'manualInputs').setProperty('checked', True)
         QMetaObject.invokeMethod(devices, 'forceActiveFocus')
@@ -986,6 +1106,9 @@ class GuiChecks(unittest.TestCase):
             window = engine.rootObjects()[0]
             save = window.findChild(QObject, 'saveSettingsButton')
             self.assertTrue(save.property('visible'))
+            self.assertFalse(save.property('enabled'))
+            for name in ('manualOutput', 'manualAdapter', 'manualInputs'):
+                window.findChild(QObject, name).setProperty('checked', True)
             self.assertTrue(save.property('enabled'))
             devices = window.findChild(QObject, 'devicesField')
             self.assertTrue(devices.property('visible'))
