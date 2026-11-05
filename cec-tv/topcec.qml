@@ -3,20 +3,23 @@ import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
+import org.kde.kirigamiaddons.formcard as FormCard
 
 Kirigami.ApplicationWindow {
     id: root
     title: topcec.dbusOnly && !topcec.backendAvailable
         ? "topCEC Backend Not Available" : "topCEC"
-    minimumWidth: 620
-    minimumHeight: 680
+    minimumWidth: 380
+    minimumHeight: 500
+    readonly property int pageInset: width < 600
+        ? Kirigami.Units.largeSpacing : Kirigami.Units.gridUnit * 2
     property bool settingsDirty: false
     property string submittedSettings: ""
 
     function settingsValues() {
         return {
-            targetOutput: outputField.editText,
-            adapter: adapterField.editText,
+            targetOutput: outputField.valueToSave,
+            adapter: adapterField.valueToSave,
             timeoutMode: timeoutMode.currentIndex === 0 ? "kde"
                 : (timeoutMode.currentIndex === 1 ? "custom" : "never"),
             timeoutMinutes: timeoutMinutes.value,
@@ -119,6 +122,43 @@ Kirigami.ApplicationWindow {
         return parts.join("\n")
     }
 
+    readonly property string headerStatus: topcec.connectionState === "connecting"
+        ? "Connecting"
+        : (!topcec.backendAvailable
+            ? (topcec.dbusOnly
+                ? (root.width < 500 ? "Unavailable" : "Host unavailable")
+                : (root.width < 500 ? "Offline" : "Offline configuration"))
+            : (topcec.serviceStatus === "configuration-only"
+                ? (root.width < 500 ? "Config only" : "Configuration only")
+                : (topcec.serviceStatus === "running" ? "Monitoring" : topcec.serviceStatus)))
+    readonly property bool serviceHealthy: topcec.backendAvailable
+        && topcec.serviceStatus === "running"
+
+    function saveStatusText() {
+        if (!topcec.settingsEnabled)
+            return "Connect to the host service to save settings."
+        if (!root.equipmentReady)
+            return "Choose at least one input and resolve or deliberately retain unavailable equipment."
+        if (root.settingsDirty)
+            return "Unsaved changes. Save and apply settings to update monitoring."
+        if (topcec.actionMessage.length)
+            return topcec.actionMessage
+        if (!topcec.dbusOnly && !topcec.backendAvailable)
+            return "Settings are saved for the next explicit service start."
+        return "All changes saved."
+    }
+
+    function copyPageText() {
+        return root.title + "\nService: " + root.headerStatus + "\n"
+            + root.displayedText(pageContent) + "\n"
+            + saveSettingsButton.text + "\n" + settingsSaveStatus.text
+    }
+
+    function openDiagnostics() {
+        diagnosticsToggle.checked = true
+        recoveryScrollTimer.restart()
+    }
+
     Controls.Menu {
         id: captionMenu
         objectName: "captionCopyMenu"
@@ -154,18 +194,38 @@ Kirigami.ApplicationWindow {
         Keys.onMenuPressed: root.showCaption(editable ? editText : currentText)
     }
 
+    component CopyableFormComboBox: FormCard.FormComboBoxDelegate {
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onTapped: root.showCaption(parent.editable ? parent.editText : parent.currentText)
+        }
+        Keys.onMenuPressed: root.showCaption(editable ? editText : currentText)
+    }
+
+    component CopyableFormSpinBox: FormCard.FormSpinBoxDelegate {
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onTapped: root.showCaption(parent.textFromValue(parent.value, parent.locale))
+        }
+        Keys.onMenuPressed: root.showCaption(textFromValue(value, locale))
+    }
+
     component EquipmentSelector: CopyableComboBox {
         property var equipment: []
         property bool availabilityKnown: topcec.equipmentAvailabilityKnown
         property bool syncing: false
         property bool manualEntry: false
         property string prompt: "Choose a detected device"
-        readonly property bool detected: equipment.some(item => item.path === editText)
+        property string selectedValue: ""
+        readonly property bool detected: equipment.some(item => item.path === selectedValue
+            || (item.aliases || []).includes(selectedValue))
         property string configuredValue: ""
         property string initialValue: ""
-        readonly property bool acceptable: (editText.trim().length > 0 && (manualEntry || detected))
-            || (!manualEntry && editText === initialValue && configuredValue.length > 0)
-        readonly property string valueToSave: editText.trim().length ? editText : configuredValue
+        readonly property bool acceptable: manualEntry
+            ? editText.trim().length > 0
+            : (detected || (selectedValue === initialValue && configuredValue.length > 0))
+        readonly property string valueToSave: manualEntry
+            ? editText.trim() : (selectedValue.length ? selectedValue : configuredValue)
         function load(value, showConfigured) {
             configuredValue = value
             initialValue = showConfigured ? value : ""
@@ -176,30 +236,27 @@ Kirigami.ApplicationWindow {
         textRole: "label"
         function synchronize(value) {
             syncing = true
+            selectedValue = value
             model = root.equipmentChoices(equipment, [value])
             currentIndex = model.findIndex(item => item.path === value)
             editText = value
             syncing = false
         }
-        onEquipmentChanged: synchronize(editText)
-        onAvailabilityKnownChanged: synchronize(editText)
-        onManualEntryChanged: synchronize(editText)
+        onEquipmentChanged: synchronize(selectedValue)
+        onAvailabilityKnownChanged: synchronize(selectedValue)
+        onManualEntryChanged: synchronize(selectedValue)
         onActivated: {
+            selectedValue = model[index].path
             editText = model[index].path
             root.settingsDirty = true
         }
         onEditTextChanged: {
-            if (!syncing && activeFocus)
-                root.settingsDirty = true
+            if (!syncing && manualEntry) {
+                selectedValue = editText
+                if (activeFocus)
+                    root.settingsDirty = true
+            }
         }
-    }
-
-    component CopyableSpinBox: Controls.SpinBox {
-        TapHandler {
-            acceptedButtons: Qt.RightButton
-            onTapped: root.showCaption(parent.textFromValue(parent.value, parent.locale))
-        }
-        Keys.onMenuPressed: root.showCaption(textFromValue(value, locale))
     }
 
     function loadSettings() {
@@ -229,28 +286,178 @@ Kirigami.ApplicationWindow {
         }
     }
 
-    pageStack.initialPage: Kirigami.ScrollablePage {
-        title: "topCEC"
+    component SurfaceFrame: FormCard.FormCard {
+        padding: Kirigami.Units.smallSpacing
+    }
+
+    background: Rectangle {
+        color: Kirigami.Theme.viewBackgroundColor
+    }
+
+    header: Controls.ToolBar {
+        id: appHeader
+        contentItem: RowLayout {
+            spacing: Kirigami.Units.smallSpacing
+            Rectangle {
+                Layout.preferredWidth: 32
+                Layout.preferredHeight: 32
+                radius: 8
+                color: Kirigami.Theme.alternateBackgroundColor
+                Item {
+                    anchors.centerIn: parent
+                    width: 24
+                    height: 24
+                    Accessible.ignored: true
+                    Rectangle {
+                        x: 3
+                        y: 3
+                        width: 18
+                        height: 14
+                        radius: 2
+                        color: "transparent"
+                        border.width: 2
+                        border.color: Kirigami.Theme.highlightColor
+                    }
+                    Rectangle {
+                        x: 8
+                        y: 18
+                        width: 2
+                        height: 3
+                        color: Kirigami.Theme.highlightColor
+                    }
+                    Rectangle {
+                        x: 14
+                        y: 18
+                        width: 2
+                        height: 3
+                        color: Kirigami.Theme.highlightColor
+                    }
+                }
+            }
+            SelectableLabel {
+                text: "topCEC"
+                font.bold: true
+                Layout.preferredWidth: 66
+                Layout.preferredHeight: 26
+                wrapMode: TextEdit.NoWrap
+            }
+            Item { Layout.fillWidth: true }
+            Rectangle {
+                Layout.preferredWidth: Math.min(210, Math.max(116, root.headerStatus.length * 8 + 44))
+                Layout.preferredHeight: 30
+                radius: 16
+                color: Kirigami.Theme.alternateBackgroundColor
+                border.color: root.serviceHealthy
+                    ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    spacing: 7
+                    Rectangle {
+                        Layout.preferredWidth: 7
+                        Layout.preferredHeight: 7
+                        radius: 4
+                        color: root.serviceHealthy
+                            ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                    }
+                    SelectableLabel {
+                        objectName: "serviceStatusPill"
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 22
+                        font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                        horizontalAlignment: TextEdit.AlignHCenter
+                        verticalAlignment: TextEdit.AlignVCenter
+                        wrapMode: TextEdit.NoWrap
+                        text: root.headerStatus
+                        color: root.serviceHealthy
+                            ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                    }
+                }
+            }
+            CopyableButton {
+                objectName: "copyPageButton"
+                text: root.width < 500 ? "Copy" : "Copy page text"
+                Accessible.name: "Copy page text"
+                onClicked: topcec.copyText(root.copyPageText())
+            }
+        }
+        background: Rectangle {
+            color: Kirigami.Theme.backgroundColor
+            border.color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g,
+                                  Kirigami.Theme.textColor.b, 0.14)
+        }
+    }
+
+    footer: Controls.ToolBar {
+        id: applyFooter
+        objectName: "applyFooter"
+        contentItem: RowLayout {
+            spacing: Kirigami.Units.smallSpacing
+            CopyableButton {
+                id: saveSettingsButton
+                objectName: "saveSettingsButton"
+                text: "Save and apply"
+                Accessible.name: "Save and apply settings"
+                Layout.minimumWidth: 132
+                enabled: topcec.settingsEnabled && root.equipmentReady
+                onClicked: {
+                    if (!root.equipmentReady)
+                        return
+                    let values = root.settingsValues()
+                    root.submittedSettings = JSON.stringify(values)
+                    values.targetOutput = outputField.valueToSave
+                    values.adapter = adapterField.valueToSave
+                    values.devices = root.savedInputPaths()
+                    topcec.applySettings(values)
+                }
+            }
+            SelectableLabel {
+                id: settingsSaveStatus
+                objectName: "settingsSaveStatus"
+                Layout.fillWidth: true
+                Layout.preferredHeight: 34
+                verticalAlignment: TextEdit.AlignVCenter
+                text: root.saveStatusText()
+            }
+        }
+        background: Rectangle {
+            color: Kirigami.Theme.backgroundColor
+            border.color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g,
+                                  Kirigami.Theme.textColor.b, 0.14)
+        }
+    }
+
+    pageStack.initialPage: FormCard.FormCardPage {
+        id: settingsPage
+        objectName: "settingsPage"
+        title: ""
         actions: [
             Kirigami.Action {
                 objectName: "copyPageAction"
                 text: "Copy page text"
                 icon.name: "edit-copy"
-                onTriggered: topcec.copyText(root.title + "\n" + root.displayedText(pageContent))
+                visible: false
+                onTriggered: topcec.copyText(root.copyPageText())
             }
         ]
 
         ColumnLayout {
             id: pageContent
             objectName: "pageContent"
-            width: parent.width
+            Layout.fillWidth: true
+            Layout.leftMargin: root.pageInset
+            Layout.rightMargin: root.pageInset
             spacing: Kirigami.Units.largeSpacing
 
             ColumnLayout {
+                objectName: "hostCompatibilityPanel"
                 Layout.fillWidth: true
                 visible: topcec.equipmentRecoveryCommands.length > 0
+                spacing: Kirigami.Units.smallSpacing
                 SelectableLabel {
                     Layout.fillWidth: true
+                    font.bold: true
                     text: topcec.compatibilityMessage
                 }
                 SelectableLabel {
@@ -274,482 +481,714 @@ Kirigami.ApplicationWindow {
             }
 
             StackLayout {
+                id: mainViews
+                objectName: "mainViews"
                 Layout.fillWidth: true
                 currentIndex: topcec.dbusOnly && !topcec.backendAvailable ? 0 : 1
 
-                ColumnLayout {
-                    width: parent.width
-                    spacing: Kirigami.Units.largeSpacing
-
-                    SelectableHeading {
-                        objectName: "setupHeading"
-                        level: 2
-                        text: "topCEC Backend Not Available"
-                    }
-                    SelectableLabel {
-                        objectName: "setupExplanation"
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        text: "The topCEC background service is required to monitor displays and control HDMI-CEC devices. It runs outside the Flatpak sandbox."
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        font.bold: true
-                        text: topcec.connectionMessage
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        text: "To install the host service, open a terminal and clone the official repository. Then enter the topCEC repository root before running the installer."
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        text: "1. Clone the repository and enter it:"
-                    }
-                    Controls.TextArea {
-                        objectName: "setupCommands"
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 58
-                        readOnly: true
-                        selectByMouse: true
-                        wrapMode: TextEdit.NoWrap
-                        text: "git clone https://github.com/Arthur-D/topCEC.git\ncd topCEC"
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        text: "2. From the repository root, install the host service and GUI:"
-                    }
-                    Controls.TextArea {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 34
-                        readOnly: true
-                        selectByMouse: true
-                        wrapMode: TextEdit.NoWrap
-                        text: "bash packaging/install-user.sh"
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        text: "3. Before first start, configure the correct display, CEC adapter, and input devices with the native host GUI. Once the service is started, you can configure it here even if input initialization fails:"
-                    }
-                    Controls.TextArea {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 34
-                        readOnly: true
-                        selectByMouse: true
-                        wrapMode: TextEdit.NoWrap
-                        text: "~/.local/bin/topcec-gui"
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        text: "4. Enable and start the user service:"
-                    }
-                    Controls.TextArea {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 34
-                        readOnly: true
-                        selectByMouse: true
-                        wrapMode: TextEdit.NoWrap
-                        text: "systemctl --user enable --now topcec.service"
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        text: "5. Return here. The GUI reconnects when the service appears; you can also retry now."
-                    }
-                    RowLayout {
-                        CopyableButton {
-                            objectName: "retryConnectionButton"
-                            text: "Retry Connection"
-                            enabled: topcec.connectionState !== "connecting"
-                            onClicked: topcec.retryConnection()
+                SurfaceFrame {
+                    objectName: "setupPanel"
+                    Layout.fillWidth: true
+                    ColumnLayout {
+                        width: parent.width
+                        spacing: Kirigami.Units.mediumSpacing
+                        SelectableHeading {
+                            objectName: "setupHeading"
+                            level: 2
+                            Layout.fillWidth: true
+                            text: "topCEC Backend Not Available"
                         }
-                        CopyableButton {
-                            objectName: "repositoryButton"
-                            text: "Open topCEC repository"
-                            onClicked: Qt.openUrlExternally("https://github.com/Arthur-D/topCEC")
+                        SelectableLabel {
+                            objectName: "setupExplanation"
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: "The topCEC background service is required to monitor displays and control HDMI-CEC devices. It runs outside the Flatpak sandbox."
                         }
-                    }
-                    SelectableHeading {
-                        level: 3
-                        text: "Diagnostics"
-                    }
-                    Controls.TextArea {
-                        objectName: "setupDiagnostics"
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 78
-                        readOnly: true
-                        selectByMouse: true
-                        text: topcec.diagnostics
+                        SelectableLabel {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            font.bold: true
+                            text: topcec.connectionMessage
+                        }
+                        SelectableLabel {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: "To install the host service, open a terminal and clone the official repository. Then enter the topCEC repository root before running the installer."
+                        }
+                        SelectableLabel {
+                            Layout.fillWidth: true
+                            text: "1. Clone the repository and enter it:"
+                        }
+                        Controls.TextArea {
+                            objectName: "setupCommands"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 58
+                            readOnly: true
+                            selectByMouse: true
+                            wrapMode: TextEdit.NoWrap
+                            text: "git clone https://github.com/Arthur-D/topCEC.git\ncd topCEC"
+                        }
+                        SelectableLabel {
+                            Layout.fillWidth: true
+                            text: "2. From the repository root, install the host service and GUI:"
+                        }
+                        Controls.TextArea {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 34
+                            readOnly: true
+                            selectByMouse: true
+                            wrapMode: TextEdit.NoWrap
+                            text: "bash packaging/install-user.sh"
+                        }
+                        SelectableLabel {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: "3. Before first start, configure the correct display, CEC adapter, and input devices with the native host GUI. Once the service is started, you can configure it here even if input initialization fails:"
+                        }
+                        Controls.TextArea {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 34
+                            readOnly: true
+                            selectByMouse: true
+                            wrapMode: TextEdit.NoWrap
+                            text: "~/.local/bin/topcec-gui"
+                        }
+                        SelectableLabel {
+                            Layout.fillWidth: true
+                            text: "4. Enable and start the user service:"
+                        }
+                        Controls.TextArea {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 34
+                            readOnly: true
+                            selectByMouse: true
+                            wrapMode: TextEdit.NoWrap
+                            text: "systemctl --user enable --now topcec.service"
+                        }
+                        SelectableLabel {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: "5. Return here. The GUI reconnects when the service appears; you can also retry now."
+                        }
+                        RowLayout {
+                            CopyableButton {
+                                objectName: "retryConnectionButton"
+                                text: "Retry Connection"
+                                enabled: topcec.connectionState !== "connecting"
+                                onClicked: topcec.retryConnection()
+                            }
+                            CopyableButton {
+                                objectName: "repositoryButton"
+                                text: "Open topCEC repository"
+                                onClicked: Qt.openUrlExternally("https://github.com/Arthur-D/topCEC")
+                            }
+                        }
+                        SelectableHeading {
+                            level: 3
+                            text: "Diagnostics"
+                        }
+                        Controls.TextArea {
+                            objectName: "setupDiagnostics"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 78
+                            readOnly: true
+                            selectByMouse: true
+                            text: topcec.diagnostics
+                        }
                     }
                 }
 
                 ColumnLayout {
+                    objectName: "connectedOverview"
                     width: parent.width
-                    spacing: Kirigami.Units.largeSpacing
-
-                    SelectableHeading {
-                        level: 2
-                        text: "TV power control"
-                    }
-
-                    SelectableLabel {
-                        text: "Service: " + topcec.serviceStatus
-                        font.bold: true
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        text: topcec.connectionMessage
-                    }
-                    CopyableButton {
-                        text: "Retry Connection"
-                        visible: !topcec.backendAvailable
-                        enabled: topcec.connectionState !== "connecting"
-                        onClicked: topcec.retryConnection()
-                    }
-                    SelectableLabel {
-                        text: "TV power: " + topcec.powerState
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        text: topcec.standbyReason
-                    }
+                    spacing: Kirigami.Units.mediumSpacing
 
                     ColumnLayout {
-                        objectName: "inputPermissionHelp"
+                        objectName: "powerCard"
                         Layout.fillWidth: true
-                        visible: topcec.inputPermissionMessage.length > 0
-                        spacing: Kirigami.Units.smallSpacing
-
-                        SelectableHeading {
-                            level: 3
-                            text: "Input device access"
+                        spacing: 0
+                        SurfaceFrame {
+                            Layout.fillWidth: true
+                            RowLayout {
+                                width: parent.width
+                                spacing: Kirigami.Units.mediumSpacing
+                                Rectangle {
+                                    Layout.preferredWidth: 44
+                                    Layout.preferredHeight: 44
+                                    radius: 10
+                                    color: Kirigami.Theme.alternateBackgroundColor
+                                    Item {
+                                        anchors.centerIn: parent
+                                        width: 30
+                                        height: 30
+                                        Accessible.ignored: true
+                                        Rectangle {
+                                            x: 4
+                                            y: 4
+                                            width: 22
+                                            height: 16
+                                            radius: 2
+                                            color: "transparent"
+                                            border.width: 2
+                                            border.color: Kirigami.Theme.highlightColor
+                                        }
+                                        Rectangle {
+                                            x: 10
+                                            y: 21
+                                            width: 2
+                                            height: 4
+                                            color: Kirigami.Theme.highlightColor
+                                        }
+                                        Rectangle {
+                                            x: 18
+                                            y: 21
+                                            width: 2
+                                            height: 4
+                                            color: Kirigami.Theme.highlightColor
+                                        }
+                                    }
+                                }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 0
+                                    SelectableHeading {
+                                        objectName: "powerHeading"
+                                        level: 3
+                                        text: "TV power"
+                                    }
+                                    SelectableLabel {
+                                        objectName: "powerStateLabel"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 23
+                                        wrapMode: TextEdit.NoWrap
+                                        text: topcec.powerState
+                                    }
+                                }
+                                CopyableButton {
+                                    objectName: "tvOnButton"
+                                    text: "Turn on"
+                                    enabled: topcec.simulationMode
+                                        || (topcec.backendAvailable && topcec.serviceStatus === "running")
+                                    onClicked: topcec.requestPower("on")
+                                }
+                                CopyableButton {
+                                    objectName: "tvStandbyButton"
+                                    text: "Standby"
+                                    enabled: topcec.simulationMode
+                                        || (topcec.backendAvailable
+                                            && topcec.serviceStatus === "running"
+                                            && topcec.standbyReason === "Automatic standby allowed")
+                                    onClicked: topcec.requestPower("off")
+                                }
+                            }
                         }
                         SelectableLabel {
                             Layout.fillWidth: true
-                            text: topcec.inputPermissionMessage
+                            visible: topcec.actionMessage.length > 0
+                            text: topcec.actionMessage
                         }
-                        Controls.TextArea {
-                            objectName: "inputPermissionCommand"
+                    }
+
+                    SurfaceFrame {
+                        objectName: "warningBanner"
+                        Layout.fillWidth: true
+                        visible: topcec.backendAvailable
+                            && (topcec.serviceStatus === "configuration-only"
+                                || topcec.standbyReason.startsWith("Automatic standby blocked:"))
+                        RowLayout {
+                            width: parent.width
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                text: topcec.inputPermissionMessage.length > 0
+                                    ? "Input-device access is blocked. Review the host recovery steps."
+                                    : (topcec.serviceStatus === "configuration-only"
+                                        ? "Monitoring is not active. Review diagnostics and apply valid input devices."
+                                        : "Automatic standby is blocked until monitoring checks are healthy. Review diagnostics.")
+                            }
+                            CopyableButton {
+                                objectName: "viewRecoverySteps"
+                                text: "View recovery steps"
+                                onClicked: root.openDiagnostics()
+                            }
+                        }
+                    }
+
+                    GridLayout {
+                        id: configurationGroups
+                        objectName: "configurationGroups"
+                        Layout.fillWidth: true
+                        columns: width >= 660 ? 2 : 1
+                        columnSpacing: Kirigami.Units.mediumSpacing
+                        rowSpacing: Kirigami.Units.mediumSpacing
+
+                        ColumnLayout {
+                            objectName: "equipmentSection"
                             Layout.fillWidth: true
-                            visible: topcec.inputPermissionCommand.length > 0
-                            text: topcec.inputPermissionCommand
-                            readOnly: true
-                            selectByMouse: true
-                            wrapMode: TextEdit.Wrap
-                        }
-                        CopyableButton {
-                            objectName: "copyInputPermissionCommand"
-                            visible: topcec.inputPermissionCommand.length > 0
-                            text: "Copy input-group command"
-                            onClicked: topcec.copyText(topcec.inputPermissionCommand)
-                        }
-                    }
-
-                    RowLayout {
-                        CopyableButton {
-                            text: "TV on"
-                            enabled: topcec.simulationMode
-                                     || (topcec.backendAvailable
-                                         && topcec.serviceStatus === "running")
-                            onClicked: topcec.requestPower("on")
-                        }
-                        CopyableButton {
-                            text: "TV standby"
-                            enabled: topcec.simulationMode
-                                     || (topcec.backendAvailable
-                                         && topcec.serviceStatus === "running"
-                                         && topcec.standbyReason === "Automatic standby allowed")
-                            onClicked: topcec.requestPower("off")
-                        }
-                    }
-
-                    CopyableCheckBox {
-                        text: "Simulate manual actions"
-                        checked: topcec.simulationMode
-                        onToggled: topcec.setSimulationMode(checked)
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        wrapMode: Text.Wrap
-                        text: topcec.actionMessage
-                    }
-
-                    Kirigami.Separator {
-                        Layout.fillWidth: true
-                    }
-
-                    SelectableHeading {
-                        level: 3
-                        text: "Configuration"
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        text: "Choose detected equipment below. You can save input selections while keeping the current display and adapter settings, even when those devices are unavailable."
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        text: topcec.equipmentMessage
-                    }
-                    SelectableLabel {
-                        Layout.fillWidth: true
-                        visible: topcec.configurationSource === "defaults"
-                        text: "No saved host configuration. Legacy hardware defaults are not selected; choose the devices you want to monitor, then save."
-                    }
-
-                    SelectableLabel { text: "TV display (KWin output name)" }
-                    EquipmentSelector {
-                        id: outputField
-                        objectName: "outputField"
-                        Layout.fillWidth: true
-                        equipment: topcec.detectedOutputs
-                        manualEntry: manualOutput.checked
-                        prompt: "Choose a detected display"
-                    }
-                    SelectableLabel {
-                        objectName: "retainedOutput"
-                        Layout.fillWidth: true
-                        visible: !outputField.detected && outputField.editText.length > 0
-                        text: "Retained display value: " + root.retainedValue(outputField.editText)
-                    }
-                    CopyableCheckBox {
-                        id: manualOutput
-                        objectName: "manualOutput"
-                        text: "Use a manually entered display name"
-                        onToggled: root.settingsDirty = true
-                    }
-
-                    SelectableLabel { text: "CEC adapter" }
-                    EquipmentSelector {
-                        id: adapterField
-                        objectName: "adapterField"
-                        Layout.fillWidth: true
-                        equipment: topcec.detectedAdapters
-                        manualEntry: manualAdapter.checked
-                        prompt: "Choose a detected CEC adapter"
-                    }
-                    SelectableLabel {
-                        objectName: "retainedAdapter"
-                        Layout.fillWidth: true
-                        visible: !adapterField.detected && adapterField.editText.length > 0
-                        text: "Retained adapter value: " + root.retainedValue(adapterField.editText)
-                    }
-                    CopyableCheckBox {
-                        id: manualAdapter
-                        objectName: "manualAdapter"
-                        text: "Use a manually entered adapter path"
-                        onToggled: root.settingsDirty = true
-                    }
-
-                    SelectableLabel { text: "Inactivity timeout" }
-                    CopyableComboBox {
-                        id: timeoutMode
-                        Layout.fillWidth: true
-                        model: ["KDE-managed", "Custom (minutes)", "Disabled"]
-                        onActivated: root.settingsDirty = true
-                    }
-                    CopyableSpinBox {
-                        id: timeoutMinutes
-                        from: 1
-                        to: 1440
-                        onValueModified: root.settingsDirty = true
-                        enabled: timeoutMode.currentIndex === 1
-                    }
-
-                    SelectableLabel { text: "Input devices" }
-                    SelectableLabel {
-                        objectName: "selectedInputSummary"
-                        Layout.fillWidth: true
-                        text: root.inputPaths().length + " selected"
-                            + (root.unresolvedInputs().length ? " (" + root.unresolvedInputs().length + " unlisted)" : "")
-                            + (root.inputPaths().length ? ":\n" + root.selectedInputLabels().slice(0, 3).join("\n") : ". Choose devices to monitor.")
-                            + (root.inputPaths().length > 3 ? "\nAnd " + (root.inputPaths().length - 3) + " more." : "")
-                    }
-                    RowLayout {
-                        CopyableButton {
-                            id: inputChooserToggle
-                            objectName: "inputChooserToggle"
-                            checkable: true
-                            text: checked ? "Hide input devices"
-                                : "Choose input devices (" + topcec.detectedInputs.length + " detected)"
-                            Accessible.description: checked ? "Input device checklist expanded" : "Input device checklist collapsed"
-                        }
-                        CopyableButton {
-                            objectName: "copySelectedInputs"
-                            text: "Copy selected paths"
-                            enabled: root.inputPaths().length > 0
-                            onClicked: topcec.copyText(root.inputPaths().join("\n"))
-                        }
-                    }
-                    Controls.ScrollView {
-                        id: inputChooserScroll
-                        objectName: "inputChooserScroll"
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Math.min(inputChoiceList.implicitHeight, Kirigami.Units.gridUnit * 10)
-                        Layout.minimumHeight: 0
-                        Layout.maximumHeight: Layout.preferredHeight
-                        visible: inputChooserToggle.checked
-                        clip: true
-                        contentWidth: availableWidth
-                        Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
-                        Controls.ScrollBar.vertical.policy: contentHeight > availableHeight
-                            ? Controls.ScrollBar.AlwaysOn : Controls.ScrollBar.AlwaysOff
-                        Flickable {
-                            id: inputFlickable
-                            contentWidth: width
-                            contentHeight: inputChoiceList.height
-                            boundsBehavior: Flickable.StopAtBounds
-                            ColumnLayout {
-                                id: inputChoiceList
-                                width: inputFlickable.width
-                                Repeater {
-                                    id: inputChoices
-                                    objectName: "inputChoices"
-                                    model: topcec.detectedInputs
-                                    delegate: CopyableCheckBox {
-                                        required property var modelData
-                                        objectName: "inputChoice:" + modelData.path
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: configurationGroups.columns === 2
+                                ? (pageContent.width - configurationGroups.columnSpacing) / 2
+                                : pageContent.width
+                            Layout.maximumWidth: Layout.preferredWidth
+                            spacing: Kirigami.Units.smallSpacing
+                            FormCard.FormHeader {
+                                objectName: "equipmentHeader"
+                                title: "Equipment"
+                            }
+                            SurfaceFrame {
+                                objectName: "equipmentFormCard"
+                                Layout.fillWidth: true
+                                ColumnLayout {
+                                    width: parent.width
+                                    spacing: Kirigami.Units.smallSpacing
+                                    RowLayout {
                                         Layout.fillWidth: true
-                                        text: modelData.label
-                                        checked: root.inputPaths().some(path => path === modelData.path || (modelData.aliases || []).includes(path))
-                                        onToggled: root.setInputDeviceSelected(modelData, checked)
-                                        onActiveFocusChanged: {
-                                            if (activeFocus) {
-                                                let top = y
-                                                if (top < inputFlickable.contentY)
-                                                    inputFlickable.contentY = top
-                                                else if (top + height > inputFlickable.contentY + inputFlickable.height)
-                                                    inputFlickable.contentY = top + height - inputFlickable.height
+                                        spacing: Kirigami.Units.smallSpacing
+                                        SelectableLabel {
+                                            Layout.preferredWidth: pageContent.width < 500 ? 102 : 170
+                                            Layout.preferredHeight: 34
+                                            verticalAlignment: TextEdit.AlignVCenter
+                                            text: "TV display"
+                                        }
+                                        EquipmentSelector {
+                                            id: outputField
+                                            objectName: "outputField"
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 120
+                                            equipment: topcec.detectedOutputs
+                                            manualEntry: manualOutput.checked
+                                            prompt: "Choose a detected display"
+                                        }
+                                    }
+                                    SelectableLabel {
+                                        objectName: "retainedOutput"
+                                        Layout.fillWidth: true
+                                        visible: !outputField.detected && outputField.valueToSave.length > 0
+                                        text: "Saved display: " + root.retainedValue(outputField.valueToSave)
+                                    }
+                                    CopyableCheckBox {
+                                        id: manualOutput
+                                        objectName: "manualOutput"
+                                        text: "Enter display name manually"
+                                        onToggled: root.settingsDirty = true
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: Kirigami.Units.smallSpacing
+                                        SelectableLabel {
+                                            Layout.preferredWidth: pageContent.width < 500 ? 102 : 170
+                                            Layout.preferredHeight: 34
+                                            verticalAlignment: TextEdit.AlignVCenter
+                                            text: "CEC adapter"
+                                        }
+                                        EquipmentSelector {
+                                            id: adapterField
+                                            objectName: "adapterField"
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 120
+                                            equipment: topcec.detectedAdapters
+                                            manualEntry: manualAdapter.checked
+                                            prompt: "Choose a detected CEC adapter"
+                                        }
+                                    }
+                                    SelectableLabel {
+                                        objectName: "retainedAdapter"
+                                        Layout.fillWidth: true
+                                        visible: !adapterField.detected && adapterField.valueToSave.length > 0
+                                        text: "Saved adapter: " + root.retainedValue(adapterField.valueToSave)
+                                    }
+                                    CopyableCheckBox {
+                                        id: manualAdapter
+                                        objectName: "manualAdapter"
+                                        text: "Enter adapter path manually"
+                                        onToggled: root.settingsDirty = true
+                                    }
+                                }
+                            }
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                visible: topcec.configurationSource === "defaults"
+                                text: "No saved host configuration. Legacy hardware defaults are not selected."
+                            }
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                text: topcec.equipmentMessage
+                            }
+                        }
+
+                        ColumnLayout {
+                            objectName: "standbySection"
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: configurationGroups.columns === 2
+                                ? (pageContent.width - configurationGroups.columnSpacing) / 2
+                                : pageContent.width
+                            Layout.maximumWidth: Layout.preferredWidth
+                            spacing: Kirigami.Units.smallSpacing
+                            FormCard.FormHeader {
+                                objectName: "standbyHeader"
+                                title: "Automatic standby"
+                            }
+                            SurfaceFrame {
+                                objectName: "standbyFormCard"
+                                Layout.fillWidth: true
+                                ColumnLayout {
+                                    width: parent.width
+                                    spacing: Kirigami.Units.smallSpacing
+                                    CopyableFormComboBox {
+                                        id: timeoutMode
+                                        objectName: "timeoutMode"
+                                        text: "Idle timeout"
+                                        Layout.fillWidth: true
+                                        model: ["KDE-managed", "Custom (minutes)", "Disabled"]
+                                        onActivated: root.settingsDirty = true
+                                    }
+                                    CopyableFormSpinBox {
+                                        id: timeoutMinutes
+                                        objectName: "timeoutMinutes"
+                                        label: "Minutes"
+                                        Layout.fillWidth: true
+                                        visible: timeoutMode.currentIndex === 1
+                                        from: 1
+                                        to: 1440
+                                        onValueModified: root.settingsDirty = true
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: Kirigami.Units.smallSpacing
+                                        CopyableButton {
+                                            id: inputChooserToggle
+                                            objectName: "inputChooserToggle"
+                                            checkable: true
+                                            text: checked ? "Hide input devices" : "Input devices"
+                                            Accessible.description: checked
+                                                ? "Input device checklist expanded"
+                                                : "Input device checklist collapsed"
+                                        }
+                                        SelectableLabel {
+                                            objectName: "inputSelectedCount"
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 26
+                                            verticalAlignment: TextEdit.AlignVCenter
+                                            horizontalAlignment: TextEdit.AlignRight
+                                            text: root.inputPaths().length + " selected"
+                                        }
+                                        CopyableButton {
+                                            objectName: "copySelectedInputs"
+                                            text: "Copy paths"
+                                            enabled: root.inputPaths().length > 0
+                                            onClicked: topcec.copyText(root.inputPaths().join("\n"))
+                                        }
+                                    }
+                                    SelectableLabel {
+                                        objectName: "selectedInputSummary"
+                                        Layout.fillWidth: true
+                                        visible: root.inputPaths().length > 0
+                                        text: root.inputPaths().length + " selected"
+                                            + (root.unresolvedInputs().length
+                                                ? " (" + root.unresolvedInputs().length + " unlisted)" : "")
+                                            + ": " + root.selectedInputLabels().slice(0, 2).join(", ")
+                                            + (root.inputPaths().length > 3
+                                                ? " and " + (root.inputPaths().length - 3) + " more" : "")
+                                    }
+                                    Controls.ScrollView {
+                                        id: inputChooserScroll
+                                        objectName: "inputChooserScroll"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: Math.min(inputChoiceList.implicitHeight, Kirigami.Units.gridUnit * 10)
+                                        Layout.minimumHeight: 0
+                                        Layout.maximumHeight: Layout.preferredHeight
+                                        visible: inputChooserToggle.checked
+                                        clip: true
+                                        contentWidth: availableWidth
+                                        Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
+                                        Controls.ScrollBar.vertical.policy: contentHeight > availableHeight
+                                            ? Controls.ScrollBar.AlwaysOn : Controls.ScrollBar.AlwaysOff
+                                        Flickable {
+                                            id: inputFlickable
+                                            contentWidth: width
+                                            contentHeight: inputChoiceList.height
+                                            boundsBehavior: Flickable.StopAtBounds
+                                            ColumnLayout {
+                                                id: inputChoiceList
+                                                width: inputFlickable.width
+                                                Repeater {
+                                                    id: inputChoices
+                                                    objectName: "inputChoices"
+                                                    model: topcec.detectedInputs
+                                                    delegate: CopyableCheckBox {
+                                                        required property var modelData
+                                                        objectName: "inputChoice:" + modelData.path
+                                                        Layout.fillWidth: true
+                                                        text: modelData.label
+                                                        checked: root.inputPaths().some(path => path === modelData.path || (modelData.aliases || []).includes(path))
+                                                        onToggled: root.setInputDeviceSelected(modelData, checked)
+                                                        onActiveFocusChanged: {
+                                                            if (activeFocus) {
+                                                                let top = y
+                                                                if (top < inputFlickable.contentY)
+                                                                    inputFlickable.contentY = top
+                                                                else if (top + height > inputFlickable.contentY + inputFlickable.height)
+                                                                    inputFlickable.contentY = top + height - inputFlickable.height
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
+                                    SelectableLabel {
+                                        objectName: "inputSaveHelp"
+                                        Layout.fillWidth: true
+                                        visible: inputChooserToggle.checked
+                                        text: !topcec.backendAvailable
+                                            ? (topcec.dbusOnly
+                                                ? "Input selections remain pending until the host backend connects. Stable device paths are used when available."
+                                                : "Input selections remain pending until the backend connects or you save offline. Stable device paths are used when available.")
+                                            : topcec.liveSettingsAvailable
+                                                ? "Input selections save and apply automatically without restarting the service. Stable device paths are used when available."
+                                                : "Input selections save automatically, but this backend may restart the service. Update the host backend for live settings."
+                                    }
+                                    SelectableLabel {
+                                        objectName: "retainedInputs"
+                                        Layout.fillWidth: true
+                                        visible: inputChooserToggle.checked && root.unresolvedInputs().length > 0
+                                        text: "Retained input values (not selected as detected devices):\n"
+                                            + root.unresolvedInputs().map(path => root.retainedValue(path)).join("\n")
+                                    }
+                                    CopyableButton {
+                                        objectName: "removeUndetectedInputs"
+                                        text: "Remove unlisted input values"
+                                        visible: inputChooserToggle.checked && root.unresolvedInputs().length > 0
+                                        onClicked: {
+                                            devicesField.text = root.inputPaths().filter(path => root.inputDetected(path)).join("\n")
+                                            root.settingsDirty = true
+                                        }
+                                    }
+                                    CopyableCheckBox {
+                                        id: manualInputs
+                                        objectName: "manualInputs"
+                                        visible: inputChooserToggle.checked
+                                        text: "Enter input paths manually"
+                                        onToggled: root.settingsDirty = true
+                                    }
+                                    Controls.TextArea {
+                                        id: devicesField
+                                        objectName: "devicesField"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 72
+                                        visible: manualInputs.checked
+                                        Accessible.name: "Input device paths (one per line)"
+                                        selectByMouse: true
+                                        onTextChanged: {
+                                            if (activeFocus) root.settingsDirty = true
+                                        }
+                                        wrapMode: TextEdit.NoWrap
+                                    }
+                                    SelectableLabel {
+                                        Layout.fillWidth: true
+                                        visible: root.inputPaths().length === 0
+                                        text: "No input devices selected. Choose detected devices or enter paths manually."
+                                    }
+                                }
+                            }
+                            SelectableLabel {
+                                objectName: "equipmentSaveGuidance"
+                                Layout.fillWidth: true
+                                visible: !root.equipmentReady
+                                text: "Choose at least one input. Remove unlisted inputs or enable manual entry to keep them. Changed display or adapter values must be detected or deliberately entered."
+                            }
+                        }
+                    }
+
+                    FormCard.FormHeader {
+                        objectName: "advancedHeader"
+                        title: "Advanced"
+                        trailing: CopyableButton {
+                            id: advancedToggle
+                            objectName: "advancedToggle"
+                            checkable: true
+                            text: checked ? "Hide" : "Show"
+                            Accessible.name: "Advanced settings"
+                            Accessible.description: checked
+                                ? "Advanced settings expanded" : "Advanced settings collapsed"
+                        }
+                    }
+                    SurfaceFrame {
+                        objectName: "advancedPanel"
+                        Layout.fillWidth: true
+                        visible: advancedToggle.checked
+                        ColumnLayout {
+                            width: parent.width
+                            CopyableCheckBox {
+                                objectName: "simulateManualActions"
+                                text: "Simulate manual actions"
+                                checked: topcec.simulationMode
+                                onToggled: topcec.setSimulationMode(checked)
+                            }
+                            CopyableFormSpinBox {
+                                id: deadzoneField
+                                objectName: "deadzoneField"
+                                label: "Axis deadzone (%)"
+                                Layout.fillWidth: true
+                                from: 1
+                                to: 25
+                                onValueModified: root.settingsDirty = true
+                            }
+                            CopyableFormSpinBox {
+                                id: rzDeadzoneField
+                                objectName: "rzDeadzoneField"
+                                label: "ABS_RZ deadzone (%)"
+                                Layout.fillWidth: true
+                                from: 1
+                                to: 25
+                                onValueModified: root.settingsDirty = true
+                            }
+                            SelectableLabel {
+                                text: "Firefox mute-tab labels (one per line)"
+                            }
+                            Controls.TextArea {
+                                id: labelsField
+                                objectName: "labelsField"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 56
+                                Accessible.name: "Firefox mute-tab labels (one per line)"
+                                selectByMouse: true
+                                onTextChanged: {
+                                    if (activeFocus) root.settingsDirty = true
                                 }
                             }
                         }
                     }
-                    SelectableLabel {
-                        objectName: "inputSaveHelp"
-                        Layout.fillWidth: true
-                        text: !topcec.backendAvailable
-                            ? (topcec.dbusOnly
-                                ? "Input selections remain pending until the host backend connects. Stable device paths are used when available."
-                                : "Input selections remain pending until the backend connects or you save offline. Stable device paths are used when available.")
-                            : topcec.liveSettingsAvailable
-                                ? "Input selections save and apply automatically without restarting the service. Stable device paths are used when available."
-                                : "Input selections save automatically, but this backend may restart the service. Update the host backend for live settings."
-                    }
-                    SelectableLabel {
-                        objectName: "retainedInputs"
-                        Layout.fillWidth: true
-                        visible: root.unresolvedInputs().length > 0
-                        text: "Retained input values (not selected as detected devices):\n"
-                            + root.unresolvedInputs().map(path => root.retainedValue(path)).join("\n")
-                    }
-                    CopyableButton {
-                        objectName: "removeUndetectedInputs"
-                        text: "Remove unlisted input values"
-                        visible: root.unresolvedInputs().length > 0
-                        onClicked: {
-                            devicesField.text = root.inputPaths().filter(path => root.inputDetected(path)).join("\n")
-                            root.settingsDirty = true
+
+                    FormCard.FormHeader {
+                        objectName: "diagnosticsHeader"
+                        title: "Diagnostics"
+                        trailing: CopyableButton {
+                            id: diagnosticsToggle
+                            objectName: "diagnosticsToggle"
+                            checkable: true
+                            text: checked ? "Hide" : "Show"
+                            Accessible.name: "Service diagnostics"
+                            Accessible.description: checked
+                                ? "Service diagnostics expanded" : "Service diagnostics collapsed"
                         }
                     }
-                    CopyableCheckBox {
-                        id: manualInputs
-                        objectName: "manualInputs"
-                        text: "Use manually entered input paths"
-                        onToggled: root.settingsDirty = true
-                    }
-                    Controls.TextArea {
-                        id: devicesField
-                        objectName: "devicesField"
+                    SurfaceFrame {
+                        id: diagnosticsPanel
+                        objectName: "diagnosticsPanel"
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 72
-                        visible: manualInputs.checked
-                        Accessible.name: "Input device paths (one per line)"
-                        selectByMouse: true
-                        onTextChanged: {
-                            if (activeFocus) root.settingsDirty = true
+                        visible: diagnosticsToggle.checked
+                        ColumnLayout {
+                            width: parent.width
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                text: "Service: " + topcec.serviceStatus
+                            }
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                text: topcec.connectionMessage
+                            }
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                text: "TV power: " + topcec.powerState
+                            }
+                            SelectableLabel {
+                                objectName: "standbyDiagnostics"
+                                Layout.fillWidth: true
+                                text: topcec.standbyReason
+                            }
+                            SelectableLabel {
+                                objectName: "actionDiagnostics"
+                                Layout.fillWidth: true
+                                visible: topcec.actionMessage.length > 0
+                                text: topcec.actionMessage
+                            }
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                text: topcec.equipmentMessage
+                            }
+                            ColumnLayout {
+                                objectName: "inputPermissionHelp"
+                                Layout.fillWidth: true
+                                visible: topcec.inputPermissionMessage.length > 0
+                                spacing: Kirigami.Units.smallSpacing
+                                SelectableHeading {
+                                    level: 3
+                                    text: "Input device access"
+                                }
+                                SelectableLabel {
+                                    Layout.fillWidth: true
+                                    text: topcec.inputPermissionMessage
+                                }
+                                Controls.TextArea {
+                                    objectName: "inputPermissionCommand"
+                                    Layout.fillWidth: true
+                                    visible: topcec.inputPermissionCommand.length > 0
+                                    text: topcec.inputPermissionCommand
+                                    readOnly: true
+                                    selectByMouse: true
+                                    wrapMode: TextEdit.Wrap
+                                }
+                                CopyableButton {
+                                    objectName: "copyInputPermissionCommand"
+                                    visible: topcec.inputPermissionCommand.length > 0
+                                    text: "Copy input-group command"
+                                    onClicked: topcec.copyText(topcec.inputPermissionCommand)
+                                }
+                            }
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                visible: topcec.equipmentRecoveryCommands.length > 0
+                                text: topcec.compatibilityMessage
+                            }
+                            SelectableLabel {
+                                objectName: "diagnosticsHostUpdateInstructions"
+                                Layout.fillWidth: true
+                                visible: topcec.equipmentRecoveryCommands.length > 0
+                                text: "Run the copied update command in a host terminal from any directory, then restart the service."
+                            }
+                            Controls.TextArea {
+                                objectName: "diagnosticsEquipmentRecoveryCommands"
+                                Layout.fillWidth: true
+                                visible: topcec.equipmentRecoveryCommands.length > 0
+                                readOnly: true
+                                selectByMouse: true
+                                wrapMode: TextEdit.WrapAnywhere
+                                text: topcec.equipmentRecoveryCommands
+                            }
+                            CopyableButton {
+                                objectName: "copyDiagnosticsEquipmentRecovery"
+                                visible: topcec.equipmentRecoveryCommands.length > 0
+                                text: "Copy host update command"
+                                onClicked: topcec.copyText(topcec.equipmentRecoveryCommands)
+                            }
+                            Controls.TextArea {
+                                objectName: "backendDiagnostics"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 110
+                                readOnly: true
+                                selectByMouse: true
+                                text: topcec.diagnostics
+                            }
                         }
-                        wrapMode: TextEdit.NoWrap
-                    }
-
-                    SelectableLabel { text: "Firefox mute-tab labels (one per line)" }
-                    Controls.TextArea {
-                        id: labelsField
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 56
-                        selectByMouse: true
-                        onTextChanged: {
-                            if (activeFocus) root.settingsDirty = true
-                        }
-                    }
-
-                    SelectableLabel { text: "Axis deadzone (%)" }
-                    CopyableSpinBox {
-                        id: deadzoneField
-                        from: 1
-                        to: 25
-                        onValueModified: root.settingsDirty = true
-                    }
-                    SelectableLabel { text: "ABS_RZ deadzone (%)" }
-                    CopyableSpinBox {
-                        id: rzDeadzoneField
-                        from: 1
-                        to: 25
-                        onValueModified: root.settingsDirty = true
-                    }
-
-                    SelectableLabel {
-                        objectName: "equipmentSaveGuidance"
-                        Layout.fillWidth: true
-                        visible: !root.equipmentReady
-                        text: "Before saving, choose at least one input. Remove unlisted input values or enable manual entry to keep them. If you change the display or adapter, choose a detected device or enter its value manually."
-                    }
-                    CopyableButton {
-                        objectName: "saveSettingsButton"
-                        text: "Save and apply settings"
-                        Layout.fillWidth: true
-                        enabled: topcec.settingsEnabled && root.equipmentReady
-                        onClicked: {
-                            if (!root.equipmentReady)
-                                return
-                            let values = root.settingsValues()
-                            root.submittedSettings = JSON.stringify(values)
-                            values.targetOutput = outputField.valueToSave
-                            values.adapter = adapterField.valueToSave
-                            values.devices = root.savedInputPaths()
-                            topcec.applySettings(values)
-                        }
-                    }
-                    SelectableLabel {
-                        objectName: "settingsSaveStatus"
-                        Layout.fillWidth: true
-                        text: root.settingsDirty
-                            ? "Unsaved changes. Save and apply settings to update monitoring without a restart."
-                            : "No unsaved changes."
-                    }
-
-                    SelectableHeading {
-                        level: 3
-                        text: "Diagnostics"
-                    }
-                    Controls.TextArea {
-                        objectName: "backendDiagnostics"
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 110
-                        readOnly: true
-                        selectByMouse: true
-                        text: topcec.diagnostics
                     }
                 }
             }
+        }
+    }
+
+    Timer {
+        id: recoveryScrollTimer
+        interval: 30
+        repeat: false
+        onTriggered: {
+            let flickable = settingsPage.flickable
+            if (!flickable || !diagnosticsPanel.visible)
+                return
+            let bottom = diagnosticsPanel.mapToItem(
+                flickable.contentItem, 0, 0).y + diagnosticsPanel.height
+            flickable.contentY = Math.max(0, Math.min(
+                bottom - flickable.height, flickable.contentHeight - flickable.height))
         }
     }
 
