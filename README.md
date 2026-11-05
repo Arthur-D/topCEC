@@ -329,13 +329,23 @@ The configured display, adapter and input paths are saved settings (or legacy
 defaults when no settings have been saved), **not evidence of detected hardware**.
 The host backend supplies the actual configuration selectors with detected
 equipment, including in configuration-only mode. Choose your display and CEC
-adapter from those selectors, and check the input devices to monitor. Unplugged
-choices disappear unless currently selected; selected saved/default or unsaved
-values remain explicitly labelled **unavailable / not detected**, never shown as
-available hardware. Uncheck an unwanted input to remove it. Manual output names
-and adapter paths can still be entered; **Edit input paths manually** exposes
-the input-path editor for unusual devices or an older backend. Native offline
-configuration retains that editor. Nothing is selected or saved automatically.
+adapter from those selectors, and check the detected input devices to monitor.
+Undetected saved/default hardware and drafts are **not preselected** in those
+controls: display/adapter selectors show **Choose a detected…**, and absent
+inputs have no checked device row. Retained values appear separately in notices
+as **unavailable / not detected**, or **availability unknown** if discovery failed.
+They are not erased or saved automatically, and the first detected device is
+never selected as a substitute.
+
+**Save settings and restart service** is blocked until display, adapter and at
+least one input are resolved. Choose detected hardware and use **Remove unlisted
+input values** to explicitly discard retained inputs, or deliberately enable the
+manual display/adapter/input options to inspect, edit and keep undetected values.
+The same deliberate manual path supports native offline configuration and older
+backends. A hot-unplug clears the detected selection/checkmark and blocks Save
+without losing intent; replugging the same device restores that intent, never
+substituting another device. Changing unrelated settings cannot silently reapply
+hidden defaults or clear untouched equipment configuration.
 
 Discovery runs outside Flatpak in a bounded background helper approximately every
 10 seconds after the previous scan completes (each scan has an 8-second limit).
@@ -364,9 +374,10 @@ insufficient. No additional Flatpak permissions are needed.
 `UnknownMethod` for `GetEquipment` means the backend currently owning the D-Bus
 name lacks that API. It does **not** establish that any hardware is absent.
 The GUI reports **availability unknown** until discovery completes successfully;
-failed/incomplete discovery also leaves undetected selections unknown. A
-successful inventory can instead mark an absent selection **unavailable / not
-detected**. In either case configured paths and unsaved edits remain intact.
+failed/incomplete discovery also leaves undetected values unknown. A
+successful inventory can instead mark a retained absent value **unavailable / not
+detected** in its notice, not as selected hardware. In either case configured
+paths and unsaved edits remain intact.
 The GUI detects compatibility by missing D-Bus capabilities, not matching cosmetic
 version numbers. An `UnknownMethod` response to `GetStatus`, `GetConfig`,
 `GetEquipment`, `ApplySettings` or `RequestPower` identifies an unsupported
@@ -376,13 +387,19 @@ are made to test capabilities.
 
 The compatibility message includes **Copy host update command**, visible even
 when missing status/configuration capabilities require the setup view. Open a
-host terminal in your existing official repository checkout's root on `main`
-before pasting it. This single fish-compatible command invokes Bash explicitly,
-checks the repository root, `main` branch and official GitHub origin, pulls
+host terminal **from any directory** and paste it. The command asks for the full
+absolute path to your existing official repository checkout's root on `main`.
+Paste that path without shell quotes, even when it contains spaces; use the full
+path rather than `~`. No location is assumed or searched, and no new checkout is
+created if the original was moved or deleted. Supply its current path instead.
+This single fish-compatible command invokes Bash explicitly, changes into the
+quoted path, checks the repository root, `main` branch and official GitHub origin, pulls
 `origin main` with `--ff-only`, installs, then restarts the backend. It stops on
 any failed check, update or installation, so stale code is not restarted after a
 failed update. It does not infer a source checkout from the installed backend
-directory, download/run an installer automatically, or execute through Flatpak.
+directory, record or assume a private checkout location, download/run an installer
+automatically, or execute through Flatpak. Cancelling the prompt, an empty or
+relative path, a missing directory, or an invalid checkout stops before updating.
 Noncanonical mirrors/forks must be updated manually using a trusted workflow.
 
 ### Input-device access

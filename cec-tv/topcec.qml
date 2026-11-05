@@ -19,13 +19,24 @@ Kirigami.ApplicationWindow {
             for (let path of configured.length ? configured : [item.path])
                 choices.push({path: path, label: path === item.path ? item.label : item.label + " (configured as " + path + ")", available: true})
         }
-        for (let value of values) {
-            if (value.length && !choices.some(item => item.path === value))
-                choices.push({path: value, label: value + (topcec.equipmentAvailabilityKnown
-                    ? " (unavailable / not detected)" : " (availability unknown)"), available: false})
-        }
         return choices
     }
+
+    function inputDetected(path) {
+        return topcec.detectedInputs.some(item => item.path === path || (item.aliases || []).includes(path))
+    }
+
+    function unresolvedInputs() {
+        return inputPaths().filter(path => !inputDetected(path))
+    }
+
+    function retainedValue(value) {
+        return value + (topcec.equipmentAvailabilityKnown
+            ? " (unavailable / not detected)" : " (availability unknown)")
+    }
+
+    readonly property bool equipmentReady: outputField.acceptable && adapterField.acceptable
+        && inputPaths().length > 0 && (manualInputs.checked || unresolvedInputs().length === 0)
 
     function inputPaths() {
         return devicesField.text.split("\n").map(path => path.trim()).filter(path => path.length)
@@ -117,7 +128,12 @@ Kirigami.ApplicationWindow {
         property var equipment: []
         property bool availabilityKnown: topcec.equipmentAvailabilityKnown
         property bool syncing: false
-        editable: true
+        property bool manualEntry: false
+        property string prompt: "Choose a detected device"
+        readonly property bool detected: equipment.some(item => item.path === editText)
+        readonly property bool acceptable: editText.trim().length > 0 && (manualEntry || detected)
+        editable: manualEntry
+        displayText: currentIndex < 0 ? prompt : currentText
         textRole: "label"
         function synchronize(value) {
             syncing = true
@@ -128,6 +144,7 @@ Kirigami.ApplicationWindow {
         }
         onEquipmentChanged: synchronize(editText)
         onAvailabilityKnownChanged: synchronize(editText)
+        onManualEntryChanged: synchronize(editText)
         onActivated: {
             editText = model[index].path
             root.settingsDirty = true
@@ -195,8 +212,9 @@ Kirigami.ApplicationWindow {
                     text: topcec.compatibilityMessage
                 }
                 SelectableLabel {
+                    objectName: "hostUpdateInstructions"
                     Layout.fillWidth: true
-                    text: "Open a host terminal in your existing official topCEC checkout's repository root on main, then run this command. It stops if the directory, branch or origin is wrong, or if updating or installing fails. Your settings are preserved; the service restarts after installation."
+                    text: "Run this command in a host terminal from any directory. When prompted, paste the full absolute path to your existing official topCEC checkout on main, without quotes (spaces are supported). It verifies that checkout and stops on update or install failure. Your settings are preserved; the service restarts after installation."
                 }
                 Controls.TextArea {
                     objectName: "equipmentRecoveryCommands"
@@ -431,7 +449,7 @@ Kirigami.ApplicationWindow {
                     }
                     SelectableLabel {
                         Layout.fillWidth: true
-                        text: "Choose your equipment below. Existing selections are retained until you change them; nothing is selected automatically."
+                        text: "Choose detected equipment below. Undetected saved values and drafts are retained in notices, not selected as available hardware. Nothing is selected automatically."
                     }
                     SelectableLabel {
                         Layout.fillWidth: true
@@ -444,13 +462,20 @@ Kirigami.ApplicationWindow {
                         objectName: "outputField"
                         Layout.fillWidth: true
                         equipment: topcec.detectedOutputs
+                        manualEntry: manualOutput.checked
+                        prompt: "Choose a detected display"
                     }
                     SelectableLabel {
+                        objectName: "retainedOutput"
                         Layout.fillWidth: true
-                        text: outputField.equipment.some(item => item.path === outputField.editText)
-                            ? "Display detected." : (topcec.equipmentAvailabilityKnown
-                                ? "Selected display unavailable / not detected. Choose a connected display or enter a KWin output name manually."
-                                : "Selected display availability unknown. Discovery is unavailable or incomplete; you can still enter a KWin output name manually.")
+                        visible: !outputField.detected && outputField.editText.length > 0
+                        text: "Retained display value: " + root.retainedValue(outputField.editText)
+                    }
+                    CopyableCheckBox {
+                        id: manualOutput
+                        objectName: "manualOutput"
+                        text: "Use a manually entered display name"
+                        onToggled: root.settingsDirty = true
                     }
 
                     SelectableLabel { text: "CEC adapter" }
@@ -459,13 +484,20 @@ Kirigami.ApplicationWindow {
                         objectName: "adapterField"
                         Layout.fillWidth: true
                         equipment: topcec.detectedAdapters
+                        manualEntry: manualAdapter.checked
+                        prompt: "Choose a detected CEC adapter"
                     }
                     SelectableLabel {
+                        objectName: "retainedAdapter"
                         Layout.fillWidth: true
-                        text: adapterField.equipment.some(item => item.path === adapterField.editText)
-                            ? "CEC adapter detected." : (topcec.equipmentAvailabilityKnown
-                                ? "Selected adapter unavailable / not detected. Choose a connected adapter or enter its path manually."
-                                : "Selected adapter availability unknown. Discovery is unavailable or incomplete; you can still enter its path manually.")
+                        visible: !adapterField.detected && adapterField.editText.length > 0
+                        text: "Retained adapter value: " + root.retainedValue(adapterField.editText)
+                    }
+                    CopyableCheckBox {
+                        id: manualAdapter
+                        objectName: "manualAdapter"
+                        text: "Use a manually entered adapter path"
+                        onToggled: root.settingsDirty = true
                     }
 
                     SelectableLabel { text: "Inactivity timeout" }
@@ -499,13 +531,29 @@ Kirigami.ApplicationWindow {
                     }
                     SelectableLabel {
                         Layout.fillWidth: true
-                        text: "Select devices to monitor. Uncheck unavailable entries to remove them. Detection does not guarantee read access."
+                        text: "Select detected devices to monitor. Detection does not guarantee read access."
+                    }
+                    SelectableLabel {
+                        objectName: "retainedInputs"
+                        Layout.fillWidth: true
+                        visible: root.unresolvedInputs().length > 0
+                        text: "Retained input values (not selected as detected devices):\n"
+                            + root.unresolvedInputs().map(path => root.retainedValue(path)).join("\n")
+                    }
+                    CopyableButton {
+                        objectName: "removeUndetectedInputs"
+                        text: "Remove unlisted input values"
+                        visible: root.unresolvedInputs().length > 0
+                        onClicked: {
+                            devicesField.text = root.inputPaths().filter(path => root.inputDetected(path)).join("\n")
+                            root.settingsDirty = true
+                        }
                     }
                     CopyableCheckBox {
                         id: manualInputs
                         objectName: "manualInputs"
-                        text: "Edit input paths manually"
-                        checked: !topcec.dbusOnly
+                        text: "Use manually entered input paths"
+                        onToggled: root.settingsDirty = true
                     }
                     Controls.TextArea {
                         id: devicesField
@@ -547,22 +595,32 @@ Kirigami.ApplicationWindow {
                         onValueModified: root.settingsDirty = true
                     }
 
+                    SelectableLabel {
+                        objectName: "equipmentSaveGuidance"
+                        Layout.fillWidth: true
+                        visible: !root.equipmentReady
+                        text: "Before saving, choose a detected display, adapter and at least one input. Remove unlisted input values or deliberately enable manual entry to keep them. Existing settings are not changed until you save."
+                    }
                     CopyableButton {
                         objectName: "saveSettingsButton"
                         text: "Save settings and restart service"
                         Layout.fillWidth: true
-                        enabled: topcec.settingsEnabled
-                        onClicked: topcec.applySettings({
-                            targetOutput: outputField.editText,
-                            adapter: adapterField.editText,
-                            timeoutMode: timeoutMode.currentIndex === 0 ? "kde"
-                                : (timeoutMode.currentIndex === 1 ? "custom" : "never"),
-                            timeoutMinutes: timeoutMinutes.value,
-                            devices: devicesField.text,
-                            muteLabels: labelsField.text,
-                            axisDeadzone: deadzoneField.value,
-                            rzDeadzone: rzDeadzoneField.value
-                        })
+                        enabled: topcec.settingsEnabled && root.equipmentReady
+                        onClicked: {
+                            if (!root.equipmentReady)
+                                return
+                            topcec.applySettings({
+                                targetOutput: outputField.editText,
+                                adapter: adapterField.editText,
+                                timeoutMode: timeoutMode.currentIndex === 0 ? "kde"
+                                    : (timeoutMode.currentIndex === 1 ? "custom" : "never"),
+                                timeoutMinutes: timeoutMinutes.value,
+                                devices: devicesField.text,
+                                muteLabels: labelsField.text,
+                                axisDeadzone: deadzoneField.value,
+                                rzDeadzone: rzDeadzoneField.value
+                            })
+                        }
                     }
 
                     SelectableHeading {

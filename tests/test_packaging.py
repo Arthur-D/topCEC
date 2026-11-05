@@ -22,20 +22,27 @@ class UserPackagingChecks(unittest.TestCase):
         self.assertEqual(len(command.splitlines()), 1)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            checkout = root / 'checkout with spaces and a quote " $literal'
+            checkout.mkdir()
+            starting_directory = root / 'unrelated starting directory'
+            starting_directory.mkdir()
             tools = root / 'tools'
             tools.mkdir()
-            (root / 'packaging').mkdir()
-            (root / 'packaging/install-user.sh').touch()
+            (checkout / 'packaging').mkdir()
+            (checkout / 'packaging/install-user.sh').touch()
             log = root / 'calls'
             scripts = {
                 'git': (
+                    'test "$PWD" = "$EXPECTED_CHECKOUT" || exit 98\n'
                     'case "$1" in\n'
                     'rev-parse) printf "%s" "$PREFIX"; exit "$ROOT_EXIT" ;;\n'
                     'branch) printf "%s" "$BRANCH" ;;\n'
                     'remote) printf "%s" "$ORIGIN" ;;\n'
                     'pull) echo "pull $*" >> "$CALL_LOG"; exit "$PULL_EXIT" ;;\n'
                     '*) exit 99 ;; esac\n'),
-                'bash': 'echo "install $*" >> "$CALL_LOG"; exit "$INSTALL_EXIT"\n',
+                'bash': (
+                    'test "$PWD" = "$EXPECTED_CHECKOUT" || exit 98\n'
+                    'echo "install $*" >> "$CALL_LOG"; exit "$INSTALL_EXIT"\n'),
                 'systemctl': 'echo "restart $*" >> "$CALL_LOG"; exit "$RESTART_EXIT"\n',
             }
             for name, script in scripts.items():
@@ -45,6 +52,7 @@ class UserPackagingChecks(unittest.TestCase):
             environment = {
                 **os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'],
                 'CALL_LOG': str(log), 'PREFIX': '', 'ROOT_EXIT': '0',
+                'EXPECTED_CHECKOUT': str(checkout),
                 'BRANCH': 'main', 'ORIGIN': 'https://github.com/Arthur-D/topCEC.git',
                 'PULL_EXIT': '0', 'INSTALL_EXIT': '0', 'RESTART_EXIT': '0',
             }
@@ -64,16 +72,34 @@ class UserPackagingChecks(unittest.TestCase):
                     # Preserve the copied shell quoting; only the outer bash is real.
                     result = subprocess.run(
                         ['/bin/sh', '-c', command.replace('bash -c ', '/usr/bin/bash -c ', 1)],
-                        cwd=root, env={**environment, **changed}, capture_output=True, text=True)
+                        cwd=starting_directory, env={**environment, **changed},
+                        input=str(checkout) + '\n', capture_output=True, text=True)
                     self.assertEqual(result.returncode == 0, not changed)
                     calls = log.read_text().splitlines() if log.exists() else []
                     self.assertEqual([line.split()[0] for line in calls], expected)
                     if calls:
                         self.assertEqual(calls[0], 'pull pull --ff-only origin main')
+            for supplied in ('', '\n', 'relative/checkout\n', str(root / 'moved checkout') + '\n'):
+                with self.subTest(path=supplied):
+                    if log.exists():
+                        log.unlink()
+                    result = subprocess.run(
+                        ['/bin/sh', '-c', command.replace('bash -c ', '/usr/bin/bash -c ', 1)],
+                        cwd=starting_directory, env=environment, input=supplied,
+                        capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(log.exists())
             fish = shutil.which('fish')
             if fish:
                 subprocess.run([fish, '--no-execute', '-c', command], check=True,
                                capture_output=True, text=True)
+                log.unlink(missing_ok=True)
+                subprocess.run(
+                    [fish, '-c', command.replace('bash -c ', '/usr/bin/bash -c ', 1)],
+                    cwd=starting_directory, env=environment,
+                    input=str(checkout) + '\n', capture_output=True, text=True, check=True)
+                self.assertEqual([line.split()[0] for line in log.read_text().splitlines()],
+                                 ['pull', 'install', 'restart'])
 
     def test_publication_metadata_and_scoped_build_ignores(self):
         ignores = (ROOT / '.gitignore').read_text().splitlines()
