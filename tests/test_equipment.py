@@ -53,7 +53,8 @@ class EquipmentChecks(unittest.TestCase):
                 {'path': str(adapter), 'label': adapter.name}])
             self.assertEqual(inventory['inputs'], [{
                 'path': str(stable), 'label': f'Test keyboard - {stable}',
-                'aliases': [str(root / 'dev/input/event7')],
+                'aliases': [str(root / 'dev/input/by-path/platform-event-kbd'),
+                            str(root / 'dev/input/event7')],
             }])
             self.assertEqual(inventory['errors'], [])
             self.assertEqual(command.call_count, 3)

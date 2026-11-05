@@ -798,7 +798,9 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
 
         @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
         def GetStatus(self):
-            return json.dumps(status_snapshot, sort_keys=True)
+            return json.dumps({
+                **status_snapshot, 'configuration_saved': config_path.is_file(),
+            }, sort_keys=True)
 
         @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
         def GetConfig(self):
@@ -1581,6 +1583,7 @@ def self_test():
                         self.assertEqual(status['input_permission_help']['message'],
                                          'Host input permission guidance')
                         initial = json.loads(receiver.GetConfig())
+                        self.assertFalse(status['configuration_saved'])
                         self.assertTrue(initial['cec_enabled'])
                         for action in ('on', 'off'):
                             with self.assertRaisesRegex(RuntimeError, 'configuration-only'):
@@ -1592,6 +1595,7 @@ def self_test():
                         }
                         result = json.loads(receiver.ApplySettings(json.dumps(config)))
                         self.assertTrue(result['accepted'])
+                        self.assertTrue(json.loads(receiver.GetStatus())['configuration_saved'])
                         self.assertEqual(
                             json.loads(receiver.GetConfig())['devices'],
                             config['devices'])
@@ -1609,6 +1613,12 @@ def self_test():
                         capture_output=True, text=True, timeout=10)
                     self.assertEqual(
                         json.loads(path.read_text())['target_output'], 'DP-1')
+                    restarted = self.run_monitor_steps(
+                        [], config_path=path, input_error=error)
+                    self.assertTrue(restarted.status['configuration_saved'])
+                    self.assertEqual(
+                        json.loads(restarted.receiver.GetConfig())['devices'],
+                        ['/dev/input/by-id/selected-keyboard'])
 
         def test_partial_input_initialization_is_closed_before_configuration_only(self):
             result = self.run_monitor_steps(

@@ -122,6 +122,9 @@ class GuiBackend(QObject):
         self._connection_state = 'connecting'
         self._connection_message = 'Connecting to the topCEC host service.'
         self._action_message = ''
+        self._settings_in_flight = False
+        self._settings_generation = 0
+        self._config_source = 'unknown' if self.dbus_only else 'defaults'
         self._simulation_mode = False
         self._service_data = {}
         self._equipment = {'outputs': [], 'adapters': [], 'inputs': []}
@@ -150,6 +153,7 @@ class GuiBackend(QObject):
         if not self.dbus_only and self.config_path.exists():
             try:
                 self.config = {'schema_version': 1, **load_config(self.config_path)}
+                self._config_source = 'saved'
             except ValueError as error:
                 self._action_message = 'Configuration error: ' + str(error)
         if self.config['target_output'] not in self.outputs:
@@ -223,9 +227,13 @@ class GuiBackend(QObject):
 
     @Property(bool, notify=changed)
     def settingsEnabled(self):
-        return not self.dbus_only or (
+        return not self._settings_in_flight and (not self.dbus_only or (
             self.backendAvailable and self._service_status in (
-                'active', 'running', 'configuration-only'))
+                'active', 'running', 'configuration-only')))
+
+    @Property(str, notify=changed)
+    def configurationSource(self):
+        return self._config_source
 
     @Property('QVariantList', notify=changed)
     def outputOptions(self):
@@ -307,7 +315,7 @@ class GuiBackend(QObject):
 
     @Slot(result=str)
     def deviceList(self):
-        return '\n'.join(self.config['devices'])
+        return '' if self._config_source == 'defaults' else '\n'.join(self.config['devices'])
 
     @Slot(result=str)
     def muteLabelList(self):
@@ -513,7 +521,11 @@ class GuiBackend(QObject):
                 generation, 'Cannot read service configuration: ' + str(error))
             return
 
-        config_changed = config != self.config or not self.backendAvailable
+        stored = self._service_data.get('configuration_saved')
+        source = 'saved' if stored is True else ('defaults' if stored is False else 'unknown')
+        config_changed = (config != self.config or not self.backendAvailable
+                          or source != self._config_source)
+        self._config_source = source
         self.config = config
         self.outputs = list(dict.fromkeys([config['target_output'], *self.outputs]))
         self.adapters = list(dict.fromkeys([config['cec_port'], *self.adapters]))
@@ -596,7 +608,7 @@ class GuiBackend(QObject):
 
     @Slot()
     def refresh(self):
-        if self._refresh_in_flight:
+        if self._refresh_in_flight or self._settings_in_flight:
             return
         self._ensure_owner_watch()
         self._refresh_generation += 1
@@ -660,15 +672,28 @@ class GuiBackend(QObject):
             else 'Request rejected: ' + error)
         self.changed.emit()
 
-    def _settings_reply(self, generation, validated, reply):
-        if generation != self._refresh_generation:
+    def _settings_reply(self, generation, reply):
+        if generation != self._settings_generation:
             return
+        self._settings_in_flight = False
         error = self._capability_error('ApplySettings', reply)
         if error:
             self._action_message = 'Could not apply settings: ' + error
             self.changed.emit()
             return
-        self.config = validated
+        try:
+            result = json.loads(str(reply.arguments()[0]))
+            if not isinstance(result, dict) or result.get('accepted') is not True:
+                raise ValueError('Host did not confirm that settings were saved')
+            saved = validate_config(result['config'])
+        except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            self._action_message = 'Could not confirm saved settings: ' + str(error)
+            self.changed.emit()
+            return
+        self._refresh_generation += 1
+        self._refresh_in_flight = False
+        self.config = saved
+        self._config_source = 'saved'
         self._action_message = 'Settings saved; topcec.service restart queued.'
         self.changed.emit()
         self.settingsSaved.emit()
@@ -676,6 +701,8 @@ class GuiBackend(QObject):
 
     @Slot('QVariantMap')
     def applySettings(self, values):
+        if self._settings_in_flight:
+            return
         config_saved = False
         try:
             validated = config_from_settings(self.config, values)
@@ -690,18 +717,23 @@ class GuiBackend(QObject):
                     'schema_version': 1, **validated,
                 }, sort_keys=True)
                 self._action_message = 'Saving settings through the host service.'
+                self._refresh_generation += 1
+                self._refresh_in_flight = False
+                self._settings_generation += 1
+                self._settings_in_flight = True
                 self.changed.emit()
-                generation = self._refresh_generation
+                generation = self._settings_generation
                 self._async_call(
                     interface, 'ApplySettings',
                     lambda reply: self._settings_reply(
-                        generation, validated, reply), serialized)
+                        generation, reply), serialized)
                 return
             else:
                 save_config(
                     self.config_path, {'schema_version': 1, **validated})
                 config_saved = True
                 self.config = validated
+                self._config_source = 'saved'
                 result = subprocess.run(
                     ['systemctl', '--user', 'restart', 'topcec.service'],
                     capture_output=True, text=True, timeout=60)
@@ -713,6 +745,7 @@ class GuiBackend(QObject):
                 'Settings saved; topcec.service restart queued.')
         except (KeyError, OSError, TypeError, ValueError, RuntimeError,
                 subprocess.TimeoutExpired) as error:
+            self._settings_in_flight = False
             self._action_message = (
                 'Settings saved, but service restart failed: ' + str(error)
                 if config_saved else 'Could not apply settings: ' + str(error))
