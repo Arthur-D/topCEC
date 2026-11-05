@@ -125,6 +125,8 @@ class GuiBackend(QObject):
         self._settings_in_flight = False
         self._settings_generation = 0
         self._saving_inputs_only = False
+        self._failed_input_draft = None
+        self._submitted_input_draft = None
         self._input_preferences = QSettings(
             str(self.config_path) + '.input-draft.ini', QSettings.Format.IniFormat)
         self._input_save_timer = QTimer(self)
@@ -183,6 +185,10 @@ class GuiBackend(QObject):
     @Property(bool, notify=changed)
     def backendAvailable(self):
         return self._connection_state == 'connected'
+
+    @Property(bool, notify=changed)
+    def liveSettingsAvailable(self):
+        return self.backendAvailable and self._service_data.get('settings_apply') == 'live'
 
     @Property(bool, notify=changed)
     def dbusOnly(self):
@@ -329,6 +335,7 @@ class GuiBackend(QObject):
 
     @Slot(str)
     def rememberInputDraft(self, devices):
+        self._failed_input_draft = None
         self._input_preferences.setValue('pending', devices)
         self._input_preferences.sync()
         self._save_pending_inputs()
@@ -339,6 +346,8 @@ class GuiBackend(QObject):
 
     def _save_pending_inputs(self):
         if not self.hasInputDraft() or self._settings_in_flight or not self.backendAvailable:
+            return
+        if self.deviceList() == self._failed_input_draft:
             return
         self.applySettings({'devices': self.deviceList()}, inputs_only=True)
 
@@ -377,6 +386,7 @@ class GuiBackend(QObject):
         if name != SERVICE or old_owner == new_owner:
             return
         self._refresh_generation += 1
+        self._failed_input_draft = None
         self._refresh_in_flight = False
         self._service_data = {}
         self._missing_capabilities.clear()
@@ -565,13 +575,14 @@ class GuiBackend(QObject):
             f"Scan: {self._service_data.get('scan_status') or 'healthy'}",
             f"CEC fault: {self._service_data.get('cec_fault') or 'none'}",
             f"Pending action: {self._service_data.get('pending_action') or 'none'}",
+            f"Settings error: {self._service_data.get('settings_error') or 'none'}",
         ]
         self._diagnostics = '\n'.join(diagnostic_items)
         self._connection_state = 'connected'
         self._connection_message = (
             'Connected for configuration only. Monitoring could not start. '
             'Correct the input devices and their host read permissions, then '
-            'save settings to restart the service.'
+            'apply settings to resume monitoring.'
             if self._service_status == 'configuration-only'
             else 'Connected to the topCEC host service.')
         self._refresh_in_flight = interface is not None
@@ -656,6 +667,7 @@ class GuiBackend(QObject):
 
     @Slot()
     def retryConnection(self):
+        self._failed_input_draft = None
         self._refresh_in_flight = False
         self._connection_state = 'connecting'
         self._connection_message = 'Retrying the topCEC host service connection.'
@@ -703,6 +715,8 @@ class GuiBackend(QObject):
         self._settings_in_flight = False
         error = self._capability_error('ApplySettings', reply)
         if error:
+            if self._saving_inputs_only:
+                self._failed_input_draft = self._submitted_input_draft
             self._action_message = 'Could not apply settings: ' + error
             self.changed.emit()
             return
@@ -716,6 +730,8 @@ class GuiBackend(QObject):
                 config = {'schema_version': SCHEMA_VERSION, **config}
             saved = validate_config(config)
         except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            if self._saving_inputs_only:
+                self._failed_input_draft = self._submitted_input_draft
             self._action_message = 'Could not confirm saved settings: ' + str(error)
             self.changed.emit()
             return
@@ -723,9 +739,14 @@ class GuiBackend(QObject):
         self._refresh_in_flight = False
         self.config = saved
         self._config_source = 'saved'
-        self._action_message = 'Settings saved; topcec.service restart queued.'
+        self._failed_input_draft = None
+        self._action_message = (
+            'Settings saved and applied live; service was not restarted.'
+            if result.get('applied_live') is True else
+            'Settings saved by an older backend; it may restart the service. '
+            'Update the host backend for live settings.')
         self.changed.emit()
-        if self._input_preferences.value('pending') == '\n'.join(saved['devices']):
+        if self._input_preferences.value('pending') == self._submitted_input_draft:
             self._input_preferences.remove('pending')
             self._input_preferences.sync()
         if not self.hasInputDraft():
@@ -746,9 +767,8 @@ class GuiBackend(QObject):
                 'schema_version': SCHEMA_VERSION, **self.config,
                 'devices': values['devices'].splitlines(),
             }) if inputs_only else config_from_settings(self.config, values))
-            if self.dbus_only:
-                if not self.backendAvailable:
-                    raise RuntimeError('topCEC host service is not available')
+            self._submitted_input_draft = '\n'.join(validated['devices'])
+            if self.backendAvailable:
                 interface = self._service_interface()
                 if not interface.isValid():
                     self._set_unavailable()
@@ -769,16 +789,13 @@ class GuiBackend(QObject):
                         generation, reply), serialized)
                 return
             else:
+                if self.dbus_only:
+                    raise RuntimeError('topCEC host service is not available')
                 save_config(
                     self.config_path, {'schema_version': 1, **validated})
                 config_saved = True
                 self.config = validated
                 self._config_source = 'saved'
-                result = subprocess.run(
-                    ['systemctl', '--user', 'restart', 'topcec.service'],
-                    capture_output=True, text=True, timeout=60)
-                if result.returncode:
-                    raise RuntimeError(result.stderr.strip() or result.stdout.strip())
             self.config = validated
             if self._input_preferences.value('pending') == '\n'.join(validated['devices']):
                 self._input_preferences.remove('pending')
@@ -788,12 +805,14 @@ class GuiBackend(QObject):
             else:
                 self.settingsSaved.emit()
             self._action_message = (
-                'Settings saved; topcec.service restart queued.')
+                'Settings saved for the next service start; the host backend is offline.')
         except (KeyError, OSError, TypeError, ValueError, RuntimeError,
                 subprocess.TimeoutExpired) as error:
             self._settings_in_flight = False
+            if inputs_only:
+                self._failed_input_draft = self._submitted_input_draft
             self._action_message = (
-                'Settings saved, but service restart failed: ' + str(error)
+                'Settings saved, but could not be confirmed: ' + str(error)
                 if config_saved else 'Could not apply settings: ' + str(error))
         self.refresh()
         self.changed.emit()

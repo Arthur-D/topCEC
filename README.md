@@ -218,15 +218,16 @@ operable and owns all CEC commands. Its session D-Bus API publishes monitor
 status and configuration through `GetStatus`/`GetConfig`, cached read-only
 equipment choices through `GetEquipment`, accepts serialized
 `on`/`off` requests through `RequestPower`, and validates/saves settings and
-queues a user-service restart through `ApplySettings` on
+applies them live through `ApplySettings` on
 `net.local.CecActivity`. Manual standby is rejected while monitor safety checks
 fail or a CEC recovery/standby operation is active.
 
 The panel provides output and adapter selection, input-device and Firefox
 mute-label settings, KDE-managed/custom/disabled inactivity timeouts, current
 power and service status, diagnostics, and manual controls. The native GUI saves
-the versioned config to the XDG default path and restarts the user service, so it
-can configure the service before its first start. “Simulate manual actions”
+through the host service when connected. When offline it saves the versioned
+config to the XDG default path for the next service start, without starting or
+restarting systemd. “Simulate manual actions”
 previews GUI button requests only; it does not pause or simulate the independently
 running background service.
 The GUI's hardware-free settings, manual-control safety, and QML-load checks run
@@ -313,7 +314,8 @@ it does not bundle or access the monitor, CEC adapter, input devices, KWin, or
 host configuration files. The client uses only the `net.local.CecActivity`
 session-D-Bus name. The host service exposes `GetStatus`, `GetConfig`,
 `RequestPower`, and `ApplySettings`; the host validates and atomically saves
-configuration, then asks the user systemd manager to restart `topcec.service`.
+configuration and applies it to the same running process; no systemd restart is
+requested for settings changes.
 The Flatpak contains only the GUI: the host service and its hardware dependencies
 must be installed separately, outside the sandbox. The setup view in the GUI
 provides these same steps and a retry action:
@@ -357,16 +359,19 @@ If an input device is missing or unreadable when the service starts, the host
 stays available in **configuration-only** mode instead of exiting. The Flatpak
 then shows the normal configuration panel and the input error. Choose the
 correct keyboard/wheel paths (prefer stable `/dev/input/by-id/` paths), then use
-**Save settings and restart service** to retry monitoring. No CEC commands or
-monitoring run in this mode, and both live manual power actions are rejected.
+**Save and apply settings** to resume monitoring in the same process. No new
+standby commands or input monitoring run in this mode, and both live
+manual power actions are rejected.
 Unsaved GUI edits are retained across connection loss and reconnection.
 
 ### Configured values and detected equipment
 
-Input checkbox changes save automatically and restart the host service. Rapid
-changes are queued until the service reconnects. Pending selections are retained
+Input checkbox changes save and apply live automatically. Rapid
+changes are queued behind any in-flight apply. Pending selections are retained
 locally across closing and reopening the GUI. Deselecting every input saves an
-empty list. Other configuration fields still use the Save button.
+empty list. Failed selections remain pending with an explicit error; they are not
+retried every half-second. Change the selection or use **Save and apply settings**
+to retry after correcting host permissions. Other fields still use the Save button.
 
 The configured display, adapter and input paths are saved settings (or legacy
 defaults when no settings have been saved), **not evidence of detected hardware**.
@@ -380,9 +385,10 @@ as **unavailable / not detected**, or **availability unknown** if discovery fail
 They are not erased or saved automatically, and the first detected device is
 never selected as a substitute.
 
-**Save settings and restart service** is blocked until display, adapter and at
-least one input are resolved. Choose detected hardware and use **Remove unlisted
-input values** to explicitly discard retained inputs, or deliberately enable the
+**Save and apply settings** can retain unchanged display/adapter settings even if
+that hardware is unavailable. Changed selections must be resolved. Choose detected
+hardware and use **Remove unlisted input values** to explicitly discard retained
+inputs, or deliberately enable the
 manual display/adapter/input options to inspect, edit and keep undetected values.
 The same deliberate manual path supports native offline configuration and older
 backends. A hot-unplug clears the detected selection/checkmark and blocks Save
@@ -453,8 +459,9 @@ Tab/Shift+Tab and Space work in it. **Copy selected paths** copies the complete
 selection, including retained unlisted paths. Missing selections stay visible
 in a separate notice and are never silently replaced with another device.
 
-Selection changes are drafts until **Save settings and restart service** reports
-that settings were saved. On that explicit save, detected input aliases such as
+Input checkbox changes apply automatically; other field changes remain drafts
+until **Save and apply settings** confirms them. On save, detected input aliases
+such as
 `/dev/input/event10` are converted to the inventory's preferred stable
 `/dev/input/by-id` or `by-path` name when available. This avoids event-number
 changes making a saved keyboard selection look like a different device after
@@ -465,15 +472,64 @@ alias remain vulnerable to Linux event-number reassignment. A `by-path` name
 identifies a connection location and may change if the device is moved to another
 port.
 
-The host saves atomically before queuing its restart. The GUI accepts the host's
-confirmed saved configuration even if the D-Bus owner changes before the reply,
-ignores pre-save refresh replies, and preserves any further edits made while
+The GUI accepts the host's confirmed saved configuration even if the D-Bus owner
+changes before the reply, ignores pre-save refresh replies, and preserves any
+further edits made while
 saving. The updated backend reports whether a saved configuration file exists;
 when none exists, legacy display/adapter/input defaults are not preselected in
 the editor, even if those paths currently exist. Older backends cannot provide
 that distinction, so their returned configuration is retained as unknown-source
 settings rather than guessed to be defaults. Update the host and GUI together
 for the full behavior.
+
+### Live settings and rollback
+
+`ApplySettings` stages the requested input set and a replacement selector,
+retaining open unchanged devices (including aliases of the same event node).
+Additions are opened and seeded before any current device is closed. Deadzone
+changes are seeded from current axis metadata. If opening, seeding, registering
+an input, validating adapter access or writing the atomic configuration file
+fails, staged resources are closed and the prior disk/effective configuration
+and functional monitoring set remain active. `GetConfig` reports the effective
+runtime configuration, not an unrelated externally edited file.
+
+After a successful save, the same event loop switches to the prepared resources,
+closes removed inputs, and applies display, timeout/KDE-timeout mode, mapping
+TTL, deadzones, mute-tab labels and CEC settings. Display changes reset axis
+baselines and use the current KWin focus output; label changes invalidate old
+scans and discard results from the
+old label set. Settings changes grant a fresh inactivity interval rather than
+immediately issuing standby. CEC fail-safe and wake-recovery policy remain in
+force. No new monitor loop, D-Bus subscription or service process is created.
+Configuration-only startup failures and later input disconnects can be corrected
+with live apply; monitoring resumes without a service restart.
+
+The CEC implementation opens the adapter per power command, not as a persistent
+connection. A changed/new adapter is checked with a nonblocking, read/write host
+character-device open, then used by subsequent operations. Apply does not send
+CEC power/status probes. This checks device access, **not** a complete libCEC/TV
+communication handshake; communication faults are still reported when an actual
+operation is requested. Adapter changes/disabling CEC are rejected while an
+operation is in flight, a command is queued, or TV wake recovery is owed. Complete
+a successful TV-on recovery and retry; the old adapter/state remain intact.
+Already-queued wake recovery can finish even if input monitoring is paused.
+
+Native and Flatpak GUIs use the same host apply API when connected. Native offline
+saves are for the next explicit service start and never execute systemctl.
+Input selections retain their existing automatic-save cadence; other settings
+still require **Save and apply settings**. A failed apply leaves drafts intact
+and reports the error. A later edit is not overwritten by an earlier apply
+acknowledgement. `python3 -B tests/run.py live-settings` covers mocked in-process
+resource transactions, rollback, same-PID recovery, runtime changes and persistence.
+
+Update the installed host backend once to obtain this API behavior; replacing
+running Python code still needs an explicit service restart. An older backend
+may restart on `ApplySettings`, and the GUI reports that compatibility limitation
+instead of claiming live success. Manual edits to the JSON file require a service
+restart; use the GUI/API for live application. Group membership/ACL changes and
+host dependency updates still require their applicable host/session steps.
+
+### Input-device permissions
 
 The host user must have read access to the selected input devices. Changing a
 path does not grant access; if the intended device is still permission-denied,
@@ -497,7 +553,7 @@ the selected device. Consider scoped device permissions with your administrator
 instead if that broad access is inappropriate. Fully log out and back in so the
 desktop and user service inherit the new group. If the user manager persists
 across logout (for example with lingering), reboot. Then use **Retry Connection**
-and **Save settings and restart service** to retry monitoring. If your account is
+and **Save and apply settings** to retry monitoring. If your account is
 already a member but the running backend has not inherited it, the GUI explains
 the session restart instead of offering a duplicate membership command. If the
 backend already has that group, or the device ownership/read bits do not support

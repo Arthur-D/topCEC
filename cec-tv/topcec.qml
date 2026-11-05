@@ -634,8 +634,15 @@ Kirigami.ApplicationWindow {
                         }
                     }
                     SelectableLabel {
+                        objectName: "inputSaveHelp"
                         Layout.fillWidth: true
-                        text: "Input selections save automatically and restart the service. Stable device paths are used when available."
+                        text: !topcec.backendAvailable
+                            ? (topcec.dbusOnly
+                                ? "Input selections remain pending until the host backend connects. Stable device paths are used when available."
+                                : "Input selections remain pending until the backend connects or you save offline. Stable device paths are used when available.")
+                            : topcec.liveSettingsAvailable
+                                ? "Input selections save and apply automatically without restarting the service. Stable device paths are used when available."
+                                : "Input selections save automatically, but this backend may restart the service. Update the host backend for live settings."
                     }
                     SelectableLabel {
                         objectName: "retainedInputs"
@@ -707,7 +714,7 @@ Kirigami.ApplicationWindow {
                     }
                     CopyableButton {
                         objectName: "saveSettingsButton"
-                        text: "Save settings and restart service"
+                        text: "Save and apply settings"
                         Layout.fillWidth: true
                         enabled: topcec.settingsEnabled && root.equipmentReady
                         onClicked: {
@@ -725,7 +732,7 @@ Kirigami.ApplicationWindow {
                         objectName: "settingsSaveStatus"
                         Layout.fillWidth: true
                         text: root.settingsDirty
-                            ? "Unsaved changes. Save settings and restart service to keep these selections across restarts."
+                            ? "Unsaved changes. Save and apply settings to update monitoring without a restart."
                             : "No unsaved changes."
                     }
 
