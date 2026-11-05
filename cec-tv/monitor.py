@@ -41,6 +41,26 @@ def log(message):
     print(time.strftime('[%H:%M:%S]'), message, flush=True)
 
 
+def input_group_command(username, gid, local_path='/etc/group',
+                        vendor_path='/usr/lib/group'):
+    """Handle Atomic desktops whose vendor groups are invisible to usermod."""
+    command = 'usermod -aG input -- ' + shlex.quote(username)
+    try:
+        local = Path(local_path).read_text().splitlines()
+        vendor = Path(vendor_path).read_text().splitlines()
+    except OSError:
+        return 'sudo ' + command, False
+    if (not any(line.startswith('input:') for line in local)
+            and any(line.split(':')[:3] == ['input', 'x', str(gid)]
+                    for line in vendor)):
+        # Recheck at execution time so copying/rerunning never duplicates a group.
+        script = (
+            "set -eu; if ! grep -q '^input:' /etc/group; then "
+            "grep '^input:' /usr/lib/group >> /etc/group; fi; " + command)
+        return 'sudo sh -c ' + shlex.quote(script), True
+    return 'sudo ' + command, False
+
+
 def input_permission_help(error):
     help_text = (
         'Check that the selected input path belongs to the intended keyboard or '
@@ -85,7 +105,15 @@ def input_permission_help(error):
             'not a member. First confirm this is the intended input device. '
             'To join input, run the command below manually in a host terminal '
             '(administrator password required). ' + warning + session)
-        result['command'] = 'sudo usermod -aG input -- ' + shlex.quote(user.pw_name)
+        result['command'], vendor_only = input_group_command(
+            user.pw_name, group.gr_gid)
+        if vendor_only:
+            result['message'] += (
+                '\nOn this Atomic desktop, input exists only in /usr/lib/group. '
+                'usermod alone cannot persist membership in that vendor group. '
+                'The command first copies the input entry into /etc/group if '
+                'missing, then adds your account. Rebooting before this step '
+                'does not fix membership.')
     return result
 
 
@@ -1032,6 +1060,26 @@ def self_test():
                 with self.subTest(arguments=arguments):
                     self.assertEqual(
                         self.permission_guidance(**arguments)['command'], '')
+
+        def test_vendor_only_group_command(self):
+            import tempfile
+            with tempfile.TemporaryDirectory() as directory:
+                local = Path(directory) / 'group'
+                vendor = Path(directory) / 'vendor'
+                local.write_text('root:x:0:\n')
+                vendor.write_text('input:x:50:\n')
+                command, atomic = input_group_command(
+                    'test-user', 50, local, vendor)
+                self.assertTrue(atomic)
+                script = shlex.split(command)
+                self.assertEqual(script[:3], ['sudo', 'sh', '-c'])
+                self.assertIn("if ! grep -q '^input:' /etc/group", script[3])
+                self.assertIn('usermod -aG input -- test-user', script[3])
+                local.write_text('input:x:50:test-user\n')
+                self.assertEqual(input_group_command('test-user', 50, local, vendor),
+                                 ('sudo usermod -aG input -- test-user', False))
+                local.write_text('root:x:0:\n')
+                self.assertFalse(input_group_command('test-user', 51, local, vendor)[1])
 
         def test_input_group_membership_and_session_are_distinguished(self):
             result = self.permission_guidance(members=['test-user'])
