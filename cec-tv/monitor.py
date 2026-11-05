@@ -17,6 +17,7 @@ import stat
 import subprocess
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -681,6 +682,64 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'rz_deadzone_percent': args.rz_deadzone_percent,
     })
     startup_error = None
+    equipment_snapshot = {
+        'outputs': [], 'adapters': [], 'inputs': [],
+        'errors': ['Host equipment discovery has not completed.'],
+    }
+    equipment_worker = None
+    equipment_output = None
+    equipment_started = equipment_next = 0.0
+
+    def poll_equipment():
+        nonlocal equipment_worker, equipment_output, equipment_started, equipment_next, equipment_snapshot
+        now = time.monotonic()
+        if equipment_worker is not None:
+            if equipment_worker.poll() is not None or now - equipment_started > 8:
+                try:
+                    if equipment_worker.poll() is None:
+                        equipment_worker.kill()
+                        raise TimeoutError('Host equipment discovery timed out')
+                    equipment_output.seek(0)
+                    output = equipment_output.read()
+                    if equipment_worker.returncode:
+                        raise ValueError(output.strip() or 'Equipment helper failed')
+                    inventory = json.loads(output)
+                    if not isinstance(inventory, dict) or any(
+                            not isinstance(inventory.get(key), list)
+                            for key in ('outputs', 'adapters', 'inputs', 'errors')):
+                        raise ValueError('Invalid equipment inventory')
+                    equipment_snapshot = inventory
+                except (OSError, ValueError, TimeoutError) as error:
+                    log('Equipment discovery failed: ' + str(error))
+                    equipment_snapshot = {
+                        'outputs': [], 'adapters': [], 'inputs': [],
+                        'errors': ['Host equipment discovery failed: ' + str(error)],
+                    }
+                finally:
+                    equipment_worker.communicate()
+                    equipment_output.close()
+                    equipment_output = None
+                    equipment_worker = None
+                    equipment_next = now + 10
+        if equipment_worker is None and now >= equipment_next:
+            try:
+                # A file avoids pipe-buffer stalls on hosts with many input devices.
+                equipment_output = tempfile.TemporaryFile(mode='w+t')
+                equipment_worker = subprocess.Popen(
+                    [sys.executable, str(Path(__file__).with_name('equipment.py'))],
+                    stdout=equipment_output, stderr=subprocess.STDOUT, text=True)
+                equipment_started = now
+            except OSError as error:
+                if equipment_output is not None:
+                    equipment_output.close()
+                    equipment_output = None
+                log('Could not launch equipment discovery: ' + str(error))
+                equipment_snapshot = {
+                    'outputs': [], 'adapters': [], 'inputs': [],
+                    'errors': ['Could not launch host equipment discovery: ' + str(error)],
+                }
+                equipment_next = now + 10
+        return True
 
     def activity(source):
         if startup_error:
@@ -751,6 +810,10 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             else:
                 config = runtime_config
             return json.dumps({'schema_version': 1, **config}, sort_keys=True)
+
+        @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
+        def GetEquipment(self):
+            return json.dumps(equipment_snapshot, sort_keys=True)
 
         @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='s')
         def ApplySettings(self, serialized_config):
@@ -1001,10 +1064,16 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         log('Requires an existing KWin bridge. Firefox must expose configured mute-tab labels for AT-SPI fallback.')
         GLib.timeout_add(100, poll)
     try:
+        GLib.timeout_add(500, poll_equipment)
         loop.run()
     except KeyboardInterrupt:
         pass
     finally:
+        if equipment_worker is not None:
+            if equipment_worker.poll() is None:
+                equipment_worker.kill()
+            equipment_worker.communicate()
+            equipment_output.close()
         if worker is not None:
             if worker.poll() is None:
                 worker.kill()
@@ -1298,7 +1367,8 @@ def self_test():
         def run_monitor_steps(self, steps, diagnostics_enabled=True, config_path=None,
                               timeout=int(DEFAULT_TIMEOUT), target=TARGET,
                               input_error=None, recovery_action=None,
-                              input_error_after=0):
+                              input_error_after=0, equipment_result=None,
+                              equipment_failure=None, equipment_updates=None):
             from unittest.mock import Mock, patch
 
             clock = SimpleNamespace(now=0)
@@ -1316,9 +1386,44 @@ def self_test():
                     context.receiver = self
 
             def timeout_add(interval, callback):
-                context.poll = callback
+                if interval == 100:
+                    context.poll = callback
+                else:
+                    context.equipment_poll = callback
 
             def main_loop():
+                if equipment_updates:
+                    for inventory in equipment_updates:
+                        worker_count = len(workers)
+                        context.equipment_poll()
+                        self.assertEqual(len(workers), worker_count + 1)
+                        workers[-1].poll.return_value = 0
+                        context.equipment_poll()
+                        self.assertEqual(json.loads(context.receiver.GetEquipment()), inventory)
+                        context.equipment_poll()
+                        self.assertEqual(len(workers), worker_count + 1)
+                        clock.now += 10
+                if equipment_result is not None or equipment_failure:
+                    self.assertIn('not completed', json.loads(
+                        context.receiver.GetEquipment())['errors'][0])
+                    context.equipment_poll()
+                    equipment_process = workers[-1]
+                    if equipment_failure == 'timeout':
+                        clock.now = 9
+                    else:
+                        equipment_process.poll.return_value = 0
+                    if equipment_failure == 'exit':
+                        equipment_process.returncode = 1
+                    context.equipment_poll()
+                    if equipment_failure:
+                        self.assertTrue(json.loads(
+                            context.receiver.GetEquipment())['errors'])
+                    else:
+                        self.assertEqual(json.loads(
+                            context.receiver.GetEquipment()), equipment_result)
+                    worker_count = len(workers)
+                    context.equipment_poll()
+                    self.assertEqual(len(workers), worker_count)
                 if recovery_action:
                     recovery_action(context.receiver)
                 if input_error:
@@ -1345,6 +1450,13 @@ def self_test():
                     self.assertTrue(context.poll())
 
             def start_worker(*args, **kwargs):
+                if equipment_updates and str(args[0][-1]).endswith('/equipment.py'):
+                    kwargs['stdout'].write(json.dumps(equipment_updates[len(workers)]))
+                    kwargs['stdout'].flush()
+                if (equipment_result is not None or equipment_failure) and str(args[0][-1]).endswith('/equipment.py'):
+                    kwargs['stdout'].write(
+                        'invalid' if equipment_failure else json.dumps(equipment_result))
+                    kwargs['stdout'].flush()
                 worker = Mock(returncode=0)
                 worker.poll.return_value = None
                 worker.communicate.return_value = ('', '')
@@ -1409,6 +1521,48 @@ def self_test():
                 receiver=context.receiver, power=power, command_run=command_run,
                 device=device, selector=selector, workers=workers,
                 status=json.loads(context.receiver.GetStatus()))
+
+        def test_equipment_api_is_cached_and_available_after_input_failure(self):
+            inventory = {
+                'outputs': [{'path': 'DP-2', 'label': 'DP-2'}],
+                'adapters': [], 'inputs': [], 'errors': [],
+            }
+            result = self.run_monitor_steps(
+                [], input_error=PermissionError(13, 'Permission denied'),
+                equipment_result=inventory)
+            self.assertEqual(json.loads(result.receiver.GetEquipment()), inventory)
+            result.power.poll.assert_not_called()
+            result.power.request.assert_not_called()
+
+        def test_equipment_failures_are_reported_without_disabling_configuration(self):
+            for failure in ('invalid', 'exit', 'timeout'):
+                with self.subTest(failure=failure):
+                    result = self.run_monitor_steps(
+                        [], input_error=PermissionError(13, 'Permission denied'),
+                        equipment_failure=failure)
+                    inventory = json.loads(result.receiver.GetEquipment())
+                    self.assertEqual(inventory['outputs'], [])
+                    self.assertIn('failed', inventory['errors'][0])
+                    self.assertEqual(result.status['service'], 'configuration-only')
+                    self.assertTrue(json.loads(result.receiver.GetConfig()))
+                    if failure == 'timeout':
+                        result.workers[0].kill.assert_called_once()
+
+        def test_equipment_cache_refreshes_for_plug_unplug_and_replug(self):
+            connected = {
+                'outputs': [{'path': 'DP-2', 'label': 'DP-2'}],
+                'adapters': [{'path': '/dev/serial/by-id/CEC', 'label': 'CEC'}],
+                'inputs': [{'path': '/dev/input/by-id/keyboard', 'label': 'Keyboard'}],
+                'errors': [],
+            }
+            empty = {'outputs': [], 'adapters': [], 'inputs': [], 'errors': []}
+            result = self.run_monitor_steps(
+                [], input_error=PermissionError(13, 'Permission denied'),
+                equipment_updates=[connected, empty, connected])
+            self.assertEqual(len(result.workers), 3)
+            self.assertEqual(json.loads(result.receiver.GetEquipment()), connected)
+            result.power.poll.assert_not_called()
+            result.power.request.assert_not_called()
 
         def test_input_startup_failure_keeps_configuration_api_without_cec(self):
             import tempfile

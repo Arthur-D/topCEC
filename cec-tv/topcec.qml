@@ -12,6 +12,32 @@ Kirigami.ApplicationWindow {
     minimumHeight: 680
     property bool settingsDirty: false
 
+    function equipmentChoices(options, values) {
+        let choices = []
+        for (let item of options) {
+            let configured = values.filter(value => value === item.path || (item.aliases || []).includes(value))
+            for (let path of configured.length ? configured : [item.path])
+                choices.push({path: path, label: path === item.path ? item.label : item.label + " (configured as " + path + ")", available: true})
+        }
+        for (let value of values) {
+            if (value.length && !choices.some(item => item.path === value))
+                choices.push({path: value, label: value + " (unavailable / not detected)", available: false})
+        }
+        return choices
+    }
+
+    function inputPaths() {
+        return devicesField.text.split("\n").map(path => path.trim()).filter(path => path.length)
+    }
+
+    function setInputSelected(path, selected) {
+        let paths = inputPaths().filter(item => item !== path)
+        if (selected)
+            paths.push(path)
+        devicesField.text = paths.join("\n")
+        settingsDirty = true
+    }
+
     component SelectableLabel: Controls.TextArea {
         readOnly: true
         selectByMouse: true
@@ -86,6 +112,29 @@ Kirigami.ApplicationWindow {
         Keys.onMenuPressed: root.showCaption(editable ? editText : currentText)
     }
 
+    component EquipmentSelector: CopyableComboBox {
+        property var equipment: []
+        property bool syncing: false
+        editable: true
+        textRole: "label"
+        function synchronize(value) {
+            syncing = true
+            model = root.equipmentChoices(equipment, [value])
+            currentIndex = model.findIndex(item => item.path === value)
+            editText = value
+            syncing = false
+        }
+        onEquipmentChanged: synchronize(editText)
+        onActivated: {
+            editText = model[index].path
+            root.settingsDirty = true
+        }
+        onEditTextChanged: {
+            if (!syncing && activeFocus)
+                root.settingsDirty = true
+        }
+    }
+
     component CopyableSpinBox: Controls.SpinBox {
         TapHandler {
             acceptedButtons: Qt.RightButton
@@ -97,10 +146,8 @@ Kirigami.ApplicationWindow {
     function loadSettings() {
         if (settingsDirty)
             return
-        outputField.model = topcec.outputOptions
-        outputField.editText = topcec.setting("target_output")
-        adapterField.model = topcec.adapterOptions
-        adapterField.editText = topcec.setting("cec_port")
+        outputField.synchronize(topcec.setting("target_output"))
+        adapterField.synchronize(topcec.setting("cec_port"))
         timeoutMode.currentIndex = topcec.usesKdeTimeout() ? 0
             : (topcec.setting("timeout_seconds") === null ? 2 : 1)
         timeoutMinutes.value = topcec.timeoutMinutes()
@@ -353,29 +400,39 @@ Kirigami.ApplicationWindow {
                         level: 3
                         text: "Configuration"
                     }
+                    SelectableLabel {
+                        Layout.fillWidth: true
+                        text: "Choose your equipment below. Unavailable selections are retained until you change them; nothing is selected automatically."
+                    }
+                    SelectableLabel {
+                        Layout.fillWidth: true
+                        text: topcec.equipmentMessage
+                    }
 
                     SelectableLabel { text: "TV display (KWin output name)" }
-                    CopyableComboBox {
+                    EquipmentSelector {
                         id: outputField
                         objectName: "outputField"
                         Layout.fillWidth: true
-                        editable: true
-                        onEditTextChanged: {
-                            if (activeFocus) root.settingsDirty = true
-                        }
-                        onActivated: root.settingsDirty = true
+                        equipment: topcec.detectedOutputs
+                    }
+                    SelectableLabel {
+                        Layout.fillWidth: true
+                        text: outputField.equipment.some(item => item.path === outputField.editText)
+                            ? "Display detected." : "Selected display unavailable / not detected. Choose a connected display or enter a KWin output name manually."
                     }
 
                     SelectableLabel { text: "CEC adapter" }
-                    CopyableComboBox {
+                    EquipmentSelector {
                         id: adapterField
                         objectName: "adapterField"
                         Layout.fillWidth: true
-                        editable: true
-                        onEditTextChanged: {
-                            if (activeFocus) root.settingsDirty = true
-                        }
-                        onActivated: root.settingsDirty = true
+                        equipment: topcec.detectedAdapters
+                    }
+                    SelectableLabel {
+                        Layout.fillWidth: true
+                        text: adapterField.equipment.some(item => item.path === adapterField.editText)
+                            ? "CEC adapter detected." : "Selected adapter unavailable / not detected. Choose a connected adapter or enter its path manually."
                     }
 
                     SelectableLabel { text: "Inactivity timeout" }
@@ -393,12 +450,37 @@ Kirigami.ApplicationWindow {
                         enabled: timeoutMode.currentIndex === 1
                     }
 
-                    SelectableLabel { text: "Input devices (one path per line)" }
+                    SelectableLabel { text: "Input devices" }
+                    Repeater {
+                        id: inputChoices
+                        objectName: "inputChoices"
+                        model: root.equipmentChoices(topcec.detectedInputs, root.inputPaths())
+                        delegate: CopyableCheckBox {
+                            required property var modelData
+                            objectName: "inputChoice:" + modelData.path
+                            Layout.fillWidth: true
+                            text: modelData.label
+                            checked: root.inputPaths().includes(modelData.path)
+                            onToggled: root.setInputSelected(modelData.path, checked)
+                        }
+                    }
+                    SelectableLabel {
+                        Layout.fillWidth: true
+                        text: "Select devices to monitor. Uncheck unavailable entries to remove them. Detection does not guarantee read access."
+                    }
+                    CopyableCheckBox {
+                        id: manualInputs
+                        objectName: "manualInputs"
+                        text: "Edit input paths manually"
+                        checked: !topcec.dbusOnly
+                    }
                     Controls.TextArea {
                         id: devicesField
                         objectName: "devicesField"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 72
+                        visible: manualInputs.checked
+                        Accessible.name: "Input device paths (one per line)"
                         selectByMouse: true
                         onTextChanged: {
                             if (activeFocus) root.settingsDirty = true

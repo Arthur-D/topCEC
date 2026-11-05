@@ -86,6 +86,7 @@ def config_from_settings(current, values):
 
 class GuiBackend(QObject):
     changed = Signal()
+    equipmentChanged = Signal()
     configurationChanged = Signal()
     settingsSaved = Signal()
 
@@ -105,6 +106,10 @@ class GuiBackend(QObject):
         self._action_message = ''
         self._simulation_mode = False
         self._service_data = {}
+        self._equipment = {'outputs': [], 'adapters': [], 'inputs': []}
+        self._equipment_message = (
+            'Equipment has not been reported by the host. Configured values may '
+            'be saved settings or defaults; they are not proof of detection.')
         self._refresh_in_flight = False
         self._refresh_generation = 0
         self._owner_watch_registered = False
@@ -119,6 +124,9 @@ class GuiBackend(QObject):
         self._ensure_owner_watch()
         self.outputs = available_outputs() if not self.dbus_only else []
         self.adapters = available_adapters() if not self.dbus_only else []
+        if not self.dbus_only:
+            self._equipment['outputs'] = [{'path': path, 'label': path} for path in self.outputs]
+            self._equipment['adapters'] = [{'path': path, 'label': path} for path in self.adapters]
         if not self.dbus_only and self.config_path.exists():
             try:
                 self.config = {'schema_version': 1, **load_config(self.config_path)}
@@ -159,11 +167,27 @@ class GuiBackend(QObject):
 
     @Property(str, notify=changed)
     def inputPermissionMessage(self):
-        return self._service_data.get('input_permission_help', {}).get('message', '')
+        help_data = self._service_data.get('input_permission_help')
+        if isinstance(help_data, dict) and help_data.get('message'):
+            return help_data['message']
+        reason = self._service_data.get('fail_safe_reason', '')
+        if (self._service_status == 'configuration-only'
+                and isinstance(reason, str) and reason.startswith('Cannot read input:')):
+            return (
+                'The host backend reported an input-access error but did not '
+                'provide detailed permission guidance. Check that the selected '
+                'device is correct and readable by the host user. Update the '
+                'host backend from the repository root with '
+                'bash packaging/install-user.sh, then restart topcec.service '
+                'to obtain host-verified guidance. Updating only the Flatpak '
+                'does not update the host backend. No input-group command can '
+                'be recommended without checking device ownership and membership.')
+        return ''
 
     @Property(str, notify=changed)
     def inputPermissionCommand(self):
-        return self._service_data.get('input_permission_help', {}).get('command', '')
+        help_data = self._service_data.get('input_permission_help')
+        return help_data.get('command', '') if isinstance(help_data, dict) else ''
 
     @Property(str, notify=changed)
     def diagnostics(self):
@@ -190,6 +214,29 @@ class GuiBackend(QObject):
     @Property('QVariantList', notify=changed)
     def adapterOptions(self):
         return self.adapters
+
+    @Property('QVariantList', notify=equipmentChanged)
+    def detectedOutputs(self):
+        return self._equipment['outputs']
+
+    @Property('QVariantList', notify=equipmentChanged)
+    def detectedAdapters(self):
+        return self._equipment['adapters']
+
+    @Property('QVariantList', notify=equipmentChanged)
+    def detectedInputs(self):
+        return self._equipment['inputs']
+
+    @Property(str, notify=equipmentChanged)
+    def equipmentMessage(self):
+        return self._equipment_message
+
+    def _set_equipment(self, equipment, message):
+        equipment = equipment or {'outputs': [], 'adapters': [], 'inputs': []}
+        if equipment != self._equipment or message != self._equipment_message:
+            self._equipment = equipment
+            self._equipment_message = message
+            self.equipmentChanged.emit()
 
     @Slot(str, result='QVariant')
     def setting(self, key):
@@ -244,6 +291,7 @@ class GuiBackend(QObject):
         self._refresh_generation += 1
         self._refresh_in_flight = False
         self._service_data = {}
+        self._set_equipment(None, 'Host equipment inventory will refresh after reconnection.')
         self._power_state = 'unavailable'
         if self._action_message == 'Saving settings through the host service.':
             self._action_message = (
@@ -338,6 +386,7 @@ class GuiBackend(QObject):
         self.changed.emit()
 
     def _set_unavailable(self):
+        self._set_equipment(None, 'Host equipment discovery is unavailable while disconnected.')
         self._service_data = {}
         self._power_state = 'unavailable'
         if self.dbus_only:
@@ -357,6 +406,7 @@ class GuiBackend(QObject):
         self.changed.emit()
 
     def _set_connection_error(self, message):
+        self._set_equipment(None, 'Host equipment discovery is unavailable: ' + message)
         self._service_data = {}
         self._service_status = 'connection error'
         self._power_state = 'unavailable'
@@ -390,9 +440,9 @@ class GuiBackend(QObject):
         self._async_call(
             interface, 'GetConfig',
             lambda config_reply: self._config_reply(
-                generation, config_reply))
+                generation, config_reply, interface))
 
-    def _config_reply(self, generation, reply):
+    def _config_reply(self, generation, reply, interface=None):
         if generation != self._refresh_generation:
             return
         error = self._reply_error(reply)
@@ -431,10 +481,50 @@ class GuiBackend(QObject):
             'save settings to restart the service.'
             if self._service_status == 'configuration-only'
             else 'Connected to the topCEC host service.')
-        self._refresh_in_flight = False
+        self._refresh_in_flight = interface is not None
         self.changed.emit()
         if config_changed:
             self.configurationChanged.emit()
+        if interface is not None:
+            self._async_call(
+                interface, 'GetEquipment',
+                lambda equipment_reply: self._equipment_reply(generation, equipment_reply))
+
+    def _equipment_reply(self, generation, reply):
+        if generation != self._refresh_generation:
+            return
+        self._refresh_in_flight = False
+        error = self._reply_error(reply)
+        if error:
+            self._set_equipment(None,
+                'Host equipment discovery is unavailable: ' + error +
+                '. Update the host backend if it lacks GetEquipment. '
+                'Configured values remain editable and are not detected equipment.')
+            return
+        try:
+            equipment = json.loads(str(reply.arguments()[0]))
+            if not isinstance(equipment, dict):
+                raise ValueError('Inventory must be an object')
+            for key in ('outputs', 'adapters', 'inputs'):
+                if not isinstance(equipment.get(key), list) or any(
+                        not isinstance(item, dict)
+                        or not isinstance(item.get('path'), str)
+                        or not isinstance(item.get('label'), str)
+                        or not isinstance(item.get('aliases', []), list)
+                        or any(not isinstance(alias, str) for alias in item.get('aliases', []))
+                        for item in equipment[key]):
+                    raise ValueError('Invalid ' + key + ' inventory')
+            errors = equipment.get('errors')
+            if not isinstance(errors, list) or any(not isinstance(item, str) for item in errors):
+                raise ValueError('Invalid equipment diagnostics')
+        except (IndexError, TypeError, ValueError) as error:
+            self._set_equipment(None, 'Invalid host equipment response: ' + str(error))
+        else:
+            self._set_equipment(equipment,
+                'Equipment refreshes automatically from the host. '
+                'Unavailable selections are retained, not replaced. ' +
+                ('Discovery diagnostics: ' + '; '.join(errors) if errors else
+                 'An empty list means no equipment was detected by that discovery method.'))
 
     @Slot()
     def refresh(self):

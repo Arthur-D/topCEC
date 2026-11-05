@@ -27,6 +27,219 @@ from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    def test_detected_equipment_choices_preserve_manual_config_and_drafts(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'configuration-only'
+        original_config = dict(backend.config)
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        configured_output = window.findChild(QObject, 'outputField')
+        configured_adapter = window.findChild(QObject, 'adapterField')
+        configured_inputs = window.findChild(QObject, 'devicesField')
+        self.assertIsNone(window.findChild(QObject, 'detectedOutputField'))
+        inventory = {
+            'outputs': [{'path': 'DP-NEW', 'label': 'DP-NEW'}],
+            'adapters': [{'path': '/dev/serial/by-id/real-CEC', 'label': 'Real CEC'}],
+            'inputs': [{'path': '/dev/input/by-id/real-kbd', 'label': 'Real keyboard'}],
+            'errors': [],
+        }
+
+        def update_inventory(data):
+            backend._equipment_reply(0, SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: [json.dumps(data)]))
+            app.processEvents()
+
+        update_inventory(inventory)
+        for field in (configured_output, configured_adapter):
+            self.assertEqual(field.property('count'), 2)
+        self.assertEqual(configured_output.property('editText'), original_config['target_output'])
+        self.assertEqual(configured_inputs.property('text'), '\n'.join(original_config['devices']))
+        self.assertEqual(backend.config, original_config)
+        engine.rootContext().setContextProperty('detectedChoice', configured_output)
+        action = QQmlExpression(engine.rootContext(), window, 'detectedChoice.activated(0)')
+        action.evaluate()
+        self.assertFalse(action.hasError(), action.error().toString())
+        self.assertEqual(configured_output.property('editText'), 'DP-NEW')
+        self.assertTrue(window.property('settingsDirty'))
+        engine.rootContext().setContextProperty('detectedChoice', configured_adapter)
+        QQmlExpression(engine.rootContext(), window, 'detectedChoice.activated(0)').evaluate()
+        QQmlExpression(engine.rootContext(), window,
+                       'setInputSelected("/dev/input/by-id/real-kbd", true)').evaluate()
+        self.assertEqual(configured_adapter.property('editText'), '/dev/serial/by-id/real-CEC')
+        self.assertIn('/dev/input/by-id/real-kbd', configured_inputs.property('text'))
+        self.assertIn(original_config['devices'][0], configured_inputs.property('text'))
+        update_inventory({'outputs': [], 'adapters': [], 'inputs': [], 'errors': []})
+        self.assertEqual(configured_output.property('editText'), 'DP-NEW')
+        self.assertEqual(configured_adapter.property('editText'), '/dev/serial/by-id/real-CEC')
+        self.assertEqual(configured_output.property('count'), 1)
+        self.assertEqual(configured_output.property('currentText'), 'DP-NEW (unavailable / not detected)')
+        self.assertIn('/dev/input/by-id/real-kbd', configured_inputs.property('text'))
+        # Replug updates the same configuration controls without losing drafts.
+        update_inventory(inventory)
+        self.assertEqual(configured_output.property('editText'), 'DP-NEW')
+        self.assertEqual(configured_output.property('currentText'), 'DP-NEW')
+        self.assertEqual(configured_adapter.property('currentText'), 'Real CEC')
+        self.assertTrue(window.property('settingsDirty'))
+        self.assertEqual(configured_output.property('count'), 1)
+        self.assertEqual(backend.config, original_config)
+        backend._equipment_reply(0, SimpleNamespace(
+            type=lambda: topcec_gui.QDBusMessage.MessageType.ErrorMessage,
+            errorMessage=lambda: 'Unknown method GetEquipment'))
+        self.assertIn('Update the host backend', backend.equipmentMessage)
+        self.assertTrue(backend.settingsEnabled)
+        self.assertEqual(backend.detectedOutputs, [])
+        self.assertEqual(configured_output.property('editText'), 'DP-NEW')
+        engine.deleteLater()
+
+    def test_hotplug_refresh_updates_configuration_controls_through_dbus(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        bus = Mock()
+        bus.isConnected.return_value = True
+        interface = Mock()
+        interface.isValid.return_value = True
+        watchers = []
+
+        def watcher(pending, parent):
+            result = self.FakeWatcher(pending, parent)
+            watchers.append(result)
+            return result
+
+        def complete(data):
+            watchers[-1].complete(SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: [json.dumps(data)]))
+
+        inventory = {
+            'outputs': [{'path': 'DP-NEW', 'label': 'DP-NEW'}],
+            'adapters': [{'path': '/dev/serial/by-id/real-CEC', 'label': 'Real CEC'}],
+            'inputs': [{'path': '/dev/input/by-id/real-kbd', 'label': 'Keyboard',
+                        'aliases': ['/dev/input/event10']}],
+            'errors': [],
+        }
+        with patch.object(topcec_gui.QDBusConnection, 'sessionBus', return_value=bus), \
+                patch.object(topcec_gui, 'QDBusPendingCallWatcher', side_effect=watcher), \
+                patch.object(GuiBackend, '_service_interface', return_value=interface):
+            backend = GuiBackend(dbus_only=True)
+            engine = QQmlApplicationEngine()
+            engine.rootContext().setContextProperty('topcec', backend)
+            engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+            window = engine.rootObjects()[0]
+            output = window.findChild(QObject, 'outputField')
+            adapter = window.findChild(QObject, 'adapterField')
+            devices = window.findChild(QObject, 'devicesField')
+            repeater = window.findChild(QObject, 'inputChoices')
+            engine.rootContext().setContextProperty('choices', repeater)
+            for detected in (inventory, {'outputs': [], 'adapters': [], 'inputs': [], 'errors': []},
+                             inventory):
+                backend.refresh()
+                complete({'service': 'running', 'cec_enabled': True})
+                complete({'schema_version': 1, **DEFAULT_CONFIG})
+                self.assertTrue(backend._refresh_in_flight)
+                complete(detected)
+                app.processEvents()
+                self.assertFalse(backend._refresh_in_flight)
+                if detected['outputs']:
+                    self.assertEqual(output.property('count'), 2)
+                    self.assertEqual(adapter.property('count'), 2)
+                    # The detected stable alias represents configured event10,
+                    # not a duplicate or a false unavailable device.
+                    self.assertEqual(repeater.property('count'), 2)
+                    existing = QQmlExpression(
+                        engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
+                    self.assertIsNotNone(existing)
+                    self.assertTrue(existing.property('checked'))
+                    self.assertNotIn('unavailable', existing.property('text'))
+                else:
+                    self.assertEqual(output.property('count'), 1)
+                    self.assertEqual(adapter.property('count'), 1)
+                    existing = QQmlExpression(
+                        engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
+                    self.assertTrue(existing.property('checked'))
+                    self.assertIn('unavailable', existing.property('text'))
+                self.assertEqual(devices.property('text'), '\n'.join(DEFAULT_CONFIG['devices']))
+                self.assertFalse(window.property('settingsDirty'))
+            existing.setProperty('checked', False)
+            QMetaObject.invokeMethod(existing, 'toggled')
+            self.assertNotIn('/dev/input/event10', devices.property('text'))
+            self.assertTrue(window.property('settingsDirty'))
+            app.processEvents()
+            available = QQmlExpression(
+                engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
+            self.assertFalse(available.property('checked'))
+            available.setProperty('checked', True)
+            QMetaObject.invokeMethod(available, 'toggled')
+            self.assertIn('/dev/input/by-id/real-kbd', devices.property('text'))
+            self.assertEqual(interface.asyncCallWithArgumentList.call_count, 9)
+            self.assertEqual(bus.connect.call_count, 1)
+            engine.deleteLater()
+
+    def test_inventory_errors_and_stale_replies_preserve_connection(self):
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        config = dict(backend.config)
+        for data in ({}, {'outputs': [42], 'adapters': [], 'inputs': [], 'errors': []},
+                     {'outputs': [], 'adapters': [], 'inputs': [], 'errors': 'invalid'}):
+            with self.subTest(data=data):
+                backend._equipment_reply(0, SimpleNamespace(
+                    type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                    arguments=lambda: [json.dumps(data)]))
+                self.assertIn('Invalid host equipment response', backend.equipmentMessage)
+                self.assertEqual(backend.config, config)
+                self.assertTrue(backend.settingsEnabled)
+        inventory = {
+            'outputs': [{'path': 'DP-2', 'label': 'DP-2'}],
+            'adapters': [], 'inputs': [], 'errors': [],
+        }
+        reply = SimpleNamespace(
+            type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+            arguments=lambda: [json.dumps(inventory)])
+        spy = QSignalSpy(backend.equipmentChanged)
+        backend._equipment_reply(0, reply)
+        backend._equipment_reply(0, reply)
+        self.assertEqual(spy.count(), 1)
+        self.assertEqual(backend.detectedOutputs, inventory['outputs'])
+        backend._refresh_generation += 1
+        backend._set_unavailable()
+        backend._equipment_reply(0, reply)
+        self.assertEqual(backend.detectedOutputs, [])
+        self.assertIn('disconnected', backend.equipmentMessage)
+
+    def test_legacy_backend_input_error_shows_guidance_without_unverified_command(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'configuration-only'
+        backend._service_data = {
+            'service': 'configuration-only',
+            'fail_safe_reason': "Cannot read input: [Errno 13] Permission denied: '/dev/input/event10'",
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        self.assertTrue(window.findChild(QObject, 'inputPermissionHelp').property('visible'))
+        self.assertIn('Updating only the Flatpak', backend.inputPermissionMessage)
+        self.assertIn('bash packaging/install-user.sh', backend.inputPermissionMessage)
+        self.assertEqual(backend.inputPermissionCommand, '')
+        self.assertFalse(window.findChild(QObject, 'copyInputPermissionCommand').property('visible'))
+        self.assertTrue(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
+        for missing_help in (None, {}):
+            backend._service_data['input_permission_help'] = missing_help
+            backend.changed.emit()
+            self.assertTrue(backend.inputPermissionMessage)
+            self.assertEqual(backend.inputPermissionCommand, '')
+        backend._service_data['fail_safe_reason'] = 'Waiting for Firefox snapshot'
+        backend.changed.emit()
+        self.assertFalse(window.findChild(QObject, 'inputPermissionHelp').property('visible'))
+        self.assertIsNotNone(app)
+        engine.deleteLater()
+
     def test_host_verified_input_permission_command_is_displayed_and_copied(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         self.addCleanup(app.clipboard().setText, app.clipboard().text())
@@ -83,6 +296,7 @@ class GuiChecks(unittest.TestCase):
                 self.assertEqual(field.property('selectedText'), field.property('text'))
                 QMetaObject.invokeMethod(field, 'copy')
                 self.assertEqual(app.clipboard().text(), field.property('text'))
+        window.findChild(QObject, 'manualInputs').setProperty('checked', True)
         for name in ('devicesField',):
             field = window.findChild(QObject, name)
             self.assertTrue(field.property('selectByMouse'))
@@ -148,7 +362,8 @@ class GuiChecks(unittest.TestCase):
         self.assertIn('Save settings and restart service', text)
         self.assertNotIn('topCEC Backend Not Available', text)
         self.assertFalse(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
-        self.assertIn(backend.deviceList(), text)
+        for path in backend.config['devices']:
+            self.assertIn(path + ' (unavailable / not detected)', text)
         engine.deleteLater()
 
     class FakeWatcher:
@@ -483,10 +698,10 @@ class GuiChecks(unittest.TestCase):
             self.assertFalse(backend.settingsEnabled)
 
             backend._name_owner_changed(topcec_gui.SERVICE, '', ':1.43')
-            watchers[2].complete(SimpleNamespace(
+            watchers[3].complete(SimpleNamespace(
                 type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
                 arguments=lambda: [json.dumps(status)]))
-            watchers[3].complete(SimpleNamespace(
+            watchers[4].complete(SimpleNamespace(
                 type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
                 arguments=lambda: [json.dumps({
                     'schema_version': 1, **DEFAULT_CONFIG,
@@ -613,6 +828,7 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(output.property('editText'), 'DP-1')
         self.assertTrue(save.property('enabled'))
         self.assertTrue(save.property('visible'))
+        window.findChild(QObject, 'manualInputs').setProperty('checked', True)
         QMetaObject.invokeMethod(devices, 'forceActiveFocus')
         devices.setProperty('text', '/dev/input/by-id/draft-keyboard')
         self.assertTrue(window.property('settingsDirty'))

@@ -64,7 +64,7 @@ class UserPackagingChecks(unittest.TestCase):
                 check=True, env=environment, capture_output=True, text=True)
 
             for name in ('monitor.py', 'start.py', 'topcec_gui.py',
-                         'activity.js', 'firefox.js', 'topcec.qml'):
+                         'activity.js', 'firefox.js', 'topcec.qml', 'equipment.py'):
                 self.assertTrue((app_dir / 'cec-tv' / name).is_file())
             self.assertTrue(os.access(app_dir / 'cec-tv/start.py', os.X_OK))
             self.assertIn('%h/.local/share/topcec/cec-tv/start.py',
@@ -89,6 +89,7 @@ class UserPackagingChecks(unittest.TestCase):
             self.assertEqual(custom_file.read_text(encoding='utf-8'), 'keep')
             self.assertFalse((bin_dir / 'topcec-gui').exists())
             self.assertFalse((unit_dir / 'topcec.service').exists())
+            self.assertFalse((app_dir / 'cec-tv/equipment.py').exists())
             self.assertFalse(icon_path.exists())
             self.assertFalse(desktop_path.exists())
             self.assertFalse(native_manifest.exists())
@@ -103,6 +104,8 @@ class UserPackagingChecks(unittest.TestCase):
         self.assertIn('License:        GPL-3.0-or-later', spec)
         self.assertIn('%{_userunitdir}/topcec.service', spec)
         self.assertIn('%{_topcec_appdir}/cec-tv/monitor.py', spec)
+        self.assertIn('%{_topcec_appdir}/cec-tv/equipment.py', spec)
+        self.assertIn('equipment.py', builder)
         self.assertIn('%files gui', spec)
         self.assertIn('%{_datadir}/icons/hicolor/scalable/apps/net.local.topcec.svg', spec)
         self.assertIn('%{_datadir}/applications/net.local.topcec.desktop', spec)
