@@ -18,7 +18,7 @@ from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 
 from configuration import (
-    DEFAULT_CONFIG, default_config_path, load_config, save_config,
+    DEFAULT_CONFIG, SCHEMA_VERSION, default_config_path, load_config, save_config,
     validate_config,
 )
 
@@ -685,7 +685,11 @@ class GuiBackend(QObject):
             result = json.loads(str(reply.arguments()[0]))
             if not isinstance(result, dict) or result.get('accepted') is not True:
                 raise ValueError('Host did not confirm that settings were saved')
-            saved = validate_config(result['config'])
+            config = result['config']
+            # Older hosts returned the complete configuration without its version.
+            if isinstance(config, dict) and config.keys() == DEFAULT_CONFIG.keys():
+                config = {'schema_version': SCHEMA_VERSION, **config}
+            saved = validate_config(config)
         except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             self._action_message = 'Could not confirm saved settings: ' + str(error)
             self.changed.emit()

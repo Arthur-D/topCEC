@@ -111,7 +111,7 @@ class GuiChecks(unittest.TestCase):
                 self.assertEqual(paths.property('text'), '/dev/input/event10\n/dev/input/by-id/mouse')
                 backend._name_owner_changed(topcec_gui.SERVICE, ':1.10', '')
                 backend._name_owner_changed(topcec_gui.SERVICE, '', ':1.11')
-                callback(self.reply({'accepted': True, 'config': {'schema_version': 1, **saved}}))
+                callback(self.reply({'accepted': True, 'config': saved}))
                 backend._config_reply(old_generation, self.reply(initial))
                 self.assertEqual(backend.config['devices'], saved['devices'])
             self.assertFalse(window.property('settingsDirty'))
