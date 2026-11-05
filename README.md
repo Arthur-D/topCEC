@@ -331,6 +331,13 @@ host terminal and run it yourself; `YOUR_USERNAME` is replaced with the backend
 account name in the GUI. This command works with fish as well as Bash. It needs
 administrator authorization and is never executed by the GUI.
 
+On Atomic desktops such as Bazzite, `input` may exist only in `/usr/lib/group`.
+In that case `usermod` alone does not persist membership, even after reboot.
+The host detects this layout and offers a `sudo sh -c ...` command that first
+copies the vendor `input` entry to `/etc/group` if missing, then runs `usermod`.
+The check is repeated when the command runs, so rerunning it does not append
+a duplicate group. Run it in a host terminal, outside Toolbox/Distrobox.
+
 Membership in `input` grants access to keyboard and other input events, not just
 the selected device. Consider scoped device permissions with your administrator
 instead if that broad access is inappropriate. Fully log out and back in so the
