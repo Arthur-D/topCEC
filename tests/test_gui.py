@@ -61,8 +61,8 @@ class GuiChecks(unittest.TestCase):
             window.show()
             paths = window.findChild(QObject, 'devicesField')
             inventory = {
-                'outputs': [{'path': DEFAULT_CONFIG['target_output'], 'label': 'TV'}],
-                'adapters': [{'path': DEFAULT_CONFIG['cec_port'], 'label': 'CEC'}],
+                'outputs': [{'path': 'eDP-1', 'label': 'Laptop display'}],
+                'adapters': [],
                 'inputs': [
                     {'path': '/dev/input/by-path/keyboard', 'label': 'Keyboard',
                      'aliases': ['/dev/input/event10']},
@@ -95,10 +95,14 @@ class GuiChecks(unittest.TestCase):
                     patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
                                  requests.append((method, callback, args))), \
                     patch.object(backend, 'refresh'):
-                QMetaObject.invokeMethod(window.findChild(QObject, 'saveSettingsButton'), 'clicked')
+                save = window.findChild(QObject, 'saveSettingsButton')
+                self.assertTrue(save.property('enabled'))
+                QMetaObject.invokeMethod(save, 'clicked')
                 method, callback, arguments = requests.pop()
                 self.assertEqual(method, 'ApplySettings')
                 submitted = json.loads(arguments[0])
+                self.assertEqual(submitted['target_output'], initial['target_output'])
+                self.assertEqual(submitted['cec_port'], initial['cec_port'])
                 self.assertEqual(submitted['devices'],
                                  ['/dev/input/by-path/keyboard', '/dev/input/by-id/mouse'])
                 saved = save_config(host_path, submitted)
@@ -191,6 +195,26 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(window.findChild(QObject, 'adapterField').property('currentIndex'), -1)
         self.assertFalse(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
         self.assertEqual(backend.config['devices'], DEFAULT_CONFIG['devices'])
+
+        # A first input save can use the existing runtime settings without
+        # preselecting a display or requiring an attached CEC adapter.
+        keyboard_path = '/dev/input/by-id/keyboard'
+        backend._equipment_reply(0, self.reply({
+            'outputs': [{'path': 'eDP-1', 'label': 'Laptop display'}],
+            'adapters': [],
+            'inputs': [{'path': keyboard_path, 'label': 'Keyboard'}],
+            'errors': []}))
+        keyboard = self.input_choice(engine, window, keyboard_path)
+        keyboard.setProperty('checked', True)
+        QMetaObject.invokeMethod(keyboard, 'toggled')
+        save = window.findChild(QObject, 'saveSettingsButton')
+        self.assertTrue(save.property('enabled'))
+        with patch.object(backend, 'applySettings') as apply:
+            QMetaObject.invokeMethod(save, 'clicked')
+        values = apply.call_args.args[0]
+        self.assertEqual(values['targetOutput'], DEFAULT_CONFIG['target_output'])
+        self.assertEqual(values['adapter'], DEFAULT_CONFIG['cec_port'])
+        self.assertEqual(values['devices'], keyboard_path)
         engine.deleteLater()
 
     def test_compact_input_chooser_bounds_keyboard_scrolling_and_copy(self):
