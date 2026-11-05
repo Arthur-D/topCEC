@@ -77,7 +77,7 @@ Kirigami.ApplicationWindow {
         if (selected)
             paths.push(device.path)
         devicesField.text = paths.join("\n")
-        settingsDirty = true
+        topcec.rememberInputDraft(root.savedInputPaths())
     }
 
     component SelectableLabel: Controls.TextArea {
@@ -635,7 +635,7 @@ Kirigami.ApplicationWindow {
                     }
                     SelectableLabel {
                         Layout.fillWidth: true
-                        text: "Select detected devices to monitor, then save below. Detected selections are saved using stable paths when available. Detection does not guarantee read access."
+                        text: "Input selections save automatically and restart the service. Stable device paths are used when available."
                     }
                     SelectableLabel {
                         objectName: "retainedInputs"

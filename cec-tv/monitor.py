@@ -870,7 +870,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         ecodes, args.axis_deadzone_percent, args.rz_deadzone_percent)
 
     try:
-        for path in dict.fromkeys(args.device or DEFAULT_CONFIG['devices']):
+        for path in dict.fromkeys(DEFAULT_CONFIG['devices'] if args.device is None else args.device):
             device = InputDevice(path)
             try:
                 axes = activity_provider.seed(device)

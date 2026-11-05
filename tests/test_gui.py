@@ -27,6 +27,39 @@ from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    def test_auto_input_save_queues_latest_selection_and_preserves_other_settings(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        self.autosave_patch.stop()
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend.config['timeout_seconds'] = 73
+        requests = []
+        interface = Mock()
+        interface.isValid.return_value = True
+        with patch.object(backend, '_service_interface', return_value=interface), \
+                patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                             requests.append((callback, json.loads(args[0])))), \
+                patch.object(backend, 'refresh'):
+            backend.rememberInputDraft('/dev/input/keyboard')
+            backend.rememberInputDraft('/dev/input/keyboard\n/dev/input/mouse')
+            self.assertEqual(len(requests), 1)
+            callback, first = requests.pop()
+            self.assertEqual(first['timeout_seconds'], 73)
+            self.assertEqual(first['cec_enabled'], DEFAULT_CONFIG['cec_enabled'])
+            callback(self.reply({'accepted': True, 'config': first}))
+            self.assertTrue(backend.hasInputDraft())
+            backend._save_pending_inputs()
+            callback, second = requests.pop()
+            self.assertEqual(second['devices'], ['/dev/input/keyboard', '/dev/input/mouse'])
+            callback(self.reply({'accepted': True, 'config': second}))
+            self.assertFalse(backend.hasInputDraft())
+            backend.rememberInputDraft('')
+            callback, empty = requests.pop()
+            self.assertEqual(empty['devices'], [])
+            callback(self.reply({'accepted': True, 'config': empty}))
+            self.assertFalse(backend.hasInputDraft())
+            self.assertEqual(backend.deviceList(), '')
+
     @staticmethod
     def reply(value):
         return SimpleNamespace(
@@ -82,7 +115,7 @@ class GuiChecks(unittest.TestCase):
             self.assertTrue(mouse.property('checked'))
             self.assertTrue(mouse.property('activeFocus'))
             self.assertIs(self.input_choice(engine, window, '/dev/input/by-id/mouse'), mouse)
-            self.assertIn('Unsaved changes', window.findChild(QObject, 'settingsSaveStatus').property('text'))
+            self.assertTrue(backend.hasInputDraft())
 
             # Model a pre-save GetConfig already in flight, then the host's real
             # atomic persistence and an owner change before its save reply arrives.
@@ -698,7 +731,7 @@ class GuiChecks(unittest.TestCase):
             existing.setProperty('checked', False)
             QMetaObject.invokeMethod(existing, 'toggled')
             self.assertNotIn('/dev/input/event10', devices.property('text'))
-            self.assertTrue(window.property('settingsDirty'))
+            self.assertTrue(backend.hasInputDraft())
             app.processEvents()
             available = QQmlExpression(
                 engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
@@ -980,6 +1013,18 @@ class GuiChecks(unittest.TestCase):
         self.assertIsNotNone(app)
 
     def setUp(self):
+        preferences = tempfile.TemporaryDirectory()
+        self.addCleanup(preferences.cleanup)
+        config_path = patch.object(topcec_gui, 'default_config_path',
+                                   return_value=Path(preferences.name) / 'config.json')
+        config_path.start()
+        self.addCleanup(config_path.stop)
+        # Form tests control save acknowledgements explicitly.
+        autosave = patch.object(GuiBackend, '_save_pending_inputs')
+        autosave.start()
+        self.autosave_patch = autosave
+        self.addCleanup(autosave.stop)
+
         self.config = DEFAULT_CONFIG.copy()
         self.values = {
             'targetOutput': 'HDMI-A-2',
@@ -1013,8 +1058,8 @@ class GuiChecks(unittest.TestCase):
     def test_invalid_settings_are_rejected(self):
         with self.assertRaises(ValueError):
             config_from_settings(self.config, {**self.values, 'timeoutMode': 'other'})
-        with self.assertRaises(ValueError):
-            config_from_settings(self.config, {**self.values, 'devices': ''})
+        self.assertEqual(config_from_settings(
+            self.config, {**self.values, 'devices': ''})['devices'], [])
 
     def test_manual_on_is_allowed_during_failsafe(self):
         power = SimpleNamespace(
