@@ -21,7 +21,8 @@ Kirigami.ApplicationWindow {
         }
         for (let value of values) {
             if (value.length && !choices.some(item => item.path === value))
-                choices.push({path: value, label: value + " (unavailable / not detected)", available: false})
+                choices.push({path: value, label: value + (topcec.equipmentAvailabilityKnown
+                    ? " (unavailable / not detected)" : " (availability unknown)"), available: false})
         }
         return choices
     }
@@ -114,6 +115,7 @@ Kirigami.ApplicationWindow {
 
     component EquipmentSelector: CopyableComboBox {
         property var equipment: []
+        property bool availabilityKnown: topcec.equipmentAvailabilityKnown
         property bool syncing: false
         editable: true
         textRole: "label"
@@ -125,6 +127,7 @@ Kirigami.ApplicationWindow {
             syncing = false
         }
         onEquipmentChanged: synchronize(editText)
+        onAvailabilityKnownChanged: synchronize(editText)
         onActivated: {
             editText = model[index].path
             root.settingsDirty = true
@@ -183,6 +186,32 @@ Kirigami.ApplicationWindow {
             objectName: "pageContent"
             width: parent.width
             spacing: Kirigami.Units.largeSpacing
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: topcec.equipmentRecoveryCommands.length > 0
+                SelectableLabel {
+                    Layout.fillWidth: true
+                    text: topcec.compatibilityMessage
+                }
+                SelectableLabel {
+                    Layout.fillWidth: true
+                    text: "Open a host terminal in your existing official topCEC checkout's repository root on main, then run this command. It stops if the directory, branch or origin is wrong, or if updating or installing fails. Your settings are preserved; the service restarts after installation."
+                }
+                Controls.TextArea {
+                    objectName: "equipmentRecoveryCommands"
+                    Layout.fillWidth: true
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: TextEdit.WrapAnywhere
+                    text: topcec.equipmentRecoveryCommands
+                }
+                CopyableButton {
+                    objectName: "copyEquipmentRecoveryCommands"
+                    text: "Copy host update command"
+                    onClicked: topcec.copyText(topcec.equipmentRecoveryCommands)
+                }
+            }
 
             StackLayout {
                 Layout.fillWidth: true
@@ -402,7 +431,7 @@ Kirigami.ApplicationWindow {
                     }
                     SelectableLabel {
                         Layout.fillWidth: true
-                        text: "Choose your equipment below. Unavailable selections are retained until you change them; nothing is selected automatically."
+                        text: "Choose your equipment below. Existing selections are retained until you change them; nothing is selected automatically."
                     }
                     SelectableLabel {
                         Layout.fillWidth: true
@@ -419,7 +448,9 @@ Kirigami.ApplicationWindow {
                     SelectableLabel {
                         Layout.fillWidth: true
                         text: outputField.equipment.some(item => item.path === outputField.editText)
-                            ? "Display detected." : "Selected display unavailable / not detected. Choose a connected display or enter a KWin output name manually."
+                            ? "Display detected." : (topcec.equipmentAvailabilityKnown
+                                ? "Selected display unavailable / not detected. Choose a connected display or enter a KWin output name manually."
+                                : "Selected display availability unknown. Discovery is unavailable or incomplete; you can still enter a KWin output name manually.")
                     }
 
                     SelectableLabel { text: "CEC adapter" }
@@ -432,7 +463,9 @@ Kirigami.ApplicationWindow {
                     SelectableLabel {
                         Layout.fillWidth: true
                         text: adapterField.equipment.some(item => item.path === adapterField.editText)
-                            ? "CEC adapter detected." : "Selected adapter unavailable / not detected. Choose a connected adapter or enter its path manually."
+                            ? "CEC adapter detected." : (topcec.equipmentAvailabilityKnown
+                                ? "Selected adapter unavailable / not detected. Choose a connected adapter or enter its path manually."
+                                : "Selected adapter availability unknown. Discovery is unavailable or incomplete; you can still enter its path manually.")
                     }
 
                     SelectableLabel { text: "Inactivity timeout" }

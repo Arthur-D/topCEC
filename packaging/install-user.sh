@@ -49,3 +49,6 @@ printf 'Config is preserved separately at %s/topcec/config.json\n' \
     "${XDG_CONFIG_HOME:-$HOME_DIR/.config}"
 printf 'Configure settings with topcec-gui, then enable with:\n'
 printf '  systemctl --user enable --now topcec.service\n'
+printf 'If updating an already-running backend, daemon-reload does not reload its code.\n'
+printf 'Restart it explicitly after installation:\n'
+printf '  systemctl --user restart topcec.service\n'

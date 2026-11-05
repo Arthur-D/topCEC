@@ -26,6 +26,18 @@ SERVICE = 'net.local.CecActivity'
 OBJECT = '/net/local/CecActivity'
 INTERFACE = 'net.local.CecActivity'
 APP_ID = 'net.local.topcec'
+HOST_UPDATE_COMMAND = (
+    "bash -c 'set -e; "
+    'prefix=$(git rev-parse --show-prefix) && test "$prefix" = "" && '
+    'test "$(git branch --show-current)" = main && '
+    'test -f packaging/install-user.sh || '
+    '{ echo "Run this command from the official topCEC repository root on main." >&2; exit 1; }; '
+    'case "$(git remote get-url origin)" in '
+    'https://github.com/Arthur-D/topCEC|https://github.com/Arthur-D/topCEC.git|'
+    'git@github.com:Arthur-D/topCEC.git) ;; '
+    '*) echo "Expected the official Arthur-D/topCEC origin; no changes made." >&2; exit 1 ;; esac; '
+    "git pull --ff-only origin main; bash packaging/install-user.sh; systemctl --user restart topcec.service'"
+)
 
 
 def application_icon():
@@ -107,6 +119,8 @@ class GuiBackend(QObject):
         self._simulation_mode = False
         self._service_data = {}
         self._equipment = {'outputs': [], 'adapters': [], 'inputs': []}
+        self._equipment_known = False
+        self._missing_capabilities = set()
         self._equipment_message = (
             'Equipment has not been reported by the host. Configured values may '
             'be saved settings or defaults; they are not proof of detection.')
@@ -231,11 +245,46 @@ class GuiBackend(QObject):
     def equipmentMessage(self):
         return self._equipment_message
 
+    @Property(bool, notify=equipmentChanged)
+    def equipmentAvailabilityKnown(self):
+        return self._equipment_known
+
+    @Property(str, notify=equipmentChanged)
+    def equipmentRecoveryCommands(self):
+        return HOST_UPDATE_COMMAND if self._missing_capabilities else ''
+
+    @Property(str, notify=equipmentChanged)
+    def compatibilityMessage(self):
+        return (
+            'The running host backend lacks required GUI capabilities: '
+            + ', '.join(sorted(self._missing_capabilities)) +
+            '. Update the host installation and restart the service. '
+            'Updating only Flatpak is insufficient.'
+            if self._missing_capabilities else '')
+
+    def _capability_error(self, method, reply):
+        error = self._reply_error(reply)
+        missing = set(self._missing_capabilities)
+        if error is not None and reply.errorName() == 'org.freedesktop.DBus.Error.UnknownMethod':
+            missing.add(method)
+            error = (
+                'The running host backend does not support ' + method +
+                '. Update the host backend and restart topcec.service.')
+        elif error is None:
+            missing.discard(method)
+        if missing != self._missing_capabilities:
+            self._missing_capabilities = missing
+            self.equipmentChanged.emit()
+        return error
+
     def _set_equipment(self, equipment, message):
+        known = equipment is not None and not equipment.get('errors')
         equipment = equipment or {'outputs': [], 'adapters': [], 'inputs': []}
-        if equipment != self._equipment or message != self._equipment_message:
+        if (equipment != self._equipment or message != self._equipment_message
+                or known != self._equipment_known):
             self._equipment = equipment
             self._equipment_message = message
+            self._equipment_known = known
             self.equipmentChanged.emit()
 
     @Slot(str, result='QVariant')
@@ -291,6 +340,7 @@ class GuiBackend(QObject):
         self._refresh_generation += 1
         self._refresh_in_flight = False
         self._service_data = {}
+        self._missing_capabilities.clear()
         self._set_equipment(None, 'Host equipment inventory will refresh after reconnection.')
         self._power_state = 'unavailable'
         if self._action_message == 'Saving settings through the host service.':
@@ -427,7 +477,7 @@ class GuiBackend(QObject):
     def _status_reply(self, generation, interface, reply):
         if generation != self._refresh_generation:
             return
-        error = self._reply_error(reply)
+        error = self._capability_error('GetStatus', reply)
         if error:
             self._connection_failed(generation, error)
             return
@@ -445,7 +495,7 @@ class GuiBackend(QObject):
     def _config_reply(self, generation, reply, interface=None):
         if generation != self._refresh_generation:
             return
-        error = self._reply_error(reply)
+        error = self._capability_error('GetConfig', reply)
         if error:
             self._connection_failed(
                 generation, 'Cannot read service configuration: ' + error)
@@ -494,12 +544,23 @@ class GuiBackend(QObject):
         if generation != self._refresh_generation:
             return
         self._refresh_in_flight = False
-        error = self._reply_error(reply)
+        error = self._capability_error('GetEquipment', reply)
         if error:
-            self._set_equipment(None,
-                'Host equipment discovery is unavailable: ' + error +
-                '. Update the host backend if it lacks GetEquipment. '
-                'Configured values remain editable and are not detected equipment.')
+            error_name = reply.errorName()
+            if error_name == 'org.freedesktop.DBus.Error.UnknownMethod':
+                self._set_equipment(None,
+                    'The running host backend does not support equipment discovery. '
+                    'Update the host backend and restart topcec.service. '
+                    'Updating only the Flatpak or reloading systemd does not update '
+                    'the running backend. Equipment availability is unknown; '
+                    'your settings remain editable.')
+            else:
+                print('Host equipment discovery failed: ' + error, file=sys.stderr)
+                self._set_equipment(None,
+                    'Host equipment discovery could not be read'
+                    + (' (' + error_name + ')' if error_name else '') +
+                    '. Equipment availability is unknown. Check the host service '
+                    'logs and retry; your settings remain editable.')
             return
         try:
             equipment = json.loads(str(reply.arguments()[0]))
@@ -522,8 +583,9 @@ class GuiBackend(QObject):
         else:
             self._set_equipment(equipment,
                 'Equipment refreshes automatically from the host. '
-                'Unavailable selections are retained, not replaced. ' +
-                ('Discovery diagnostics: ' + '; '.join(errors) if errors else
+                'Your selections are retained, not replaced. ' +
+                ('Undetected equipment has unknown availability because discovery '
+                 'did not complete successfully. Discovery diagnostics: ' + '; '.join(errors) if errors else
                  'An empty list means no equipment was detected by that discovery method.'))
 
     @Slot()
@@ -586,7 +648,7 @@ class GuiBackend(QObject):
     def _power_reply(self, generation, description, reply):
         if generation != self._refresh_generation:
             return
-        error = self._reply_error(reply)
+        error = self._capability_error('RequestPower', reply)
         self._action_message = (
             'Request queued: TV ' + description if error is None
             else 'Request rejected: ' + error)
@@ -595,7 +657,7 @@ class GuiBackend(QObject):
     def _settings_reply(self, generation, validated, reply):
         if generation != self._refresh_generation:
             return
-        error = self._reply_error(reply)
+        error = self._capability_error('ApplySettings', reply)
         if error:
             self._action_message = 'Could not apply settings: ' + error
             self.changed.emit()

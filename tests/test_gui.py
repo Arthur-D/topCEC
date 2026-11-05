@@ -27,6 +27,137 @@ from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    def test_missing_required_capabilities_show_update_without_guessing_from_transport_errors(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        methods = ('GetStatus', 'GetConfig', 'GetEquipment', 'ApplySettings', 'RequestPower')
+        for method in methods:
+            for error_name in ('org.freedesktop.DBus.Error.UnknownMethod',
+                               'org.freedesktop.DBus.Error.NoReply',
+                               'org.freedesktop.DBus.Error.AccessDenied'):
+                with self.subTest(method=method, error=error_name):
+                    backend = GuiBackend(dbus_only=True)
+                    backend._connection_state = 'connected'
+                    backend._service_status = 'running'
+                    original = dict(backend.config)
+                    reply = topcec_gui.QDBusMessage.createError(error_name, 'failed')
+                    if method == 'GetStatus':
+                        backend._status_reply(0, Mock(), reply)
+                    elif method == 'GetConfig':
+                        backend._config_reply(0, reply)
+                    elif method == 'GetEquipment':
+                        with patch.object(topcec_gui.sys, 'stderr'):
+                            backend._equipment_reply(0, reply)
+                    elif method == 'ApplySettings':
+                        backend._settings_reply(0, {**original, 'target_output': 'DRAFT'}, reply)
+                    else:
+                        backend._power_reply(0, 'on', reply)
+                    self.assertEqual(backend.config, original)
+                    missing = error_name.endswith('.UnknownMethod')
+                    self.assertEqual(bool(backend.equipmentRecoveryCommands), missing)
+                    self.assertEqual(bool(backend.compatibilityMessage), missing)
+                    if missing:
+                        self.assertIn(method, backend.compatibilityMessage)
+                        # The shared update panel remains accessible even if status
+                        # or configuration capabilities force the setup view.
+                        engine = QQmlApplicationEngine()
+                        engine.rootContext().setContextProperty('topcec', backend)
+                        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+                        window = engine.rootObjects()[0]
+                        copy = window.findChild(QObject, 'copyEquipmentRecoveryCommands')
+                        self.assertTrue(copy.property('visible'))
+                        engine.deleteLater()
+                        backend._capability_error(method, topcec_gui.QDBusMessage())
+                        self.assertEqual(backend.equipmentRecoveryCommands, '')
+
+    def test_old_backend_and_discovery_failure_mean_unknown_not_missing_hardware(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        self.addCleanup(app.clipboard().setText, app.clipboard().text())
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        output = window.findChild(QObject, 'outputField')
+        adapter = window.findChild(QObject, 'adapterField')
+        devices = window.findChild(QObject, 'devicesField')
+        repeater = window.findChild(QObject, 'inputChoices')
+        engine.rootContext().setContextProperty('choices', repeater)
+        configured = dict(backend.config)
+        output.setProperty('editText', 'DRAFT-OUTPUT')
+        adapter.setProperty('editText', '/dev/manual-CEC')
+        window.setProperty('settingsDirty', True)
+        original_devices = devices.property('text')
+        traceback = (
+            'Traceback (most recent call last):\n'
+            'File "/usr/lib64/python3.15/site-packages/dbus/service.py", line 659\n'
+            'dbus.exceptions.UnknownMethodException: Unknown method: GetEquipment '
+            'is not a valid method of interface net.local.CecActivity')
+        backend._equipment_reply(0, topcec_gui.QDBusMessage.createError(
+            'org.freedesktop.DBus.Error.UnknownMethod', traceback))
+        app.processEvents()
+        self.assertIn('running host backend does not support', backend.equipmentMessage)
+        self.assertNotIn('Traceback', backend.equipmentMessage)
+        self.assertNotIn('/usr/lib64', backend.equipmentMessage)
+        self.assertIn('availability is unknown', backend.equipmentMessage)
+        self.assertFalse(backend.equipmentAvailabilityKnown)
+        self.assertIn('availability unknown', output.property('currentText'))
+        self.assertIn('availability unknown', adapter.property('currentText'))
+        input_choice = QQmlExpression(
+            engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
+        self.assertIn('availability unknown', input_choice.property('text'))
+        commands = window.findChild(QObject, 'equipmentRecoveryCommands')
+        copy = window.findChild(QObject, 'copyEquipmentRecoveryCommands')
+        self.assertTrue(commands.property('visible'))
+        self.assertTrue(commands.property('selectByMouse'))
+        self.assertTrue(commands.property('readOnly'))
+        self.assertEqual(commands.property('text'), topcec_gui.HOST_UPDATE_COMMAND)
+        self.assertEqual(len(commands.property('text').splitlines()), 1)
+        with patch.object(topcec_gui.subprocess, 'run',
+                          side_effect=AssertionError('copy must not execute commands')):
+            QMetaObject.invokeMethod(copy, 'clicked')
+        self.assertEqual(app.clipboard().text(), commands.property('text'))
+
+        def inventory(errors):
+            backend._equipment_reply(0, SimpleNamespace(
+                type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+                arguments=lambda: [json.dumps({
+                    'outputs': [], 'adapters': [], 'inputs': [], 'errors': errors,
+                })]))
+            app.processEvents()
+
+        inventory([])
+        self.assertTrue(backend.equipmentAvailabilityKnown)
+        self.assertIn('not detected', output.property('currentText'))
+        self.assertFalse(copy.property('visible'))
+        self.assertEqual(backend.equipmentRecoveryCommands, '')
+        inventory(['Display discovery: compositor not responding'])
+        self.assertFalse(backend.equipmentAvailabilityKnown)
+        self.assertIn('availability unknown', output.property('currentText'))
+        self.assertIn('availability unknown', adapter.property('currentText'))
+        input_choice = QQmlExpression(
+            engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
+        self.assertIn('availability unknown', input_choice.property('text'))
+        self.assertIn('compositor not responding', backend.equipmentMessage)
+        self.assertNotIn('An empty list means no equipment', backend.equipmentMessage)
+        with patch.object(topcec_gui.sys, 'stderr') as diagnostic_log:
+            backend._equipment_reply(0, topcec_gui.QDBusMessage.createError(
+                'org.freedesktop.DBus.Error.NoReply', 'Traceback: unexpected internal error'))
+        self.assertIn('unexpected internal error', ''.join(
+            call.args[0] for call in diagnostic_log.write.call_args_list))
+        self.assertNotIn('Traceback', backend.equipmentMessage)
+        self.assertIn('NoReply', backend.equipmentMessage)
+        self.assertFalse(backend.equipmentAvailabilityKnown)
+        self.assertEqual(output.property('editText'), 'DRAFT-OUTPUT')
+        self.assertEqual(adapter.property('editText'), '/dev/manual-CEC')
+        self.assertEqual(devices.property('text'), original_devices)
+        self.assertEqual(backend.config, configured)
+        self.assertTrue(window.property('settingsDirty'))
+        self.assertTrue(backend.settingsEnabled)
+        self.assertEqual(backend.connectionState, 'connected')
+        engine.deleteLater()
+
     def test_detected_equipment_choices_preserve_manual_config_and_drafts(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
@@ -89,6 +220,7 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(backend.config, original_config)
         backend._equipment_reply(0, SimpleNamespace(
             type=lambda: topcec_gui.QDBusMessage.MessageType.ErrorMessage,
+            errorName=lambda: 'org.freedesktop.DBus.Error.UnknownMethod',
             errorMessage=lambda: 'Unknown method GetEquipment'))
         self.assertIn('Update the host backend', backend.equipmentMessage)
         self.assertTrue(backend.settingsEnabled)
@@ -190,6 +322,7 @@ class GuiChecks(unittest.TestCase):
                     type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
                     arguments=lambda: [json.dumps(data)]))
                 self.assertIn('Invalid host equipment response', backend.equipmentMessage)
+                self.assertFalse(backend.equipmentAvailabilityKnown)
                 self.assertEqual(backend.config, config)
                 self.assertTrue(backend.settingsEnabled)
         inventory = {
@@ -363,7 +496,7 @@ class GuiChecks(unittest.TestCase):
         self.assertNotIn('topCEC Backend Not Available', text)
         self.assertFalse(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
         for path in backend.config['devices']:
-            self.assertIn(path + ' (unavailable / not detected)', text)
+            self.assertIn(path + ' (availability unknown)', text)
         engine.deleteLater()
 
     class FakeWatcher:
