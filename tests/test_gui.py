@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from PySide6.QtCore import QMetaObject, QObject, QPointF, Qt, QUrl, QStandardPaths, SIGNAL
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QAccessible, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine, QQmlExpression
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtQuick import QQuickItem
@@ -20,13 +20,269 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'cec-tv'))
 
 from cec_power_state import CecPowerStateMachine
-from configuration import DEFAULT_CONFIG, validate_config
+from configuration import DEFAULT_CONFIG, load_config, save_config, validate_config
 from monitor import request_manual_power
 import topcec_gui
 from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    @staticmethod
+    def reply(value):
+        return SimpleNamespace(
+            type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
+            arguments=lambda: [json.dumps(value)])
+
+    @staticmethod
+    def input_choice(engine, window, path):
+        repeater = window.findChild(QObject, 'inputChoices')
+        engine.rootContext().setContextProperty('inputRepeater', repeater)
+        for index in range(repeater.property('count')):
+            item = QQmlExpression(
+                engine.rootContext(), window, f'inputRepeater.itemAt({index})').evaluate()[0]
+            if item.objectName() == 'inputChoice:' + path:
+                return item
+        raise AssertionError('Input choice not found: ' + path)
+
+    def test_input_selection_save_restart_alias_change_and_hotplug_end_to_end(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        with tempfile.TemporaryDirectory() as directory:
+            host_path = Path(directory) / 'host' / 'config.json'
+            initial = {'schema_version': 1, **DEFAULT_CONFIG,
+                       'devices': ['/dev/input/event10']}
+            save_config(host_path, initial)
+            backend = GuiBackend(dbus_only=True)
+            backend._service_data = {'service': 'running', 'configuration_saved': True}
+            backend._config_reply(0, self.reply(initial))
+            engine = QQmlApplicationEngine()
+            engine.rootContext().setContextProperty('topcec', backend)
+            engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+            window = engine.rootObjects()[0]
+            window.show()
+            paths = window.findChild(QObject, 'devicesField')
+            inventory = {
+                'outputs': [{'path': DEFAULT_CONFIG['target_output'], 'label': 'TV'}],
+                'adapters': [{'path': DEFAULT_CONFIG['cec_port'], 'label': 'CEC'}],
+                'inputs': [
+                    {'path': '/dev/input/by-path/keyboard', 'label': 'Keyboard',
+                     'aliases': ['/dev/input/event10']},
+                    {'path': '/dev/input/by-id/mouse', 'label': 'Mouse',
+                     'aliases': ['/dev/input/event20']}],
+                'errors': [],
+            }
+            backend._equipment_reply(0, self.reply(inventory))
+            window.findChild(QObject, 'inputChooserToggle').setProperty('checked', True)
+            app.processEvents()
+            keyboard = self.input_choice(engine, window, '/dev/input/by-path/keyboard')
+            mouse = self.input_choice(engine, window, '/dev/input/by-id/mouse')
+            self.assertTrue(keyboard.property('checked'))
+            self.assertFalse(mouse.property('checked'))
+            QMetaObject.invokeMethod(mouse, 'forceActiveFocus')
+            QTest.keyClick(window, Qt.Key.Key_Space)
+            self.assertTrue(mouse.property('checked'))
+            self.assertTrue(mouse.property('activeFocus'))
+            self.assertIs(self.input_choice(engine, window, '/dev/input/by-id/mouse'), mouse)
+            self.assertIn('Unsaved changes', window.findChild(QObject, 'settingsSaveStatus').property('text'))
+
+            # Model a pre-save GetConfig already in flight, then the host's real
+            # atomic persistence and an owner change before its save reply arrives.
+            old_generation = backend._refresh_generation
+            backend._refresh_in_flight = True
+            requests = []
+            interface = Mock()
+            interface.isValid.return_value = True
+            with patch.object(backend, '_service_interface', return_value=interface), \
+                    patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                                 requests.append((method, callback, args))), \
+                    patch.object(backend, 'refresh'):
+                QMetaObject.invokeMethod(window.findChild(QObject, 'saveSettingsButton'), 'clicked')
+                method, callback, arguments = requests.pop()
+                self.assertEqual(method, 'ApplySettings')
+                submitted = json.loads(arguments[0])
+                self.assertEqual(submitted['devices'],
+                                 ['/dev/input/by-path/keyboard', '/dev/input/by-id/mouse'])
+                saved = save_config(host_path, submitted)
+                self.assertFalse(backend.settingsEnabled)
+                backend._config_reply(old_generation, self.reply(initial))
+                self.assertEqual(paths.property('text'), '/dev/input/event10\n/dev/input/by-id/mouse')
+                backend._name_owner_changed(topcec_gui.SERVICE, ':1.10', '')
+                backend._name_owner_changed(topcec_gui.SERVICE, '', ':1.11')
+                callback(self.reply({'accepted': True, 'config': {'schema_version': 1, **saved}}))
+                backend._config_reply(old_generation, self.reply(initial))
+                self.assertEqual(backend.config['devices'], saved['devices'])
+            self.assertFalse(window.property('settingsDirty'))
+            self.assertEqual(paths.property('text'), '\n'.join(saved['devices']))
+            self.assertEqual(load_config(host_path)['devices'], saved['devices'])
+
+            # A new GUI reads the freshly started backend's stored configuration.
+            fresh = GuiBackend(dbus_only=True)
+            fresh._service_data = {'service': 'running', 'configuration_saved': True}
+            fresh._config_reply(0, self.reply({'schema_version': 1, **load_config(host_path)}))
+            fresh_engine = QQmlApplicationEngine()
+            fresh_engine.rootContext().setContextProperty('topcec', fresh)
+            fresh_engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+            fresh_window = fresh_engine.rootObjects()[0]
+            # A by-id alias now exists, event numbers changed, and event10 is audio.
+            changed = {**inventory, 'inputs': [
+                {'path': '/dev/input/by-id/keyboard', 'label': 'Keyboard',
+                 'aliases': ['/dev/input/by-path/keyboard', '/dev/input/event7']},
+                {'path': '/dev/input/by-id/mouse', 'label': 'Mouse',
+                 'aliases': ['/dev/input/event8']},
+                {'path': '/dev/input/event10', 'label': 'Audio', 'aliases': []}]}
+            fresh._equipment_reply(0, self.reply(changed))
+            self.assertTrue(self.input_choice(fresh_engine, fresh_window, '/dev/input/by-id/keyboard').property('checked'))
+            self.assertTrue(self.input_choice(fresh_engine, fresh_window, '/dev/input/by-id/mouse').property('checked'))
+            self.assertFalse(self.input_choice(fresh_engine, fresh_window, '/dev/input/event10').property('checked'))
+            retained = fresh_window.findChild(QObject, 'devicesField').property('text')
+            fresh._equipment_reply(0, self.reply({**changed, 'inputs': []}))
+            self.assertEqual(fresh_window.findChild(QObject, 'inputChoices').property('count'), 0)
+            self.assertEqual(fresh_window.findChild(QObject, 'devicesField').property('text'), retained)
+            self.assertIn('unlisted', fresh_window.findChild(QObject, 'selectedInputSummary').property('text'))
+            fresh._equipment_reply(0, self.reply(changed))
+            self.assertTrue(self.input_choice(fresh_engine, fresh_window, '/dev/input/by-id/keyboard').property('checked'))
+            self.assertEqual(load_config(host_path)['devices'], saved['devices'])
+            fresh_engine.deleteLater()
+            engine.deleteLater()
+
+    def test_save_confirmation_errors_and_new_drafts_are_not_discarded(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.setProperty('settingsDirty', True)
+        original = dict(backend.config)
+        for payload in ({}, {'accepted': False}, {'accepted': True, 'config': {}}):
+            backend._settings_reply(0, self.reply(payload))
+            self.assertIn('Could not confirm', backend.actionMessage)
+            self.assertTrue(window.property('settingsDirty'))
+            self.assertEqual(backend.config, original)
+        draft = window.findChild(QObject, 'devicesField')
+        signature = QQmlExpression(engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0]
+        window.setProperty('submittedSettings', signature)
+        draft.setProperty('text', '/dev/input/by-id/new-draft')
+        backend._settings_reply(0, self.reply({
+            'accepted': True, 'config': {'schema_version': 1, **original}}))
+        self.assertTrue(window.property('settingsDirty'))
+        self.assertEqual(draft.property('text'), '/dev/input/by-id/new-draft')
+        engine.deleteLater()
+
+    def test_unsaved_host_defaults_do_not_check_detected_audio_inputs(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._service_data = {'service': 'running', 'configuration_saved': False}
+        backend._config_reply(0, self.reply({'schema_version': 1, **DEFAULT_CONFIG}))
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        backend._equipment_reply(0, self.reply({
+            'outputs': [{'path': DEFAULT_CONFIG['target_output'], 'label': 'TV'}],
+            'adapters': [{'path': DEFAULT_CONFIG['cec_port'], 'label': 'CEC'}],
+            'inputs': [{'path': path, 'label': 'Audio'} for path in DEFAULT_CONFIG['devices']],
+            'errors': []}))
+        self.assertEqual(window.findChild(QObject, 'devicesField').property('text'), '')
+        for path in DEFAULT_CONFIG['devices']:
+            self.assertFalse(self.input_choice(engine, window, path).property('checked'))
+        self.assertEqual(window.findChild(QObject, 'outputField').property('currentIndex'), -1)
+        self.assertEqual(window.findChild(QObject, 'adapterField').property('currentIndex'), -1)
+        self.assertFalse(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
+        self.assertEqual(backend.config['devices'], DEFAULT_CONFIG['devices'])
+        engine.deleteLater()
+
+    def test_compact_input_chooser_bounds_keyboard_scrolling_and_copy(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        self.addCleanup(app.clipboard().setText, app.clipboard().text())
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend.config = {**backend.config, 'devices': ['/dev/input/by-id/0']}
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        inventory = {'outputs': [], 'adapters': [], 'errors': [],
+                     'inputs': [{'path': f'/dev/input/by-id/{index}', 'label': f'Device {index}'}
+                                for index in range(18)]}
+        backend._equipment_reply(0, self.reply(inventory))
+        app.processEvents()
+        scroll = window.findChild(QObject, 'inputChooserScroll')
+        toggle = window.findChild(QQuickItem, 'inputChooserToggle')
+        self.assertFalse(scroll.property('visible'))
+        self.assertIn('1 selected', window.findChild(QObject, 'selectedInputSummary').property('text'))
+        QMetaObject.invokeMethod(toggle, 'forceActiveFocus')
+        QTest.keyClick(window, Qt.Key.Key_Space)
+        QTest.qWait(50)
+        self.assertTrue(scroll.property('visible'))
+        self.assertLessEqual(scroll.property('height'), 200)
+        engine.rootContext().setContextProperty('chooserScroll', scroll)
+        self.assertGreater(QQmlExpression(
+            engine.rootContext(), window, 'chooserScroll.contentItem.contentHeight').evaluate()[0],
+                           scroll.property('height'))
+        first = self.input_choice(engine, window, '/dev/input/by-id/0')
+        QMetaObject.invokeMethod(first, 'forceActiveFocus')
+        for _ in range(17):
+            QTest.keyClick(window, Qt.Key.Key_Tab)
+        last = self.input_choice(engine, window, '/dev/input/by-id/17')
+        self.assertTrue(last.property('activeFocus'))
+        self.assertGreater(QQmlExpression(
+            engine.rootContext(), window, 'chooserScroll.contentItem.contentY').evaluate()[0], 0)
+        QTest.keyClick(window, Qt.Key.Key_Space)
+        self.assertTrue(last.property('activeFocus'))
+        self.assertTrue(last.property('checked'))
+        QMetaObject.invokeMethod(window.findChild(QObject, 'copySelectedInputs'), 'clicked')
+        self.assertEqual(app.clipboard().text(), '/dev/input/by-id/0\n/dev/input/by-id/17')
+        toggle.setProperty('checked', False)
+        self.assertFalse(scroll.property('visible'))
+        engine.deleteLater()
+
+    def test_qml_accessibility_roles_names_and_keyboard_focus_remain_available(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        was_active = QAccessible.isActive()
+        QAccessible.setActive(True)
+        self.addCleanup(QAccessible.setActive, was_active)
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'configuration-only'
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        app.processEvents()
+        for name, role, label in (
+                ('saveSettingsButton', QAccessible.Role.Button, 'Save settings and restart service'),
+                ('outputField', QAccessible.Role.ComboBox, 'Choose a detected display'),
+                ('manualInputs', QAccessible.Role.CheckBox, 'Use manually entered input paths'),
+                ('devicesField', QAccessible.Role.EditableText, 'Input device paths (one per line)')):
+            with self.subTest(control=name):
+                interface = QAccessible.queryAccessibleInterface(window.findChild(QObject, name))
+                self.assertIsNotNone(interface)
+                self.assertEqual(interface.role(), role)
+                self.assertEqual(interface.text(QAccessible.Text.Name), label)
+        control = window.findChild(QQuickItem, 'manualInputs')
+        QMetaObject.invokeMethod(control, 'forceActiveFocus')
+        self.assertTrue(control.property('activeFocus'))
+        QTest.keyClick(window, Qt.Key.Key_Tab)
+        self.assertFalse(control.property('activeFocus'))
+        self.assertIsNotNone(window.activeFocusItem())
+        engine.deleteLater()
+
+    def test_gui_launchers_preserve_accessibility_and_diagnostics(self):
+        sources = '\n'.join((ROOT / path).read_text() for path in (
+            'cec-tv/topcec_gui.py', 'packaging/flatpak/topcec-gui',
+            'net.local.topcec.yml', 'packaging/flatpak/pyside.yml',
+        ))
+        for disabled in ('QT_ACCESSIBILITY=0', 'QT_LINUX_ACCESSIBILITY_ALWAYS_ON=0',
+                         'NO_AT_BRIDGE=1', 'qt.accessibility.atspi=false',
+                         'qt.accessibility.atspi.warning=false'):
+            self.assertNotIn(disabled, sources)
+        self.assertNotIn('qInstallMessageHandler', sources)
+
     def test_absent_hardware_is_not_selected_and_save_requires_explicit_resolution(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
@@ -161,7 +417,7 @@ class GuiChecks(unittest.TestCase):
                         with patch.object(topcec_gui.sys, 'stderr'):
                             backend._equipment_reply(0, reply)
                     elif method == 'ApplySettings':
-                        backend._settings_reply(0, {**original, 'target_output': 'DRAFT'}, reply)
+                        backend._settings_reply(0, reply)
                     else:
                         backend._power_reply(0, 'on', reply)
                     self.assertEqual(backend.config, original)
@@ -319,7 +575,7 @@ class GuiChecks(unittest.TestCase):
         engine.rootContext().setContextProperty('detectedChoice', configured_adapter)
         QQmlExpression(engine.rootContext(), window, 'detectedChoice.activated(0)').evaluate()
         QQmlExpression(engine.rootContext(), window,
-                       'setInputSelected("/dev/input/by-id/real-kbd", true)').evaluate()
+                       'setInputDeviceSelected({path: "/dev/input/by-id/real-kbd"}, true)').evaluate()
         self.assertEqual(configured_adapter.property('editText'), '/dev/serial/by-id/real-CEC')
         self.assertIn('/dev/input/by-id/real-kbd', configured_inputs.property('text'))
         self.assertIn(original_config['devices'][0], configured_inputs.property('text'))
@@ -1015,7 +1271,8 @@ class GuiChecks(unittest.TestCase):
             serialized, = arguments
             watchers[0].complete(SimpleNamespace(
                 type=lambda: topcec_gui.QDBusMessage.MessageType.ReplyMessage,
-                arguments=lambda: ['{}']))
+                arguments=lambda: [json.dumps({
+                    'accepted': True, 'config': json.loads(serialized)})]))
         self.assertEqual(name, 'ApplySettings')
         config = validate_config(json.loads(serialized))
         self.assertEqual(config['target_output'], 'HDMI-A-2')
@@ -1109,6 +1366,10 @@ class GuiChecks(unittest.TestCase):
             self.assertFalse(save.property('enabled'))
             for name in ('manualOutput', 'manualAdapter', 'manualInputs'):
                 window.findChild(QObject, name).setProperty('checked', True)
+            self.assertFalse(save.property('enabled'))
+            window.findChild(QObject, 'outputField').setProperty('editText', 'MANUAL-DISPLAY')
+            window.findChild(QObject, 'adapterField').setProperty('editText', '/dev/manual-adapter')
+            window.findChild(QObject, 'devicesField').setProperty('text', '/dev/manual-input')
             self.assertTrue(save.property('enabled'))
             devices = window.findChild(QObject, 'devicesField')
             self.assertTrue(devices.property('visible'))

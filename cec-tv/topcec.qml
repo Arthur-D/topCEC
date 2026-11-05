@@ -11,6 +11,21 @@ Kirigami.ApplicationWindow {
     minimumWidth: 620
     minimumHeight: 680
     property bool settingsDirty: false
+    property string submittedSettings: ""
+
+    function settingsValues() {
+        return {
+            targetOutput: outputField.editText,
+            adapter: adapterField.editText,
+            timeoutMode: timeoutMode.currentIndex === 0 ? "kde"
+                : (timeoutMode.currentIndex === 1 ? "custom" : "never"),
+            timeoutMinutes: timeoutMinutes.value,
+            devices: devicesField.text,
+            muteLabels: labelsField.text,
+            axisDeadzone: deadzoneField.value,
+            rzDeadzone: rzDeadzoneField.value
+        }
+    }
 
     function equipmentChoices(options, values) {
         let choices = []
@@ -42,10 +57,25 @@ Kirigami.ApplicationWindow {
         return devicesField.text.split("\n").map(path => path.trim()).filter(path => path.length)
     }
 
-    function setInputSelected(path, selected) {
-        let paths = inputPaths().filter(item => item !== path)
+    function selectedInputLabels() {
+        return inputPaths().map(path => {
+            let item = topcec.detectedInputs.find(device => device.path === path || (device.aliases || []).includes(path))
+            return item ? item.label : root.retainedValue(path)
+        })
+    }
+
+    function savedInputPaths() {
+        let paths = inputPaths().map(path => {
+            let item = topcec.detectedInputs.find(device => device.path === path || (device.aliases || []).includes(path))
+            return item ? item.path : path
+        })
+        return [...new Set(paths)].join("\n")
+    }
+
+    function setInputDeviceSelected(device, selected) {
+        let paths = inputPaths().filter(path => path !== device.path && !(device.aliases || []).includes(path))
         if (selected)
-            paths.push(path)
+            paths.push(device.path)
         devicesField.text = paths.join("\n")
         settingsDirty = true
     }
@@ -166,8 +196,8 @@ Kirigami.ApplicationWindow {
     function loadSettings() {
         if (settingsDirty)
             return
-        outputField.synchronize(topcec.setting("target_output"))
-        adapterField.synchronize(topcec.setting("cec_port"))
+        outputField.synchronize(topcec.configurationSource === "defaults" ? "" : topcec.setting("target_output"))
+        adapterField.synchronize(topcec.configurationSource === "defaults" ? "" : topcec.setting("cec_port"))
         timeoutMode.currentIndex = topcec.usesKdeTimeout() ? 0
             : (topcec.setting("timeout_seconds") === null ? 2 : 1)
         timeoutMinutes.value = topcec.timeoutMinutes()
@@ -182,6 +212,8 @@ Kirigami.ApplicationWindow {
         target: topcec
         function onConfigurationChanged() { root.loadSettings() }
         function onSettingsSaved() {
+            if (root.submittedSettings && JSON.stringify(root.settingsValues()) !== root.submittedSettings)
+                return
             root.settingsDirty = false
             root.loadSettings()
         }
@@ -455,6 +487,11 @@ Kirigami.ApplicationWindow {
                         Layout.fillWidth: true
                         text: topcec.equipmentMessage
                     }
+                    SelectableLabel {
+                        Layout.fillWidth: true
+                        visible: topcec.configurationSource === "defaults"
+                        text: "No saved host configuration. Legacy hardware defaults are not selected; choose the devices you want to monitor, then save."
+                    }
 
                     SelectableLabel { text: "TV display (KWin output name)" }
                     EquipmentSelector {
@@ -516,22 +553,79 @@ Kirigami.ApplicationWindow {
                     }
 
                     SelectableLabel { text: "Input devices" }
-                    Repeater {
-                        id: inputChoices
-                        objectName: "inputChoices"
-                        model: root.equipmentChoices(topcec.detectedInputs, root.inputPaths())
-                        delegate: CopyableCheckBox {
-                            required property var modelData
-                            objectName: "inputChoice:" + modelData.path
-                            Layout.fillWidth: true
-                            text: modelData.label
-                            checked: root.inputPaths().includes(modelData.path)
-                            onToggled: root.setInputSelected(modelData.path, checked)
+                    SelectableLabel {
+                        objectName: "selectedInputSummary"
+                        Layout.fillWidth: true
+                        text: root.inputPaths().length + " selected"
+                            + (root.unresolvedInputs().length ? " (" + root.unresolvedInputs().length + " unlisted)" : "")
+                            + (root.inputPaths().length ? ":\n" + root.selectedInputLabels().slice(0, 3).join("\n") : ". Choose devices to monitor.")
+                            + (root.inputPaths().length > 3 ? "\nAnd " + (root.inputPaths().length - 3) + " more." : "")
+                    }
+                    RowLayout {
+                        CopyableButton {
+                            id: inputChooserToggle
+                            objectName: "inputChooserToggle"
+                            checkable: true
+                            text: checked ? "Hide input devices"
+                                : "Choose input devices (" + topcec.detectedInputs.length + " detected)"
+                            Accessible.description: checked ? "Input device checklist expanded" : "Input device checklist collapsed"
+                        }
+                        CopyableButton {
+                            objectName: "copySelectedInputs"
+                            text: "Copy selected paths"
+                            enabled: root.inputPaths().length > 0
+                            onClicked: topcec.copyText(root.inputPaths().join("\n"))
+                        }
+                    }
+                    Controls.ScrollView {
+                        id: inputChooserScroll
+                        objectName: "inputChooserScroll"
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Math.min(inputChoiceList.implicitHeight, Kirigami.Units.gridUnit * 10)
+                        Layout.minimumHeight: 0
+                        Layout.maximumHeight: Layout.preferredHeight
+                        visible: inputChooserToggle.checked
+                        clip: true
+                        contentWidth: availableWidth
+                        Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
+                        Controls.ScrollBar.vertical.policy: contentHeight > availableHeight
+                            ? Controls.ScrollBar.AlwaysOn : Controls.ScrollBar.AlwaysOff
+                        Flickable {
+                            id: inputFlickable
+                            contentWidth: width
+                            contentHeight: inputChoiceList.height
+                            boundsBehavior: Flickable.StopAtBounds
+                            ColumnLayout {
+                                id: inputChoiceList
+                                width: inputFlickable.width
+                                Repeater {
+                                    id: inputChoices
+                                    objectName: "inputChoices"
+                                    model: topcec.detectedInputs
+                                    delegate: CopyableCheckBox {
+                                        required property var modelData
+                                        objectName: "inputChoice:" + modelData.path
+                                        Layout.fillWidth: true
+                                        text: modelData.label
+                                        checked: root.inputPaths().some(path => path === modelData.path || (modelData.aliases || []).includes(path))
+                                        onToggled: root.setInputDeviceSelected(modelData, checked)
+                                        onActiveFocusChanged: {
+                                            if (activeFocus) {
+                                                let top = y
+                                                if (top < inputFlickable.contentY)
+                                                    inputFlickable.contentY = top
+                                                else if (top + height > inputFlickable.contentY + inputFlickable.height)
+                                                    inputFlickable.contentY = top + height - inputFlickable.height
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     SelectableLabel {
                         Layout.fillWidth: true
-                        text: "Select detected devices to monitor. Detection does not guarantee read access."
+                        text: "Select detected devices to monitor, then save below. Detected selections are saved using stable paths when available. Detection does not guarantee read access."
                     }
                     SelectableLabel {
                         objectName: "retainedInputs"
@@ -609,18 +703,18 @@ Kirigami.ApplicationWindow {
                         onClicked: {
                             if (!root.equipmentReady)
                                 return
-                            topcec.applySettings({
-                                targetOutput: outputField.editText,
-                                adapter: adapterField.editText,
-                                timeoutMode: timeoutMode.currentIndex === 0 ? "kde"
-                                    : (timeoutMode.currentIndex === 1 ? "custom" : "never"),
-                                timeoutMinutes: timeoutMinutes.value,
-                                devices: devicesField.text,
-                                muteLabels: labelsField.text,
-                                axisDeadzone: deadzoneField.value,
-                                rzDeadzone: rzDeadzoneField.value
-                            })
+                            let values = root.settingsValues()
+                            root.submittedSettings = JSON.stringify(values)
+                            values.devices = root.savedInputPaths()
+                            topcec.applySettings(values)
                         }
+                    }
+                    SelectableLabel {
+                        objectName: "settingsSaveStatus"
+                        Layout.fillWidth: true
+                        text: root.settingsDirty
+                            ? "Unsaved changes. Save settings and restart service to keep these selections across restarts."
+                            : "No unsaved changes."
                     }
 
                     SelectableHeading {

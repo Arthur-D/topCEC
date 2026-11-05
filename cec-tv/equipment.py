@@ -45,11 +45,13 @@ def discover_equipment():
         for directory in ('/dev/input/by-id', '/dev/input/by-path'):
             for path in _entries(directory):
                 if 'event' in path.name and path.exists():
-                    devices.setdefault(path.resolve(), path)
+                    devices.setdefault(path.resolve(), []).append(path)
         for path in _entries('/dev/input'):
             if re.fullmatch(r'event\d+', path.name):
-                devices.setdefault(path.resolve(), path)
-        for target, path in devices.items():
+                if path.exists():
+                    devices.setdefault(path.resolve(), []).append(path)
+        for target, paths in devices.items():
+            path = paths[0]
             name_file = Path('/sys/class/input') / target.name / 'device/name'
             try:
                 name = name_file.read_text(encoding='utf-8', errors='replace').strip()
@@ -58,7 +60,8 @@ def discover_equipment():
                 result['errors'].append('Input name discovery: ' + str(error))
             result['inputs'].append({
                 'path': str(path), 'label': f'{name} - {path}',
-                'aliases': [str(target)] if target != path else [],
+                'aliases': list(dict.fromkeys(
+                    str(alias) for alias in [*paths[1:], target] if alias != path)),
             })
     except OSError as error:
         result['errors'].append('Input device discovery: ' + str(error))

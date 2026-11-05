@@ -239,6 +239,44 @@ keyboard Menu key opens the same action). **Copy page text** copies the current
 page, including disabled control captions and the window title; it excludes
 the hidden setup/configuration page.
 
+### Qt AT-SPI diagnostic
+
+Some accessibility clients produce this console warning:
+
+```text
+qt.accessibility.atspi: AtSpiAdaptor::applicationInterface does not implement "GetApplicationBusAddress" "/org/a11y/atspi/accessible/root"
+```
+
+This is an upstream **Qt AT-SPI bridge protocol gap**, not a topCEC method to
+implement in QML and not the monitor's Firefox/AT-SPI frame warning.
+Qt's [6.11.2](https://github.com/qt/qtbase/blob/v6.11.2/src/gui/accessible/linux/atspiadaptor.cpp)
+and [6.11.3](https://github.com/qt/qtbase/blob/v6.11.3/src/gui/accessible/linux/atspiadaptor.cpp)
+application-interface handler lack that method and emit this exact diagnostic.
+The [AT-SPI application specification](https://github.com/GNOME/at-spi2-core/blob/main/xml/Application.xml)
+uses the method to negotiate a direct peer-to-peer D-Bus address.
+[libatspi 2.62.0](https://github.com/GNOME/at-spi2-core/blob/2.62.0/atspi/atspi-misc.c)
+starts with its existing accessibility-bus connection and retains it when
+negotiation returns an error or empty address. Thus this warning alone does not
+establish that the accessibility tree or screen-reader navigation is broken.
+Repeated clients/reconnections can repeat the diagnostic.
+
+Do not disable accessibility or suppress the accessibility log category to
+resolve it. Keep native Qt packages and the KDE Flatpak runtime current, and
+report the diagnostic to their Qt/runtime maintainers with the Qt version,
+AT-SPI version and whether it occurs in a minimal Qt application. A runtime
+containing an upstream bridge correction is the proper resolution; merely
+rebuilding PySide or adding accessible labels cannot implement this private Qt
+method. No fixed release is asserted here, and updating from 6.11.2 to 6.11.3
+alone does not fix the missing handler. The Flatpak uses runtime Qt while native
+topCEC uses host Qt, so a correction must reach the applicable runtime.
+
+topCEC leaves accessibility and its diagnostics enabled. Automated checks cover
+basic QML accessible roles/names and keyboard focus, not a complete screen-reader
+audit. Test real screen-reader reading order, status announcements, focus during
+reconnection/hotplug and all settings with your assistive technology before
+claiming full accessibility. No additional Flatpak D-Bus/device permissions are
+needed to address this upstream warning.
+
 ## User-level installation and packaging
 
 Install the current checkout without root using:
@@ -403,6 +441,34 @@ relative path, a missing directory, or an invalid checkout stops before updating
 Noncanonical mirrors/forks must be updated manually using a trusted workflow.
 
 ### Input-device access
+
+The input chooser starts collapsed, showing the selected count and up to three
+device names. **Choose input devices** opens a bounded, scrolling checklist;
+Tab/Shift+Tab and Space work in it. **Copy selected paths** copies the complete
+selection, including retained unlisted paths. Missing selections stay visible
+in a separate notice and are never silently replaced with another device.
+
+Selection changes are drafts until **Save settings and restart service** reports
+that settings were saved. On that explicit save, detected input aliases such as
+`/dev/input/event10` are converted to the inventory's preferred stable
+`/dev/input/by-id` or `by-path` name when available. This avoids event-number
+changes making a saved keyboard selection look like a different device after
+restart/replug. All currently detected aliases are reconciled, including when a
+new preferred alias appears. Existing configuration is not rewritten on discovery
+or launch; undetected/manual paths are retained. Raw event paths without a stable
+alias remain vulnerable to Linux event-number reassignment. A `by-path` name
+identifies a connection location and may change if the device is moved to another
+port.
+
+The host saves atomically before queuing its restart. The GUI accepts the host's
+confirmed saved configuration even if the D-Bus owner changes before the reply,
+ignores pre-save refresh replies, and preserves any further edits made while
+saving. The updated backend reports whether a saved configuration file exists;
+when none exists, legacy display/adapter/input defaults are not preselected in
+the editor, even if those paths currently exist. Older backends cannot provide
+that distinction, so their returned configuration is retained as unknown-source
+settings rather than guessed to be defaults. Update the host and GUI together
+for the full behavior.
 
 The host user must have read access to the selected input devices. Changing a
 path does not grant access; if the intended device is still permission-denied,
