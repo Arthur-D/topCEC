@@ -45,7 +45,7 @@ PY
     fi
 fi
 for file in \
-    activity_policy.py cec_power_state.py configuration.py firefox_media.py \
+    activity_policy.py cec_power_state.py configuration.py equipment.py firefox_media.py \
     native_messaging.py providers.py firefox-native-host.py \
     monitor.py start.py cec-kde-settings.py cec-power-command.py \
     topcec_gui.py activity.js firefox.js topcec.qml; do

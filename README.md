@@ -154,6 +154,7 @@ python3 -B tests/run.py activity-policy
 python3 -B tests/run.py providers
 python3 -B tests/run.py firefox-media
 python3 -B tests/run.py configuration
+python3 -B tests/run.py equipment
 python3 -B tests/run.py gui
 python3 -B tests/run.py license
 python3 -B tests/run.py test_cec_live.py
@@ -214,7 +215,8 @@ PySide6 QtDBus/QtQml, Kirigami QML modules, and `systemctl --user`; the service
 is needed for status and manual control but native settings can be edited before
 its first start. The GUI is optional; the service remains independently
 operable and owns all CEC commands. Its session D-Bus API publishes monitor
-status and configuration through `GetStatus`/`GetConfig`, accepts serialized
+status and configuration through `GetStatus`/`GetConfig`, cached read-only
+equipment choices through `GetEquipment`, accepts serialized
 `on`/`off` requests through `RequestPower`, and validates/saves settings and
 queues a user-service restart through `ApplySettings` on
 `net.local.CecActivity`. Manual standby is rejected while monitor safety checks
@@ -320,6 +322,46 @@ correct keyboard/wheel paths (prefer stable `/dev/input/by-id/` paths), then use
 **Save settings and restart service** to retry monitoring. No CEC commands or
 monitoring run in this mode, and both live manual power actions are rejected.
 Unsaved GUI edits are retained across connection loss and reconnection.
+
+### Configured values and detected equipment
+
+The configured display, adapter and input paths are saved settings (or legacy
+defaults when no settings have been saved), **not evidence of detected hardware**.
+The host backend supplies the actual configuration selectors with detected
+equipment, including in configuration-only mode. Choose your display and CEC
+adapter from those selectors, and check the input devices to monitor. Unplugged
+choices disappear unless currently selected; selected saved/default or unsaved
+values remain explicitly labelled **unavailable / not detected**, never shown as
+available hardware. Uncheck an unwanted input to remove it. Manual output names
+and adapter paths can still be entered; **Edit input paths manually** exposes
+the input-path editor for unusual devices or an older backend. Native offline
+configuration retains that editor. Nothing is selected or saved automatically.
+
+Discovery runs outside Flatpak in a bounded background helper approximately every
+10 seconds after the previous scan completes (each scan has an 8-second limit).
+The already-open GUI reads the cached inventory with its existing 5-second
+status refresh, so plug/unplug/replug updates require no application restart.
+There are no extra signal subscriptions or invasive probes; this is bounded
+refresh rather than instantaneous udev/compositor notification. Manual selections
+and drafts are preserved across those updates. It reads connected output names
+from `kscreen-doctor -o`, CEC-named
+paths in `/dev/serial/by-id`, and input-device paths/names from `/dev/input` and
+sysfs. Input paths prefer `/dev/input/by-id` aliases, then `/dev/input/by-path`
+when available, before falling back to event paths. It does not
+open input/serial devices, probe libCEC or send CEC commands. Disabled but
+connected displays are labelled; disconnected displays are excluded. This cannot
+identify which connected screen is your TV, discover every CEC adapter type, or
+guarantee that a listed device is readable by the service. Missing metadata and
+discovery errors are shown separately; configured values absent from the latest
+inventory remain editable rather than being silently replaced.
+
+Both host backend and GUI need this update. An older backend without
+`GetEquipment` leaves manual configuration working and displays an update
+message instead of presenting defaults as detected choices. Update the host
+using the checkout/install/restart commands below; updating Flatpak alone is
+insufficient. No additional Flatpak permissions are needed.
+
+### Input-device access
 
 The host user must have read access to the selected input devices. Changing a
 path does not grant access; if the intended device is still permission-denied,

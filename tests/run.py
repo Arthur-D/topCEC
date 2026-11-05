@@ -47,6 +47,10 @@ elif mode == 'configuration':
     path = ROOT / 'tests/test_configuration.py'
     sys.argv = [str(path)]
     runpy.run_path(str(path), run_name='__main__')
+elif mode == 'equipment':
+    path = ROOT / 'tests/test_equipment.py'
+    sys.argv = [str(path)]
+    runpy.run_path(str(path), run_name='__main__')
 elif mode == 'gui':
     path = ROOT / 'tests/test_gui.py'
     sys.argv = [str(path)]
