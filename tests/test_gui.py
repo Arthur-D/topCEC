@@ -256,7 +256,7 @@ class GuiChecks(unittest.TestCase):
             fresh._equipment_reply(0, self.reply({**changed, 'inputs': []}))
             self.assertEqual(fresh_window.findChild(QObject, 'inputChoices').property('count'), 0)
             self.assertEqual(fresh_window.findChild(QObject, 'devicesField').property('text'), retained)
-            self.assertIn('unlisted', fresh_window.findChild(QObject, 'selectedInputSummary').property('text'))
+            self.assertIn('unlisted', fresh_window.findChild(QObject, 'inputChooserToggle').property('text'))
             fresh._equipment_reply(0, self.reply(changed))
             self.assertTrue(self.input_choice(fresh_engine, fresh_window, '/dev/input/by-id/keyboard').property('checked'))
             self.assertEqual(load_config(host_path)['devices'], saved['devices'])
@@ -352,7 +352,7 @@ class GuiChecks(unittest.TestCase):
         scroll = window.findChild(QObject, 'inputChooserScroll')
         toggle = window.findChild(QQuickItem, 'inputChooserToggle')
         self.assertFalse(scroll.property('visible'))
-        self.assertIn('1 selected', window.findChild(QObject, 'selectedInputSummary').property('text'))
+        self.assertIn('1 selected', window.findChild(QObject, 'inputChooserToggle').property('text'))
         QMetaObject.invokeMethod(toggle, 'forceActiveFocus')
         QTest.keyClick(window, Qt.Key.Key_Space)
         QTest.qWait(50)
@@ -415,6 +415,7 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(groups.property('columns'), 2)
         equipment = window.findChild(QObject, 'equipmentSection')
         standby = window.findChild(QObject, 'standbySection')
+        self.assertAlmostEqual(standby.property('y'), equipment.property('y'), delta=1)
         self.assertLessEqual(
             standby.property('x') + standby.property('width'),
             groups.property('width') + 1,
@@ -425,12 +426,12 @@ class GuiChecks(unittest.TestCase):
         )
         for name, title in (
                 ('equipmentHeader', 'Equipment'),
-                ('standbyHeader', 'Automatic standby'),
-                ('advancedHeader', 'Advanced'),
-                ('diagnosticsHeader', 'Diagnostics')):
+                ('standbyHeader', 'Automatic standby')):
             header = window.findChild(QObject, name)
             self.assertIsNotNone(header)
             self.assertEqual(header.property('title'), title)
+        for name, label in (('advancedToggle', 'Advanced'), ('diagnosticsToggle', 'Diagnostics')):
+            self.assertEqual(window.findChild(QObject, name).property('text'), label)
         for name in ('equipmentFormCard', 'standbyFormCard'):
             card = window.findChild(QObject, name)
             self.assertIsNotNone(card)
@@ -450,7 +451,7 @@ class GuiChecks(unittest.TestCase):
         self.assertFalse(scroll.property('visible'))
         chooser.setProperty('checked', True)
         self.assertTrue(scroll.property('visible'))
-        self.assertIn('2 selected', window.findChild(QObject, 'inputSelectedCount').property('text'))
+        self.assertIn('2 selected', window.findChild(QObject, 'inputChooserToggle').property('text'))
 
         timeout = window.findChild(QObject, 'timeoutMode')
         minutes = window.findChild(QObject, 'timeoutMinutes')
@@ -474,6 +475,10 @@ class GuiChecks(unittest.TestCase):
         QTest.qWait(50)
         self.assertEqual(groups.property('columns'), 1)
         self.assertGreaterEqual(window.width(), window.property('minimumWidth'))
+        caption = window.findChild(QQuickItem, 'muteLabelsCaption')
+        editor = window.findChild(QQuickItem, 'labelsField')
+        self.assertGreaterEqual(editor.y(), caption.y() + caption.height() - 1)
+        self.assertLessEqual(editor.x() + editor.width(), editor.parentItem().width() + 1)
         recovery = window.findChild(QObject, 'viewRecoverySteps')
         QMetaObject.invokeMethod(recovery, 'clicked')
         app.processEvents()
@@ -1136,6 +1141,10 @@ class GuiChecks(unittest.TestCase):
         self.assertIn('Save and apply', copied)
         self.assertNotIn('topCEC Backend Not Available', text)
         self.assertFalse(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
+        chooser = window.findChild(QObject, 'inputChooserToggle')
+        self.assertIn('unlisted', chooser.property('text'))
+        chooser.setProperty('checked', True)
+        text, _ = expression.evaluate()
         for path in backend.config['devices']:
             self.assertIn(path + ' (availability unknown)', text)
         engine.deleteLater()
