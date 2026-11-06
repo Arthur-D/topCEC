@@ -11,8 +11,8 @@ Kirigami.ApplicationWindow {
         ? "topCEC Backend Not Available" : "topCEC"
     minimumWidth: 380
     minimumHeight: 500
-    readonly property int pageInset: width < 600
-        ? Kirigami.Units.largeSpacing : Kirigami.Units.gridUnit * 2
+    pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
+    readonly property int pageInset: Kirigami.Units.largeSpacing
     property bool settingsDirty: false
     property string submittedSettings: ""
 
@@ -58,13 +58,6 @@ Kirigami.ApplicationWindow {
 
     function inputPaths() {
         return devicesField.text.split("\n").map(path => path.trim()).filter(path => path.length)
-    }
-
-    function selectedInputLabels() {
-        return inputPaths().map(path => {
-            let item = topcec.detectedInputs.find(device => device.path === path || (device.aliases || []).includes(path))
-            return item ? item.label : root.retainedValue(path)
-        })
     }
 
     function savedInputPaths() {
@@ -137,10 +130,14 @@ Kirigami.ApplicationWindow {
     function saveStatusText() {
         if (!topcec.settingsEnabled)
             return "Connect to the host service to save settings."
-        if (!root.equipmentReady)
-            return "Choose at least one input and resolve or deliberately retain unavailable equipment."
+        if (!outputField.acceptable || !adapterField.acceptable)
+            return "Choose a display and CEC adapter."
+        if (!inputPaths().length)
+            return "Select at least one input device."
+        if (!manualInputs.checked && unresolvedInputs().length)
+            return "Remove unlisted inputs or enable manual entry."
         if (root.settingsDirty)
-            return "Unsaved changes. Save and apply settings to update monitoring."
+            return "Unsaved changes."
         if (topcec.actionMessage.length)
             return topcec.actionMessage
         if (!topcec.dbusOnly && !topcec.backendAvailable)
@@ -178,6 +175,23 @@ Kirigami.ApplicationWindow {
         Keys.onMenuPressed: root.showCaption(text)
     }
 
+    component DisclosureButton: CopyableButton {
+        id: disclosure
+        Layout.fillWidth: true
+        flat: true
+        checkable: true
+        contentItem: RowLayout {
+            Controls.Label {
+                Layout.fillWidth: true
+                text: disclosure.text
+            }
+            Controls.Label {
+                text: disclosure.checked ? "⌄" : "›"
+                Accessible.ignored: true
+            }
+        }
+    }
+
     component CopyableCheckBox: Controls.CheckBox {
         TapHandler {
             acceptedButtons: Qt.RightButton
@@ -187,14 +201,6 @@ Kirigami.ApplicationWindow {
     }
 
     component CopyableComboBox: Controls.ComboBox {
-        TapHandler {
-            acceptedButtons: Qt.RightButton
-            onTapped: root.showCaption(parent.editable ? parent.editText : parent.currentText)
-        }
-        Keys.onMenuPressed: root.showCaption(editable ? editText : currentText)
-    }
-
-    component CopyableFormComboBox: FormCard.FormComboBoxDelegate {
         TapHandler {
             acceptedButtons: Qt.RightButton
             onTapped: root.showCaption(parent.editable ? parent.editText : parent.currentText)
@@ -291,7 +297,7 @@ Kirigami.ApplicationWindow {
     }
 
     background: Rectangle {
-        color: Kirigami.Theme.viewBackgroundColor
+        color: Kirigami.Theme.backgroundColor
     }
 
     header: Controls.ToolBar {
@@ -416,7 +422,6 @@ Kirigami.ApplicationWindow {
                 id: settingsSaveStatus
                 objectName: "settingsSaveStatus"
                 Layout.fillWidth: true
-                Layout.preferredHeight: 34
                 verticalAlignment: TextEdit.AlignVCenter
                 text: root.saveStatusText()
             }
@@ -609,6 +614,7 @@ Kirigami.ApplicationWindow {
                         spacing: 0
                         SurfaceFrame {
                             Layout.fillWidth: true
+                            maximumWidth: pageContent.width
                             RowLayout {
                                 width: parent.width
                                 spacing: Kirigami.Units.mediumSpacing
@@ -700,10 +706,10 @@ Kirigami.ApplicationWindow {
                             SelectableLabel {
                                 Layout.fillWidth: true
                                 text: topcec.inputPermissionMessage.length > 0
-                                    ? "Input-device access is blocked. Review the host recovery steps."
+                                    ? "Input access is blocked."
                                     : (topcec.serviceStatus === "configuration-only"
-                                        ? "Monitoring is not active. Review diagnostics and apply valid input devices."
-                                        : "Automatic standby is blocked until monitoring checks are healthy. Review diagnostics.")
+                                        ? "Monitoring is inactive."
+                                        : "Automatic standby is blocked.")
                             }
                             CopyableButton {
                                 objectName: "viewRecoverySteps"
@@ -724,6 +730,7 @@ Kirigami.ApplicationWindow {
                         ColumnLayout {
                             objectName: "equipmentSection"
                             Layout.fillWidth: true
+                            Layout.alignment: Qt.AlignTop
                             Layout.minimumWidth: 0
                             Layout.preferredWidth: configurationGroups.columns === 2
                                 ? (pageContent.width - configurationGroups.columnSpacing) / 2
@@ -744,7 +751,7 @@ Kirigami.ApplicationWindow {
                                         Layout.fillWidth: true
                                         spacing: Kirigami.Units.smallSpacing
                                         SelectableLabel {
-                                            Layout.preferredWidth: pageContent.width < 500 ? 102 : 170
+                                            Layout.preferredWidth: Kirigami.Units.gridUnit * 5
                                             Layout.preferredHeight: 34
                                             verticalAlignment: TextEdit.AlignVCenter
                                             text: "TV display"
@@ -775,7 +782,7 @@ Kirigami.ApplicationWindow {
                                         Layout.fillWidth: true
                                         spacing: Kirigami.Units.smallSpacing
                                         SelectableLabel {
-                                            Layout.preferredWidth: pageContent.width < 500 ? 102 : 170
+                                            Layout.preferredWidth: Kirigami.Units.gridUnit * 5
                                             Layout.preferredHeight: 34
                                             verticalAlignment: TextEdit.AlignVCenter
                                             text: "CEC adapter"
@@ -809,15 +816,12 @@ Kirigami.ApplicationWindow {
                                 visible: topcec.configurationSource === "defaults"
                                 text: "No saved host configuration. Legacy hardware defaults are not selected."
                             }
-                            SelectableLabel {
-                                Layout.fillWidth: true
-                                text: topcec.equipmentMessage
-                            }
                         }
 
                         ColumnLayout {
                             objectName: "standbySection"
                             Layout.fillWidth: true
+                            Layout.alignment: Qt.AlignTop
                             Layout.minimumWidth: 0
                             Layout.preferredWidth: configurationGroups.columns === 2
                                 ? (pageContent.width - configurationGroups.columnSpacing) / 2
@@ -834,61 +838,54 @@ Kirigami.ApplicationWindow {
                                 ColumnLayout {
                                     width: parent.width
                                     spacing: Kirigami.Units.smallSpacing
-                                    CopyableFormComboBox {
-                                        id: timeoutMode
-                                        objectName: "timeoutMode"
-                                        text: "Idle timeout"
+                                    RowLayout {
                                         Layout.fillWidth: true
-                                        model: ["KDE-managed", "Custom (minutes)", "Disabled"]
-                                        onActivated: root.settingsDirty = true
-                                    }
-                                    CopyableFormSpinBox {
-                                        id: timeoutMinutes
-                                        objectName: "timeoutMinutes"
-                                        label: "Minutes"
-                                        Layout.fillWidth: true
-                                        visible: timeoutMode.currentIndex === 1
-                                        from: 1
-                                        to: 1440
-                                        onValueModified: root.settingsDirty = true
+                                        SelectableLabel {
+                                            Layout.preferredWidth: Kirigami.Units.gridUnit * 5
+                                            text: "Idle timeout"
+                                        }
+                                        CopyableComboBox {
+                                            id: timeoutMode
+                                            objectName: "timeoutMode"
+                                            Layout.fillWidth: true
+                                            Accessible.name: "Idle timeout"
+                                            model: ["KDE-managed", "Custom", "Disabled"]
+                                            onActivated: root.settingsDirty = true
+                                        }
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true
-                                        spacing: Kirigami.Units.smallSpacing
-                                        CopyableButton {
-                                            id: inputChooserToggle
-                                            objectName: "inputChooserToggle"
-                                            checkable: true
-                                            text: checked ? "Hide input devices" : "Input devices"
-                                            Accessible.description: checked
-                                                ? "Input device checklist expanded"
-                                                : "Input device checklist collapsed"
-                                        }
+                                        visible: timeoutMode.currentIndex === 1
                                         SelectableLabel {
-                                            objectName: "inputSelectedCount"
                                             Layout.fillWidth: true
-                                            Layout.preferredHeight: 26
-                                            verticalAlignment: TextEdit.AlignVCenter
-                                            horizontalAlignment: TextEdit.AlignRight
-                                            text: root.inputPaths().length + " selected"
+                                            text: "Minutes"
                                         }
-                                        CopyableButton {
-                                            objectName: "copySelectedInputs"
-                                            text: "Copy paths"
-                                            enabled: root.inputPaths().length > 0
-                                            onClicked: topcec.copyText(root.inputPaths().join("\n"))
+                                        Controls.SpinBox {
+                                            id: timeoutMinutes
+                                            objectName: "timeoutMinutes"
+                                            Accessible.name: "Minutes"
+                                            editable: true
+                                            from: 1
+                                            to: 1440
+                                            onValueModified: root.settingsDirty = true
+                                            TapHandler {
+                                                acceptedButtons: Qt.RightButton
+                                                onTapped: root.showCaption(timeoutMinutes.textFromValue(
+                                                    timeoutMinutes.value, timeoutMinutes.locale))
+                                            }
+                                            Keys.onMenuPressed: root.showCaption(textFromValue(value, locale))
                                         }
                                     }
-                                    SelectableLabel {
-                                        objectName: "selectedInputSummary"
-                                        Layout.fillWidth: true
-                                        visible: root.inputPaths().length > 0
-                                        text: root.inputPaths().length + " selected"
+                                    DisclosureButton {
+                                        id: inputChooserToggle
+                                        objectName: "inputChooserToggle"
+                                        readonly property string selectionSummary: root.inputPaths().length + " selected"
                                             + (root.unresolvedInputs().length
-                                                ? " (" + root.unresolvedInputs().length + " unlisted)" : "")
-                                            + ": " + root.selectedInputLabels().slice(0, 2).join(", ")
-                                            + (root.inputPaths().length > 3
-                                                ? " and " + (root.inputPaths().length - 3) + " more" : "")
+                                                ? " · " + root.unresolvedInputs().length + " unlisted" : "")
+                                        text: "Input devices · " + selectionSummary
+                                        Accessible.description: checked
+                                            ? "Input device checklist expanded"
+                                            : "Input device checklist collapsed"
                                     }
                                     Controls.ScrollView {
                                         id: inputChooserScroll
@@ -936,28 +933,35 @@ Kirigami.ApplicationWindow {
                                             }
                                         }
                                     }
+                                    CopyableButton {
+                                        objectName: "copySelectedInputs"
+                                        text: "Copy paths"
+                                        visible: inputChooserToggle.checked
+                                        enabled: root.inputPaths().length > 0
+                                        onClicked: topcec.copyText(root.inputPaths().join("\n"))
+                                    }
                                     SelectableLabel {
                                         objectName: "inputSaveHelp"
                                         Layout.fillWidth: true
                                         visible: inputChooserToggle.checked
                                         text: !topcec.backendAvailable
                                             ? (topcec.dbusOnly
-                                                ? "Input selections remain pending until the host backend connects. Stable device paths are used when available."
-                                                : "Input selections remain pending until the backend connects or you save offline. Stable device paths are used when available.")
+                                                ? "Input changes remain pending until the host connects."
+                                                : "Input changes remain pending until the host connects or you save offline.")
                                             : topcec.liveSettingsAvailable
-                                                ? "Input selections save and apply automatically without restarting the service. Stable device paths are used when available."
-                                                : "Input selections save automatically, but this backend may restart the service. Update the host backend for live settings."
+                                                ? "Input changes apply automatically without restarting."
+                                                : "Input changes save automatically and may restart the service."
                                     }
                                     SelectableLabel {
                                         objectName: "retainedInputs"
                                         Layout.fillWidth: true
                                         visible: inputChooserToggle.checked && root.unresolvedInputs().length > 0
-                                        text: "Retained input values (not selected as detected devices):\n"
+                                        text: "Unlisted input paths\n"
                                             + root.unresolvedInputs().map(path => root.retainedValue(path)).join("\n")
                                     }
                                     CopyableButton {
                                         objectName: "removeUndetectedInputs"
-                                        text: "Remove unlisted input values"
+                                        text: "Remove unlisted inputs"
                                         visible: inputChooserToggle.checked && root.unresolvedInputs().length > 0
                                         onClicked: {
                                             devicesField.text = root.inputPaths().filter(path => root.inputDetected(path)).join("\n")
@@ -984,34 +988,17 @@ Kirigami.ApplicationWindow {
                                         }
                                         wrapMode: TextEdit.NoWrap
                                     }
-                                    SelectableLabel {
-                                        Layout.fillWidth: true
-                                        visible: root.inputPaths().length === 0
-                                        text: "No input devices selected. Choose detected devices or enter paths manually."
-                                    }
                                 }
-                            }
-                            SelectableLabel {
-                                objectName: "equipmentSaveGuidance"
-                                Layout.fillWidth: true
-                                visible: !root.equipmentReady
-                                text: "Choose at least one input. Remove unlisted inputs or enable manual entry to keep them. Changed display or adapter values must be detected or deliberately entered."
                             }
                         }
                     }
 
-                    FormCard.FormHeader {
-                        objectName: "advancedHeader"
-                        title: "Advanced"
-                        trailing: CopyableButton {
-                            id: advancedToggle
-                            objectName: "advancedToggle"
-                            checkable: true
-                            text: checked ? "Hide" : "Show"
-                            Accessible.name: "Advanced settings"
-                            Accessible.description: checked
-                                ? "Advanced settings expanded" : "Advanced settings collapsed"
-                        }
+                    DisclosureButton {
+                        id: advancedToggle
+                        objectName: "advancedToggle"
+                        text: "Advanced"
+                        Accessible.name: "Advanced settings"
+                        Accessible.description: checked ? "Expanded" : "Collapsed"
                     }
                     SurfaceFrame {
                         objectName: "advancedPanel"
@@ -1044,7 +1031,9 @@ Kirigami.ApplicationWindow {
                                 onValueModified: root.settingsDirty = true
                             }
                             SelectableLabel {
-                                text: "Firefox mute-tab labels (one per line)"
+                                Layout.fillWidth: true
+                                objectName: "muteLabelsCaption"
+                                text: "Firefox mute-tab labels"
                             }
                             Controls.TextArea {
                                 id: labelsField
@@ -1052,6 +1041,7 @@ Kirigami.ApplicationWindow {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 56
                                 Accessible.name: "Firefox mute-tab labels (one per line)"
+                                placeholderText: "One per line"
                                 selectByMouse: true
                                 onTextChanged: {
                                     if (activeFocus) root.settingsDirty = true
@@ -1060,18 +1050,12 @@ Kirigami.ApplicationWindow {
                         }
                     }
 
-                    FormCard.FormHeader {
-                        objectName: "diagnosticsHeader"
-                        title: "Diagnostics"
-                        trailing: CopyableButton {
-                            id: diagnosticsToggle
-                            objectName: "diagnosticsToggle"
-                            checkable: true
-                            text: checked ? "Hide" : "Show"
-                            Accessible.name: "Service diagnostics"
-                            Accessible.description: checked
-                                ? "Service diagnostics expanded" : "Service diagnostics collapsed"
-                        }
+                    DisclosureButton {
+                        id: diagnosticsToggle
+                        objectName: "diagnosticsToggle"
+                        text: "Diagnostics"
+                        Accessible.name: "Service diagnostics"
+                        Accessible.description: checked ? "Expanded" : "Collapsed"
                     }
                     SurfaceFrame {
                         id: diagnosticsPanel
