@@ -28,9 +28,12 @@ main() {
 
     local -a builder
     if command -v flatpak-builder >/dev/null; then
-        builder=(flatpak-builder)
+        builder=(flatpak-builder --user --install-deps-from=flathub
+            --force-clean --repo=repo builddir)
     elif flatpak info org.flatpak.Builder >/dev/null 2>&1; then
-        builder=(flatpak run --command=flatpak-builder org.flatpak.Builder)
+        # flathub-build points dependency installation at the host's user
+        # Flatpak directory and uses the host Flatpak binary.
+        builder=(flatpak run --command=flathub-build org.flatpak.Builder)
     else
         printf 'Install flatpak-builder or the org.flatpak.Builder Flatpak first.\n' >&2
         return 1
@@ -49,8 +52,9 @@ main() {
     systemctl --user is-active --quiet topcec.service
 
     printf 'Building and installing the user Flatpak...\n'
-    "${builder[@]}" --user --install --install-deps-from=flathub \
-        --force-clean --repo=repo builddir net.local.topcec.yml
+    "${builder[@]}" net.local.topcec.yml
+    # Install outside the Builder sandbox into the desktop user's installation.
+    flatpak install --user --reinstall --noninteractive "$SOURCE_DIR/repo" net.local.topcec
 
     # Close an old instance only after a successful build/install.
     if [[ -n "$(flatpak ps --columns=application | sed -n '/^net\.local\.topcec$/p')" ]]; then

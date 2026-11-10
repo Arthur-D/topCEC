@@ -642,8 +642,10 @@ build/install the user Flatpak, and launch it, run:
 
 The updater requires a clean checkout and pulls the current branch's upstream
 with `git pull --ff-only`. Commit or stash local changes first. It uses native
-`flatpak-builder` when available, otherwise the `org.flatpak.Builder` Flatpak,
-and downloads missing build dependencies from Flathub. From Toolbx it forwards
+`flatpak-builder` when available, otherwise `flathub-build` from the
+`org.flatpak.Builder` Flatpak, and downloads missing build dependencies from
+the host user's Flathub remote. It installs the built app through the host's
+Flatpak command. From Toolbx it forwards
 to the desktop host using `host-spawn`. A failed step stops the update; if the
 Flatpak build fails, the host service has already been updated. After a successful
 build it closes any running topCEC Flatpak and launches the installed version.
