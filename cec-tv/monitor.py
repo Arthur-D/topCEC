@@ -65,12 +65,13 @@ def input_group_command(username, gid, local_path='/etc/group',
 def input_permission_help(error):
     help_text = (
         'Check that the selected input path belongs to the intended keyboard or '
-        'controller. Choose a stable /dev/input/by-id/ path in Configuration. '
+        'controller. Choose a stable /dev/input/by-id/ path in Input. '
         'The host user needs read access to that device; changing the path does '
         'not grant access. Ask your administrator for scoped device permissions.')
     result = {'message': help_text, 'command': ''}
     if not isinstance(error, PermissionError) or not error.filename:
         return result
+    result['path'] = os.fsdecode(error.filename)
     try:
         device = os.stat(error.filename)
         group = grp.getgrnam('input')
@@ -89,8 +90,8 @@ def input_permission_help(error):
     session = (
         'Fully log out and log back in after changing membership so the desktop '
         'and user service inherit it. If the user manager persists across logout, '
-        'reboot. Retry Connection after signing back in, then save and apply '
-        'settings to retry monitoring.')
+        'reboot. After signing back in, open Diagnostics and select Retry '
+        'monitoring. Older GUIs can retry by saving and applying settings.')
     if group.gr_gid in process_groups:
         result['message'] = (
             help_text + '\nThe backend already has the input group. Joining it '
@@ -1275,6 +1276,7 @@ def self_test():
 
         def test_input_group_command_requires_verified_device_permissions(self):
             result = self.permission_guidance()
+            self.assertEqual(result['path'], '/dev/input/event10')
             self.assertEqual(result['command'], 'sudo usermod -aG input -- test-user')
             self.assertIn('keyboard and other input events', result['message'])
             self.assertIn('Fully log out and log back in', result['message'])

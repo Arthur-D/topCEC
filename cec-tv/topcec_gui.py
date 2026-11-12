@@ -125,6 +125,7 @@ class GuiBackend(QObject):
         self._settings_in_flight = False
         self._settings_generation = 0
         self._saving_inputs_only = False
+        self._retrying_monitoring = False
         self._failed_input_draft = None
         self._submitted_input_draft = None
         self._input_preferences = QSettings(
@@ -229,6 +230,17 @@ class GuiBackend(QObject):
     def inputPermissionCommand(self):
         help_data = self._service_data.get('input_permission_help')
         return help_data.get('command', '') if isinstance(help_data, dict) else ''
+
+    @Property(str, notify=changed)
+    def blockedInputPath(self):
+        help_data = self._service_data.get('input_permission_help')
+        path = help_data.get('path') if isinstance(help_data, dict) else None
+        return path if isinstance(path, str) else ''
+
+    @Property(bool, notify=changed)
+    def monitoringRetryAvailable(self):
+        return (self.backendAvailable and self._service_status == 'configuration-only'
+                and self._config_source == 'saved')
 
     @Property(str, notify=changed)
     def diagnostics(self):
@@ -396,7 +408,7 @@ class GuiBackend(QObject):
         self._missing_capabilities.clear()
         self._set_equipment(None, 'Host equipment inventory will refresh after reconnection.')
         self._power_state = 'unavailable'
-        if self._action_message == 'Saving settings through the host service.':
+        if self._settings_in_flight:
             self._action_message = (
                 'The connection changed while saving settings. Reconnect and '
                 'verify the saved configuration.')
@@ -677,6 +689,11 @@ class GuiBackend(QObject):
         self.changed.emit()
         self.refresh()
 
+    @Slot()
+    def retryMonitoring(self):
+        if self.monitoringRetryAvailable:
+            self.applySettings({}, retry_monitoring=True)
+
     @Slot(str)
     def requestPower(self, action):
         description = 'on' if action == 'on' else 'standby'
@@ -742,34 +759,42 @@ class GuiBackend(QObject):
         self._refresh_in_flight = False
         self.config = saved
         self._config_source = 'saved'
-        self._failed_input_draft = None
+        if not self._retrying_monitoring:
+            self._failed_input_draft = None
         self._action_message = (
             'Settings saved and applied live; service was not restarted.'
             if result.get('applied_live') is True else
             'Settings saved by an older backend; it may restart the service. '
             'Update the host backend for live settings.')
         self.changed.emit()
-        if self._input_preferences.value('pending') == self._submitted_input_draft:
+        if (not self._retrying_monitoring
+                and self._input_preferences.value('pending') == self._submitted_input_draft):
             self._input_preferences.remove('pending')
             self._input_preferences.sync()
         if not self.hasInputDraft():
-            if self._saving_inputs_only:
+            if self._saving_inputs_only or self._retrying_monitoring:
                 self.configurationChanged.emit()
             else:
                 self.settingsSaved.emit()
         self.refresh()
 
     @Slot('QVariantMap')
-    def applySettings(self, values, inputs_only=False):
+    def applySettings(self, values, inputs_only=False, retry_monitoring=False):
         if self._settings_in_flight:
             return
         config_saved = False
         self._saving_inputs_only = inputs_only
+        self._retrying_monitoring = retry_monitoring
         try:
-            validated = (validate_config({
-                'schema_version': SCHEMA_VERSION, **self.config,
-                'devices': values['devices'].splitlines(),
-            }) if inputs_only else config_from_settings(self.config, values))
+            if retry_monitoring:
+                validated = validate_config({'schema_version': SCHEMA_VERSION, **self.config})
+            elif inputs_only:
+                validated = validate_config({
+                    'schema_version': SCHEMA_VERSION, **self.config,
+                    'devices': values['devices'].splitlines(),
+                })
+            else:
+                validated = config_from_settings(self.config, values)
             self._submitted_input_draft = '\n'.join(validated['devices'])
             if self.backendAvailable:
                 interface = self._service_interface()
@@ -779,7 +804,9 @@ class GuiBackend(QObject):
                 serialized = json.dumps({
                     'schema_version': 1, **validated,
                 }, sort_keys=True)
-                self._action_message = 'Saving settings through the host service.'
+                self._action_message = ('Retrying monitoring with the saved settings.'
+                                        if retry_monitoring else
+                                        'Saving settings through the host service.')
                 self._refresh_generation += 1
                 self._refresh_in_flight = False
                 self._settings_generation += 1
