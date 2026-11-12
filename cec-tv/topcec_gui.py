@@ -135,7 +135,6 @@ class GuiBackend(QObject):
         self._input_save_timer.timeout.connect(self._save_pending_inputs)
         self._input_save_timer.start()
         self._config_source = 'unknown' if self.dbus_only else 'defaults'
-        self._simulation_mode = False
         self._service_data = {}
         self._equipment = {'outputs': [], 'adapters': [], 'inputs': []}
         self._equipment_known = False
@@ -249,10 +248,6 @@ class GuiBackend(QObject):
     @Property(str, notify=changed)
     def actionMessage(self):
         return self._action_message
-
-    @Property(bool, notify=changed)
-    def simulationMode(self):
-        return self._simulation_mode
 
     @Property(bool, notify=changed)
     def settingsEnabled(self):
@@ -371,12 +366,14 @@ class GuiBackend(QObject):
     def muteLabelList(self):
         return '\n'.join(self.config['mute_labels'])
 
-    @Slot(bool)
-    def setSimulationMode(self, enabled):
-        self._simulation_mode = bool(enabled)
-        self._action_message = (
-            'Manual actions are preview-only; the running service is unchanged.'
-            if enabled else '')
+    @Slot(str)
+    def simulatePower(self, action):
+        if action not in ('on', 'off'):
+            self._action_message = 'Unsupported simulation action: ' + action
+        else:
+            description = 'on' if action == 'on' else 'standby'
+            self._action_message = (
+                f'Simulation: would request TV {description}. No command sent.')
         self.changed.emit()
 
     @Slot(str)
@@ -699,8 +696,6 @@ class GuiBackend(QObject):
         description = 'on' if action == 'on' else 'standby'
         if action not in ('on', 'off'):
             self._action_message = 'Unsupported manual action: ' + action
-        elif self._simulation_mode:
-            self._action_message = f'Simulation: would request TV {description}. No command sent.'
         elif not self.backendAvailable:
             self._action_message = 'Cannot control the TV while the topCEC service is disconnected.'
         elif not self._service_data.get('cec_enabled'):
