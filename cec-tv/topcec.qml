@@ -228,6 +228,20 @@ Kirigami.ApplicationWindow {
         ? topcec.standbyReason.slice("Automatic standby blocked:".length).trim() : ""
     readonly property bool serviceHealthy: topcec.backendAvailable
         && topcec.serviceStatus === "running"
+    readonly property bool monitoringWarning: topcec.backendAvailable
+        && (topcec.serviceStatus === "configuration-only" || root.standbyBlocked)
+    readonly property string monitoringWarningText: root.standbyBlocked
+        ? "Automatic standby is blocked: "
+            + (root.standbyBlockReason.length ? root.standbyBlockReason : "No reason was reported.")
+            + (topcec.serviceStatus === "configuration-only" ? " Monitoring is inactive." : "")
+        : (topcec.inputPermissionMessage.length > 0
+            ? "Input access is blocked. Monitoring is inactive."
+            : "Monitoring is inactive.")
+
+    function detectedDeviceText(devices) {
+        return devices.length ? devices.map(device => device.label).join("\n")
+            : (topcec.equipmentAvailabilityKnown ? "None detected" : "Detection unavailable")
+    }
 
     function saveStatusText() {
         if (!topcec.settingsEnabled)
@@ -501,7 +515,7 @@ Kirigami.ApplicationWindow {
             id: pageContent
             objectName: "pageContent"
             Layout.fillWidth: true
-            Layout.maximumWidth: 760
+            Layout.maximumWidth: root.currentSection === 4 ? 1100 : 760
             Layout.alignment: Qt.AlignHCenter
             Layout.leftMargin: root.pageInset
             Layout.rightMargin: root.pageInset
@@ -664,7 +678,7 @@ Kirigami.ApplicationWindow {
                     SelectableLabel {
                         objectName: "actionFeedback"
                         Layout.fillWidth: true
-                        visible: topcec.actionMessage.length > 0
+                        visible: root.currentSection !== 4 && topcec.actionMessage.length > 0
                         text: topcec.actionMessage
                     }
 
@@ -745,18 +759,9 @@ Kirigami.ApplicationWindow {
                     Kirigami.InlineMessage {
                         objectName: "warningBanner"
                         Layout.fillWidth: true
-                        visible: root.currentSection === 0 && topcec.backendAvailable
-                            && (topcec.serviceStatus === "configuration-only" || root.standbyBlocked)
+                        visible: root.currentSection === 0 && root.monitoringWarning
                         type: Kirigami.MessageType.Warning
-                        text: root.standbyBlocked
-                            ? "Automatic standby is blocked: "
-                                + (root.standbyBlockReason.length
-                                    ? root.standbyBlockReason : "No reason was reported.")
-                                + (topcec.serviceStatus === "configuration-only"
-                                    ? " Monitoring is inactive." : "")
-                            : (topcec.inputPermissionMessage.length > 0
-                                ? "Input access is blocked. Monitoring is inactive."
-                                : "Monitoring is inactive.")
+                        text: root.monitoringWarningText
                     }
                     CopyableButton {
                         objectName: "viewRecoverySteps"
@@ -1174,30 +1179,49 @@ Kirigami.ApplicationWindow {
                         id: diagnosticsPanel
                         objectName: "diagnosticsPanel"
                         Layout.fillWidth: true
+                        maximumWidth: 1100
                         visible: root.currentSection === 4
                         ColumnLayout {
                             width: parent.width
+                            spacing: Kirigami.Units.mediumSpacing
                             SelectableHeading {
                                 level: 3
                                 text: "Current status"
                             }
-                            SelectableLabel {
+                            GridLayout {
                                 Layout.fillWidth: true
-                                text: "Service: " + topcec.serviceStatus
+                                columns: width >= 480 ? 2 : 1
+                                columnSpacing: Kirigami.Units.largeSpacing
+                                rowSpacing: Kirigami.Units.smallSpacing
+                                SelectableLabel {
+                                    Layout.fillWidth: true
+                                    text: "Service: " + topcec.serviceStatus
+                                    font.bold: true
+                                }
+                                SelectableLabel {
+                                    Layout.fillWidth: true
+                                    text: "TV power: " + topcec.powerState
+                                    font.bold: true
+                                }
                             }
                             SelectableLabel {
                                 objectName: "connectionDiagnostics"
                                 Layout.fillWidth: true
+                                visible: !topcec.backendAvailable
                                 text: topcec.connectionMessage
                             }
-                            SelectableLabel {
+                            Kirigami.InlineMessage {
+                                objectName: "diagnosticsWarningBanner"
                                 Layout.fillWidth: true
-                                text: "TV power: " + topcec.powerState
+                                visible: root.monitoringWarning
+                                type: Kirigami.MessageType.Warning
+                                text: root.monitoringWarningText
                             }
                             SelectableLabel {
                                 objectName: "standbyDiagnostics"
                                 Layout.fillWidth: true
-                                visible: topcec.standbyReason !== topcec.connectionMessage
+                                visible: !root.monitoringWarning
+                                    && topcec.standbyReason !== topcec.connectionMessage
                                 text: topcec.standbyReason
                             }
                             SelectableLabel {
@@ -1206,10 +1230,30 @@ Kirigami.ApplicationWindow {
                                 visible: topcec.actionMessage.length > 0
                                 text: topcec.actionMessage
                             }
+                            SelectableHeading {
+                                level: 3
+                                text: "Detected devices"
+                            }
+                            SelectableLabel {
+                                objectName: "diagnosticsDisplays"
+                                Layout.fillWidth: true
+                                text: "Displays: " + root.detectedDeviceText(topcec.detectedOutputs)
+                            }
+                            SelectableLabel {
+                                objectName: "diagnosticsAdapters"
+                                Layout.fillWidth: true
+                                text: "CEC adapters: " + root.detectedDeviceText(topcec.detectedAdapters)
+                            }
+                            SelectableLabel {
+                                objectName: "diagnosticsInputs"
+                                Layout.fillWidth: true
+                                text: "Input devices: " + root.detectedDeviceText(topcec.detectedInputs)
+                            }
                             SelectableLabel {
                                 objectName: "equipmentDiagnostics"
                                 Layout.fillWidth: true
-                                text: "Equipment discovery: " + topcec.equipmentMessage
+                                visible: !topcec.equipmentAvailabilityKnown
+                                text: topcec.equipmentMessage
                             }
                             ColumnLayout {
                                 objectName: "inputPermissionHelp"
@@ -1268,6 +1312,7 @@ Kirigami.ApplicationWindow {
                             }
                             SelectableHeading {
                                 level: 3
+                                Layout.topMargin: Kirigami.Units.smallSpacing
                                 text: "Service status details"
                             }
                             SelectableLabel {
@@ -1275,14 +1320,30 @@ Kirigami.ApplicationWindow {
                                 Layout.fillWidth: true
                                 text: "Structured status reported by the host service; this is not log output."
                             }
-                            Controls.TextArea {
-                                objectName: "backendDiagnostics"
+                            Controls.ScrollView {
+                                objectName: "backendDiagnosticsScroll"
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 110
-                                readOnly: true
-                                selectByMouse: true
-                                Accessible.name: "Structured service status details (not logs)"
-                                text: topcec.diagnostics
+                                Layout.preferredHeight: Math.max(220, Math.min(420, root.height * 0.4))
+                                clip: true
+                                rightPadding: diagnosticsScrollBar.implicitWidth
+                                Controls.ScrollBar.vertical: Controls.ScrollBar {
+                                    id: diagnosticsScrollBar
+                                    objectName: "backendDiagnosticsScrollBar"
+                                    policy: Controls.ScrollBar.AlwaysOn
+                                    orientation: Qt.Vertical
+                                    anchors.top: parent.top
+                                    anchors.bottom: parent.bottom
+                                    anchors.right: parent.right
+                                }
+                                Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
+                                Controls.TextArea {
+                                    objectName: "backendDiagnostics"
+                                    readOnly: true
+                                    selectByMouse: true
+                                    wrapMode: TextEdit.WrapAnywhere
+                                    Accessible.name: "Structured service status details (not logs)"
+                                    text: topcec.diagnostics
+                                }
                             }
                         }
                     }
