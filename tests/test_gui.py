@@ -453,6 +453,30 @@ class GuiChecks(unittest.TestCase):
 
         drawer = window.findChild(QObject, 'navigationDrawer')
         self.assertFalse(drawer.property('modal'))
+        app_header = window.findChild(QQuickItem, 'appIdentityHeader')
+        page_header = window.findChild(QQuickItem, 'pageToolbar')
+        self.assertAlmostEqual(
+            app_header.mapToScene(QPointF(0, 0)).y(),
+            page_header.mapToScene(QPointF(0, 0)).y(), delta=1)
+        self.assertAlmostEqual(
+            app_header.mapToScene(QPointF(0, app_header.height())).y(),
+            page_header.mapToScene(QPointF(0, page_header.height())).y(), delta=1)
+        engine.rootContext().setContextProperty('testAppHeader', app_header)
+        geometry_expression = QQmlExpression(
+            engine.rootContext(), window,
+            'JSON.stringify(testAppHeader.contentItem.children.map(item => ({'
+            'name: item.objectName, visible: item.visible, x: item.x, y: item.y,'
+            'width: item.width, height: item.height})))')
+        geometry, _ = geometry_expression.evaluate()
+        self.assertFalse(geometry_expression.hasError(), geometry_expression.error().toString())
+        items = {item['name']: item for item in json.loads(geometry)}
+        logo = items['appIdentityLogo']
+        name = items['appIdentityName']
+        self.assertTrue(logo['visible'])
+        self.assertLessEqual(logo['x'] + logo['width'], name['x'])
+        self.assertAlmostEqual(
+            logo['y'] + logo['height'] / 2,
+            name['y'] + name['height'] / 2, delta=1)
         self.assertEqual(window.property('currentSection'), 0)
         self.assertTrue(window.findChild(QObject, 'overviewSummary').property('visible'))
         equipment = window.findChild(QObject, 'equipmentSection')
