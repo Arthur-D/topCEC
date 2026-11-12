@@ -811,7 +811,7 @@ class GuiBackend(QObject):
                 generation = self._refresh_generation
                 self._simulated_action = None
                 self._update_diagnostics()
-                self._action_message = 'Sending TV power request.'
+                self._action_message = ''
                 self._async_call(
                     interface, 'RequestPower',
                     lambda reply: self._power_reply(
@@ -860,8 +860,7 @@ class GuiBackend(QObject):
         if not self._retrying_monitoring:
             self._failed_input_draft = None
         self._action_message = (
-            'Settings saved and applied live; service was not restarted.'
-            if result.get('applied_live') is True else
+            '' if result.get('applied_live') is True else
             'Settings saved by an older backend; it may restart the service. '
             'Update the host backend for live settings.')
         self.changed.emit()
