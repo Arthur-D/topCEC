@@ -217,7 +217,7 @@ class GuiChecks(unittest.TestCase):
                 method, callback, arguments = requests.pop()
                 self.assertEqual(method, 'ApplySettings')
                 submitted = json.loads(arguments[0])
-                self.assertEqual(submitted['target_output'], initial['target_output'])
+                self.assertEqual(submitted['target_output'], 'eDP-1')
                 self.assertEqual(submitted['cec_port'], initial['cec_port'])
                 self.assertEqual(submitted['devices'],
                                  ['/dev/input/by-path/keyboard', '/dev/input/by-id/mouse'])
@@ -353,12 +353,16 @@ class GuiChecks(unittest.TestCase):
         self.assertFalse(display.property('visible'))
         self.assertFalse(adapter.property('visible'))
         backend._config_reply(0, self.reply(config))
-        self.assertIn('availability unknown', display.property('description'))
-        self.assertIn('availability unknown', adapter.property('description'))
+        self.assertEqual(display.property('description'), 'Not configured')
+        self.assertEqual(adapter.property('description'), 'Not configured')
+        self.assertFalse(display.property('visible'))
+        self.assertFalse(adapter.property('visible'))
         backend._equipment_reply(0, self.reply({
             'outputs': [], 'adapters': [], 'inputs': [], 'errors': []}))
-        self.assertIn('unavailable / not detected', display.property('description'))
-        self.assertIn('unavailable / not detected', adapter.property('description'))
+        self.assertEqual(display.property('description'), 'Not configured')
+        self.assertEqual(adapter.property('description'), 'Not configured')
+        self.assertFalse(display.property('visible'))
+        self.assertFalse(adapter.property('visible'))
         backend._equipment_reply(0, self.reply({
             'outputs': [{'path': config['target_output'], 'label': 'Detected TV'}],
             'adapters': [{'path': config['cec_port'], 'label': 'Detected adapter'}],
@@ -735,8 +739,7 @@ class GuiChecks(unittest.TestCase):
         self.assertFalse(other.property('checked'))
         self.assertFalse(save.property('enabled'))
         inventory([], [], [], ['Display discovery unavailable'])
-        self.assertIn('availability unknown',
-                      window.findChild(QObject, 'retainedOutput').property('text'))
+        self.assertFalse(window.findChild(QObject, 'retainedOutput').property('visible'))
         self.assertFalse(save.property('enabled'))
         inventory(detected_outputs, detected_adapters, detected_inputs)
         self.assertEqual(output.property('currentIndex'), 0)
@@ -839,8 +842,10 @@ class GuiChecks(unittest.TestCase):
         self.assertFalse(backend.equipmentAvailabilityKnown)
         self.assertEqual(output.property('currentIndex'), -1)
         self.assertEqual(adapter.property('currentIndex'), -1)
-        self.assertIn('availability unknown', window.findChild(QObject, 'retainedOutput').property('text'))
-        self.assertIn('availability unknown', window.findChild(QObject, 'retainedAdapter').property('text'))
+        self.assertIn('availability unknown',
+                      window.findChild(QObject, 'retainedOutput').property('text'))
+        self.assertIn('availability unknown',
+                      window.findChild(QObject, 'retainedAdapter').property('text'))
         self.assertEqual(repeater.property('count'), 0)
         self.assertIn('availability unknown', window.findChild(QObject, 'retainedInputs').property('text'))
         commands = window.findChild(QObject, 'equipmentRecoveryCommands')
@@ -871,13 +876,16 @@ class GuiChecks(unittest.TestCase):
 
         inventory([])
         self.assertTrue(backend.equipmentAvailabilityKnown)
-        self.assertIn('not detected', window.findChild(QObject, 'retainedOutput').property('text'))
+        self.assertIn('not detected',
+                      window.findChild(QObject, 'retainedOutput').property('text'))
         self.assertFalse(copy.property('visible'))
         self.assertEqual(backend.equipmentRecoveryCommands, '')
         inventory(['Display discovery: compositor not responding'])
         self.assertFalse(backend.equipmentAvailabilityKnown)
-        self.assertIn('availability unknown', window.findChild(QObject, 'retainedOutput').property('text'))
-        self.assertIn('availability unknown', window.findChild(QObject, 'retainedAdapter').property('text'))
+        self.assertIn('availability unknown',
+                      window.findChild(QObject, 'retainedOutput').property('text'))
+        self.assertIn('availability unknown',
+                      window.findChild(QObject, 'retainedAdapter').property('text'))
         self.assertEqual(repeater.property('count'), 0)
         self.assertIn('compositor not responding', backend.equipmentMessage)
         self.assertNotIn('An empty list means no equipment', backend.equipmentMessage)
@@ -931,8 +939,8 @@ class GuiChecks(unittest.TestCase):
         update_inventory(inventory)
         for field in (configured_output, configured_adapter):
             self.assertEqual(field.property('count'), 1)
-            self.assertEqual(field.property('currentIndex'), -1)
-        self.assertEqual(configured_output.property('editText'), original_config['target_output'])
+            self.assertEqual(field.property('currentIndex'), 0)
+        self.assertEqual(configured_output.property('editText'), 'DP-NEW')
         self.assertEqual(configured_inputs.property('text'), '\n'.join(original_config['devices']))
         self.assertEqual(backend.config, original_config)
         engine.rootContext().setContextProperty('detectedChoice', configured_output)
@@ -954,8 +962,7 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(configured_output.property('count'), 0)
         self.assertEqual(configured_output.property('currentIndex'), -1)
         self.assertEqual(configured_output.property('displayText'), 'Choose a detected display')
-        self.assertIn('DP-NEW (unavailable / not detected)',
-                      window.findChild(QObject, 'retainedOutput').property('text'))
+        self.assertFalse(window.findChild(QObject, 'retainedOutput').property('visible'))
         self.assertIn('/dev/input/by-id/real-kbd', configured_inputs.property('text'))
         # Replug updates the same configuration controls without losing drafts.
         update_inventory(inventory)

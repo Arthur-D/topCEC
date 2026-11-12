@@ -128,9 +128,9 @@ Kirigami.ApplicationWindow {
     function equipmentSummary(selector) {
         if (selector.detected)
             return selector.selectedValue
-        if (topcec.configurationSource !== "saved" && !selector.manualEntry)
-            return "Not configured"
-        return selector.valueToSave.length ? root.retainedValue(selector.valueToSave) : "Not configured"
+        if (selector.manualEntry && selector.valueToSave.length)
+            return root.retainedValue(selector.valueToSave)
+        return "Not configured"
     }
 
     readonly property bool equipmentReady: outputField.acceptable && adapterField.acceptable
@@ -302,6 +302,7 @@ Kirigami.ApplicationWindow {
         property bool syncing: false
         property bool manualEntry: false
         property bool automaticSelection: false
+        property bool explicitSelection: false
         property string prompt: "Choose a detected device"
         property string selectedValue: ""
         readonly property bool detected: equipment.some(item => item.path === selectedValue
@@ -310,13 +311,15 @@ Kirigami.ApplicationWindow {
         property string initialValue: ""
         readonly property bool acceptable: manualEntry
             ? editText.trim().length > 0
-            : (detected || (selectedValue === initialValue && configuredValue.length > 0))
+            : (detected || (automaticSelection && selectedValue.length > 0)
+                || (selectedValue === initialValue && configuredValue.length > 0))
         readonly property string valueToSave: manualEntry
             ? editText.trim() : (selectedValue.length ? selectedValue : configuredValue)
         function load(value, showConfigured) {
             configuredValue = value
             initialValue = showConfigured ? value : ""
             automaticSelection = false
+            explicitSelection = false
             synchronize(initialValue)
         }
         editable: manualEntry
@@ -326,8 +329,11 @@ Kirigami.ApplicationWindow {
             syncing = true
             let selection = value
             if (automaticSelection) {
-                selection = equipment.length === 1 ? equipment[0].path : ""
-            } else if (!selection.length && equipment.length === 1) {
+                if (equipment.length === 1)
+                    selection = equipment[0].path
+            } else if (!explicitSelection && !manualEntry && equipment.length === 1
+                    && (!selection.length || !equipment.some(item => item.path === selection
+                        || (item.aliases || []).includes(selection)))) {
                 selection = equipment[0].path
                 automaticSelection = true
             }
@@ -342,6 +348,7 @@ Kirigami.ApplicationWindow {
         onManualEntryChanged: synchronize(selectedValue)
         onActivated: {
             automaticSelection = false
+            explicitSelection = true
             selectedValue = model[index].path
             editText = model[index].path
             root.settingsDirty = true
@@ -349,6 +356,7 @@ Kirigami.ApplicationWindow {
         onEditTextChanged: {
             if (!syncing && manualEntry) {
                 automaticSelection = false
+                explicitSelection = true
                 selectedValue = editText
                 if (activeFocus)
                     root.settingsDirty = true
@@ -863,7 +871,8 @@ Kirigami.ApplicationWindow {
                                     SelectableLabel {
                                         objectName: "retainedOutput"
                                         Layout.fillWidth: true
-                                        visible: !outputField.detected && outputField.valueToSave.length > 0
+                                        visible: manualOutput.checked && !outputField.detected
+                                            && outputField.valueToSave.length > 0
                                         text: "Saved display: " + root.retainedValue(outputField.valueToSave)
                                     }
                                     CopyableCheckBox {
@@ -894,7 +903,8 @@ Kirigami.ApplicationWindow {
                                     SelectableLabel {
                                         objectName: "retainedAdapter"
                                         Layout.fillWidth: true
-                                        visible: !adapterField.detected && adapterField.valueToSave.length > 0
+                                        visible: manualAdapter.checked && !adapterField.detected
+                                            && adapterField.valueToSave.length > 0
                                         text: "Saved adapter: " + root.retainedValue(adapterField.valueToSave)
                                     }
                                     CopyableCheckBox {
