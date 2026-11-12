@@ -607,10 +607,18 @@ class GuiChecks(unittest.TestCase):
         simulate_off = window.findChild(QObject, 'simulateOffButton')
         self.assertTrue(simulate_on.property('visible'))
         self.assertTrue(simulate_off.property('visible'))
+        self.assertEqual(simulate_off.property('text'), 'Simulate standby')
         QMetaObject.invokeMethod(simulate_on, 'click')
-        self.assertIn('Simulation: would request TV on', backend.actionMessage)
+        self.assertEqual(backend.actionMessage, '')
+        self.assertEqual(window.findChild(QObject, 'powerStateLabel').property('text'),
+                         'On (simulated)')
+        self.assertIn('Pending action: on (simulated)', backend.diagnostics)
         QMetaObject.invokeMethod(simulate_off, 'click')
-        self.assertIn('Simulation: would request TV standby', backend.actionMessage)
+        self.assertEqual(backend.actionMessage, '')
+        self.assertEqual(window.findChild(QObject, 'powerStateLabel').property('text'),
+                         'Off (simulated)')
+        self.assertIn('Pending action: standby (simulated)', backend.diagnostics)
+        self.assertFalse(window.findChild(QObject, 'actionDiagnostics').property('visible'))
         diagnostics = window.findChild(QObject, 'backendDiagnostics')
         self.assertIn('Scan:', diagnostics.property('text'))
         self.assertNotIn('Service:', diagnostics.property('text'))
@@ -725,10 +733,12 @@ class GuiChecks(unittest.TestCase):
             backend = GuiBackend(dbus_only=False)
         backend._connection_state = 'connected'
         backend._service_status = 'running'
-        backend._diagnostics = 'Scan: Ready\nCEC fault: None\nPending action: None'
-        backend._service_data = {'input_permission_help': {
-            'path': '/dev/input/by-id/keyboard', 'message': 'Input access was denied.',
-        }}
+        backend._service_data = {
+            'scan_status': 'Ready',
+            'input_permission_help': {
+                'path': '/dev/input/by-id/keyboard', 'message': 'Input access was denied.',
+            },
+        }
         backend._set_equipment({
             'outputs': [{'path': 'HDMI-A-1', 'label': 'HDMI-A-1'}],
             'adapters': [{'path': '/dev/cec', 'label': 'CEC adapter'}],
@@ -757,7 +767,7 @@ class GuiChecks(unittest.TestCase):
             QMetaObject.invokeMethod(copy, 'click')
             report = app.clipboard().text()
             for expected in ('Host service: Connected', 'Monitoring: Active', 'TV power:',
-                             'Pending action: None', 'Keyboard · /dev/input/event1 · Access blocked',
+                             'Pending action: none', 'Keyboard · /dev/input/event1 · Access blocked',
                              'Controller · /dev/input/event2', 'Input access was denied.'):
                 self.assertIn(expected, report)
             QMetaObject.invokeMethod(details_toggle, 'click')
@@ -1698,12 +1708,51 @@ class GuiChecks(unittest.TestCase):
 
     def test_simulation_buttons_preview_without_calling_service(self):
         backend = GuiBackend(dbus_only=True)
-        backend._service_data = {'cec_enabled': True}
+        backend._service_data = {'cec_enabled': True, 'power_state': 'on',
+                                 'pending_action': 'on'}
+        backend._config_reply(0, self.reply({'schema_version': 1, **DEFAULT_CONFIG}))
         with patch.object(backend, '_service_interface') as service:
             backend.simulatePower('off')
         service.assert_not_called()
-        self.assertEqual(backend.actionMessage,
-                         'Simulation: would request TV standby. No command sent.')
+        self.assertEqual(backend.actionMessage, '')
+        self.assertEqual(backend.powerState, 'Off (simulated)')
+        self.assertIn('Pending action: standby (simulated)', backend.diagnostics)
+        backend._config_reply(0, self.reply({'schema_version': 1, **DEFAULT_CONFIG}))
+        self.assertEqual(backend.powerState, 'Off (simulated)')
+        self.assertIn('Pending action: standby (simulated)', backend.diagnostics)
+        backend.simulatePower('on')
+        self.assertEqual(backend.powerState, 'On (simulated)')
+        self.assertIn('Pending action: on (simulated)', backend.diagnostics)
+        self.assertEqual(backend._service_data['pending_action'], 'on')
+
+        interface = Mock(isValid=Mock(return_value=True))
+        with patch.object(backend, '_service_interface', return_value=interface), \
+                patch.object(backend, '_async_call'):
+            backend.requestPower('on')
+        self.assertEqual(backend.powerState, 'on')
+        self.assertIn('Pending action: on\n', backend.diagnostics)
+
+    def test_cec_fault_uses_successful_adapter_discovery(self):
+        backend = GuiBackend(dbus_only=True)
+        backend._service_data = {'cec_fault': None}
+        backend._config_reply(0, self.reply({'schema_version': 1, **DEFAULT_CONFIG}))
+        inventory = {'outputs': [], 'adapters': [], 'inputs': [], 'errors': []}
+        self.assertIn('CEC fault: none', backend.diagnostics)
+        backend._equipment_reply(0, self.reply(inventory))
+        self.assertIn('CEC fault: adapter not found', backend.diagnostics)
+        backend._service_data['cec_fault'] = 'adapter failed'
+        backend._config_reply(0, self.reply({'schema_version': 1, **DEFAULT_CONFIG}))
+        self.assertIn('CEC fault: adapter failed', backend.diagnostics)
+        backend._service_data['cec_fault'] = None
+        backend._equipment_reply(0, self.reply({
+            **inventory, 'errors': ['CEC adapter discovery: permission denied']}))
+        self.assertIn('CEC fault: none', backend.diagnostics)
+        backend._equipment_reply(0, self.reply({
+            **inventory, 'errors': ['Display discovery: unavailable']}))
+        self.assertIn('CEC fault: adapter not found', backend.diagnostics)
+        backend._equipment_reply(0, self.reply({
+            **inventory, 'adapters': [{'path': '/dev/cec', 'label': 'CEC'}]}))
+        self.assertIn('CEC fault: none', backend.diagnostics)
 
     def test_gui_displays_english_service_diagnostics(self):
         from monitor import Mapping

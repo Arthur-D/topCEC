@@ -1425,7 +1425,7 @@ Kirigami.ApplicationWindow {
                             }
                             CopyableButton {
                                 objectName: "simulateOffButton"
-                                text: "Simulate off"
+                                text: "Simulate standby"
                                 icon.name: "system-suspend"
                                 onClicked: topcec.simulatePower("off")
                             }
