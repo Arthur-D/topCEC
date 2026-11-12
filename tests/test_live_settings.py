@@ -110,8 +110,8 @@ class LiveSettingsChecks(unittest.TestCase):
             context.powers.append(power)
             return power
 
-        def make_provider(ecodes, axis, rz):
-            provider = monitor.EvdevActivityProvider(ecodes, axis, rz)
+        def make_provider(ecodes, axis, rz, overrides):
+            provider = monitor.EvdevActivityProvider(ecodes, axis, rz, overrides)
             provider.seed = Mock(wraps=provider.seed)
             context.providers.append(provider)
             return provider
@@ -158,7 +158,8 @@ class LiveSettingsChecks(unittest.TestCase):
             cec_port=config['cec_port'], kde_timeout=config['kde_timeout'],
             require_snapshot=config['require_snapshot'],
             axis_deadzone_percent=config['axis_deadzone_percent'],
-            rz_deadzone_percent=config['rz_deadzone_percent'], config=str(path))
+            rz_deadzone_percent=config['rz_deadzone_percent'],
+            device_axis_deadzones=config['device_axis_deadzones'], config=str(path))
         with patch.dict(sys.modules, modules), \
                 patch.object(monitor.selectors, 'DefaultSelector', side_effect=make_selector), \
                 patch.object(monitor.subprocess, 'Popen', side_effect=make_worker), \
@@ -269,7 +270,11 @@ class LiveSettingsChecks(unittest.TestCase):
                 axes = context.providers[-1].seed(context.inputs[0])
                 self.assertEqual(axes[0].threshold, 100)
                 self.assertEqual(axes[2].threshold, 150)
-                context.inputs[0].events = [SimpleNamespace(type=3, code=0, value=600)]
+                self.apply(receiver, device_axis_deadzones={'/mock/keyboard': {'0': 18}})
+                self.assertEqual(load_config(path)['device_axis_deadzones'],
+                                 {'/mock/keyboard': {'0': 18}})
+                self.assertEqual(context.providers[-1].seed(context.inputs[0])[0].threshold, 180)
+                context.inputs[0].events = [SimpleNamespace(type=3, code=0, value=700)]
                 context.now = 2
                 self.assertTrue(context.callbacks[100]())
                 self.assertEqual(context.timer.last, 2)

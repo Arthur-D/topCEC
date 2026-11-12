@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     'require_snapshot': False,
     'axis_deadzone_percent': 2.0,
     'rz_deadzone_percent': 5.0,
+    'device_axis_deadzones': {},
 }
 
 
@@ -66,6 +67,18 @@ def validate_config(value):
                 or not 0 < number <= 25):
             raise ValueError(f'{key} must be a finite number greater than 0 and at most 25')
         config[key] = float(number)
+    overrides = config['device_axis_deadzones']
+    if not isinstance(overrides, dict):
+        raise ValueError('device_axis_deadzones must be an object')
+    for path, axes in overrides.items():
+        if not isinstance(path, str) or not path.strip() or not isinstance(axes, dict):
+            raise ValueError('device_axis_deadzones must map device paths to axis objects')
+        for code, number in axes.items():
+            if (not isinstance(code, str) or not code.isascii() or not code.isdecimal()
+                    or str(int(code)) != code or not 0 <= int(code) < 47
+                    or type(number) not in (int, float) or not math.isfinite(number)
+                    or not 0 < number <= 25):
+                raise ValueError('Invalid device axis deadzone')
     return config
 
 

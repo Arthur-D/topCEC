@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import re
+import struct
 import subprocess
 
 
@@ -11,6 +12,28 @@ def _entries(directory):
         return sorted(Path(directory).iterdir())
     except FileNotFoundError:
         return []
+
+def _input_axes(target):
+    from evdev import ecodes
+
+    text = (Path('/sys/class/input') / target.name / 'device/capabilities/abs').read_text(
+        encoding='ascii').strip()
+    words = text.split()
+    if not words:
+        raise ValueError('Empty absolute-axis capability bitmap')
+    bits = 0
+    for word in words:
+        if not re.fullmatch(r'[0-9a-fA-F]+', word):
+            raise ValueError('Invalid absolute-axis capability bitmap')
+        bits = (bits << (8 * struct.calcsize('L'))) | int(word, 16)
+    axes = []
+    for code in range(ecodes.ABS_MT_SLOT):
+        if bits & (1 << code):
+            name = ecodes.ABS.get(code, f'ABS_{code:02X}')
+            if isinstance(name, list):
+                name = name[0]
+            axes.append({'code': code, 'name': name})
+    return axes
 
 
 def discover_equipment():
@@ -58,10 +81,16 @@ def discover_equipment():
             except OSError as error:
                 name = target.name
                 result['errors'].append('Input name discovery: ' + str(error))
+            try:
+                axes = _input_axes(target)
+            except (OSError, ValueError, ImportError) as error:
+                axes = None
+                result['errors'].append(f'Input axis discovery ({target.name}): {error}')
             result['inputs'].append({
                 'path': str(path), 'label': f'{name} - {path}',
                 'aliases': list(dict.fromkeys(
                     str(alias) for alias in [*paths[1:], target] if alias != path)),
+                'axes': axes,
             })
     except OSError as error:
         result['errors'].append('Input device discovery: ' + str(error))
