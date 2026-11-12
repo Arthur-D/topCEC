@@ -1175,11 +1175,16 @@ Kirigami.ApplicationWindow {
                         visible: root.currentSection === 4
                         ColumnLayout {
                             width: parent.width
+                            SelectableHeading {
+                                level: 3
+                                text: "Current status"
+                            }
                             SelectableLabel {
                                 Layout.fillWidth: true
                                 text: "Service: " + topcec.serviceStatus
                             }
                             SelectableLabel {
+                                objectName: "connectionDiagnostics"
                                 Layout.fillWidth: true
                                 text: topcec.connectionMessage
                             }
@@ -1190,6 +1195,7 @@ Kirigami.ApplicationWindow {
                             SelectableLabel {
                                 objectName: "standbyDiagnostics"
                                 Layout.fillWidth: true
+                                visible: topcec.standbyReason !== topcec.connectionMessage
                                 text: topcec.standbyReason
                             }
                             SelectableLabel {
@@ -1199,8 +1205,9 @@ Kirigami.ApplicationWindow {
                                 text: topcec.actionMessage
                             }
                             SelectableLabel {
+                                objectName: "equipmentDiagnostics"
                                 Layout.fillWidth: true
-                                text: topcec.equipmentMessage
+                                text: "Equipment discovery: " + topcec.equipmentMessage
                             }
                             ColumnLayout {
                                 objectName: "inputPermissionHelp"
@@ -1257,12 +1264,22 @@ Kirigami.ApplicationWindow {
                                 text: "Copy host update command"
                                 onClicked: topcec.copyText(topcec.equipmentRecoveryCommands)
                             }
+                            SelectableHeading {
+                                level: 3
+                                text: "Service status details"
+                            }
+                            SelectableLabel {
+                                objectName: "diagnosticsStatusExplanation"
+                                Layout.fillWidth: true
+                                text: "Structured status reported by the host service; this is not log output."
+                            }
                             Controls.TextArea {
                                 objectName: "backendDiagnostics"
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 110
                                 readOnly: true
                                 selectByMouse: true
+                                Accessible.name: "Structured service status details (not logs)"
                                 text: topcec.diagnostics
                             }
                         }

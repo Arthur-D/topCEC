@@ -597,6 +597,18 @@ class GuiChecks(unittest.TestCase):
         QTest.qWait(80)
         self.assertEqual(window.property('currentSection'), 4)
         self.assertTrue(window.findChild(QObject, 'diagnosticsPanel').property('visible'))
+        diagnostics = window.findChild(QObject, 'backendDiagnostics')
+        self.assertIn('Scan:', diagnostics.property('text'))
+        self.assertNotIn('Service:', diagnostics.property('text'))
+        self.assertEqual(
+            window.findChild(QObject, 'diagnosticsStatusExplanation').property('text'),
+            'Structured status reported by the host service; this is not log output.')
+        standby_diagnostics = window.findChild(QObject, 'standbyDiagnostics')
+        self.assertTrue(standby_diagnostics.property('visible'))
+        backend._standby_reason = backend._connection_message
+        backend.changed.emit()
+        app.processEvents()
+        self.assertFalse(standby_diagnostics.property('visible'))
         self.assertTrue(window.findChild(QObject, 'inputPermissionHelp').property('visible'))
         self.assertEqual(window.findChild(QObject, 'inputPermissionCommand').property('text'),
                          backend.inputPermissionCommand)
@@ -1519,6 +1531,7 @@ class GuiChecks(unittest.TestCase):
             'Automatic standby blocked: Waiting for Firefox snapshot from the live bridge')
         self.assertIn('Scan: Waiting for Firefox snapshot from the live bridge',
                       backend.diagnostics)
+        self.assertNotIn('Service: running', backend.diagnostics)
 
     def test_flatpak_missing_service_is_generic_and_actionable(self):
         bus = Mock()
