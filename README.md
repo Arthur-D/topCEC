@@ -222,9 +222,18 @@ applies them live through `ApplySettings` on
 `net.local.CecActivity`. Manual standby is rejected while monitor safety checks
 fail or a CEC recovery/standby operation is active.
 
-The panel provides output and adapter selection, input-device and Firefox
-mute-label settings, KDE-managed/custom/disabled inactivity timeouts, current
-power and service status, diagnostics, and manual controls. The native GUI saves
+The native Qt Quick/Kirigami panel follows the current Plasma theme. Its
+**Overview** shows TV power, service state, recovery notices, and equipment and
+standby summaries. The navigation sidebar opens **Equipment**,
+**Automatic standby**, and **Diagnostics**; on narrow windows it becomes a
+navigation drawer. Unsaved settings and input selections are retained when
+switching sections. **Advanced** exposes Firefox mute-label settings, controller
+deadzones, and manual-action simulation. The persistent **Save and apply** footer
+is available from every section.
+
+The panel provides output and adapter selection, input-device settings,
+KDE-managed/custom/disabled inactivity timeouts, diagnostics, and manual power
+controls. The native GUI saves
 through the host service when connected. When offline it saves the versioned
 config to the XDG default path for the next service start, without starting or
 restarting systemd. “Simulate manual actions”
@@ -238,7 +247,7 @@ selection and copying with Ctrl+C. Right-click a button caption, checkbox,
 selector or numeric value and choose **Copy text** without activating it (the
 keyboard Menu key opens the same action). **Copy page text** copies the current
 page, including disabled control captions and the window title; it excludes
-the hidden setup/configuration page.
+hidden sections and the hidden setup/configuration page.
 
 ### Qt AT-SPI diagnostic
 
