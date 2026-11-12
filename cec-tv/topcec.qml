@@ -20,6 +20,9 @@ Kirigami.ApplicationWindow {
     readonly property var sectionNames: ["Overview", "Display", "Standby", "Input", "Diagnostics"]
     property bool settingsDirty: false
     property string submittedSettings: ""
+    property var axisDraft: ({})
+    property real defaultAxisDeadzone: 2
+    property real defaultRzDeadzone: 5
 
     globalDrawer: Kirigami.GlobalDrawer {
         id: navigationDrawer
@@ -127,8 +130,9 @@ Kirigami.ApplicationWindow {
             timeoutMinutes: timeoutMinutes.value,
             devices: devicesField.text,
             muteLabels: labelsField.text,
-            axisDeadzone: deadzoneField.value,
-            rzDeadzone: rzDeadzoneField.value
+            axisDeadzone: defaultAxisDeadzone,
+            rzDeadzone: defaultRzDeadzone,
+            deviceAxisDeadzones: axisDraft
         }
     }
 
@@ -210,6 +214,41 @@ Kirigami.ApplicationWindow {
             return item ? item.path : path
         })
         return [...new Set(paths)].join("\n")
+    }
+
+    function selectedAxisDevices() {
+        return topcec.detectedInputs.filter(device =>
+            inputPaths().some(path => path === device.path || (device.aliases || []).includes(path)))
+    }
+
+    function selectedAxisRows() {
+        let rows = []
+        for (let device of selectedAxisDevices()) {
+            for (let axis of (device.axes || []))
+                rows.push({device: device, axis: axis})
+        }
+        return rows
+    }
+
+    function axisPath(device) {
+        return [device.path, ...(device.aliases || [])].find(path => axisDraft[path] !== undefined)
+            || device.path
+    }
+
+    function axisValue(device, axis) {
+        let overrides = axisDraft[axisPath(device)] || {}
+        return overrides[String(axis.code)] !== undefined ? overrides[String(axis.code)]
+            : (axis.code === 5 ? defaultRzDeadzone : defaultAxisDeadzone)
+    }
+
+    function setAxisValue(device, axis, value) {
+        let draft = JSON.parse(JSON.stringify(axisDraft))
+        let path = axisPath(device)
+        if (!draft[path])
+            draft[path] = {}
+        draft[path][String(axis.code)] = value
+        axisDraft = draft
+        settingsDirty = true
     }
 
     function setInputDeviceSelected(device, selected) {
@@ -556,8 +595,9 @@ Kirigami.ApplicationWindow {
         timeoutMinutes.value = topcec.timeoutMinutes()
         devicesField.text = topcec.deviceList()
         labelsField.text = topcec.muteLabelList()
-        deadzoneField.value = Math.round(topcec.setting("axis_deadzone_percent"))
-        rzDeadzoneField.value = Math.round(topcec.setting("rz_deadzone_percent"))
+        defaultAxisDeadzone = topcec.setting("axis_deadzone_percent")
+        defaultRzDeadzone = topcec.setting("rz_deadzone_percent")
+        axisDraft = JSON.parse(JSON.stringify(topcec.setting("device_axis_deadzones") || {}))
     }
 
     Component.onCompleted: loadSettings()
@@ -1240,17 +1280,23 @@ Kirigami.ApplicationWindow {
                                     Layout.fillWidth: true
                                     text: "One device path per line"
                                 }
-                                Controls.TextArea {
-                                    id: devicesField
-                                    objectName: "devicesField"
+                                Controls.ScrollView {
+                                    objectName: "devicesScroll"
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: 72
-                                    Accessible.name: "Input device paths (one per line)"
-                                    selectByMouse: true
-                                    onTextChanged: {
-                                        if (activeFocus) root.settingsDirty = true
+                                    clip: true
+                                    Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
+                                    Controls.ScrollBar.vertical.policy: Controls.ScrollBar.AsNeeded
+                                    Controls.TextArea {
+                                        id: devicesField
+                                        objectName: "devicesField"
+                                        Accessible.name: "Input device paths (one per line)"
+                                        selectByMouse: true
+                                        onTextChanged: {
+                                            if (activeFocus) root.settingsDirty = true
+                                        }
+                                        wrapMode: TextEdit.WrapAnywhere
                                     }
-                                    wrapMode: TextEdit.WrapAnywhere
                                 }
                                 CopyableButton {
                                     objectName: "copySelectedInputs"
@@ -1283,23 +1329,33 @@ Kirigami.ApplicationWindow {
                         SurfaceFrame {
                             Layout.fillWidth: true
                             visible: deadzonesToggle.checked
-                            CopyableFormSpinBox {
-                                id: deadzoneField
-                                objectName: "deadzoneField"
-                                label: "Axis deadzone (%)"
-                                Layout.fillWidth: true
-                                from: 1
-                                to: 25
-                                onValueModified: root.settingsDirty = true
-                            }
-                            CopyableFormSpinBox {
-                                id: rzDeadzoneField
-                                objectName: "rzDeadzoneField"
-                                label: "ABS_RZ deadzone (%)"
-                                Layout.fillWidth: true
-                                from: 1
-                                to: 25
-                                onValueModified: root.settingsDirty = true
+                            ColumnLayout {
+                                width: parent.width
+                                SelectableLabel {
+                                    Layout.fillWidth: true
+                                    visible: root.selectedAxisDevices().some(device => !Array.isArray(device.axes))
+                                    text: "Axis information is unavailable for some selected devices. Check discovery diagnostics and update the host backend if needed."
+                                }
+                                SelectableLabel {
+                                    Layout.fillWidth: true
+                                    visible: root.selectedAxisRows().length === 0
+                                        && !root.selectedAxisDevices().some(device => !Array.isArray(device.axes))
+                                    text: "No axes detected on selected input devices."
+                                }
+                                Repeater {
+                                    objectName: "axisChoices"
+                                    model: root.selectedAxisRows()
+                                    delegate: CopyableFormSpinBox {
+                                        required property var modelData
+                                        objectName: "axisDeadzone:" + modelData.device.path + ":" + modelData.axis.code
+                                        Layout.fillWidth: true
+                                        label: modelData.device.label + " · " + modelData.axis.name + " (%)"
+                                        from: 1
+                                        to: 25
+                                        value: Math.round(root.axisValue(modelData.device, modelData.axis))
+                                        onValueModified: root.setAxisValue(modelData.device, modelData.axis, value)
+                                    }
+                                }
                             }
                         }
                     }

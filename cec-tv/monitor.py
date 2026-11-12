@@ -355,15 +355,25 @@ class Axis:
 
 
 class EvdevActivityProvider:
-    def __init__(self, ecodes, axis_deadzone_percent, rz_deadzone_percent):
+    def __init__(self, ecodes, axis_deadzone_percent, rz_deadzone_percent,
+                 device_axis_deadzones=None):
         self.ecodes = ecodes
         self.axis_deadzone_percent = axis_deadzone_percent
         self.rz_deadzone_percent = rz_deadzone_percent
+        self.device_axis_deadzones = device_axis_deadzones or {}
 
-    def seed(self, device):
+    def seed(self, device, path=None):
         ecodes = self.ecodes
-        return {code: Axis(info, self.rz_deadzone_percent if code == ecodes.ABS_RZ
-                           else self.axis_deadzone_percent) for code, info in
+        device_path = path or getattr(device, 'path', None)
+        overrides = {}
+        if device_path and self.device_axis_deadzones:
+            identity = Path(device_path).resolve()
+            for path, axes in self.device_axis_deadzones.items():
+                if Path(path).resolve() == identity:
+                    overrides.update(axes)
+        return {code: Axis(info, overrides.get(
+            str(code), self.rz_deadzone_percent if code == ecodes.ABS_RZ
+            else self.axis_deadzone_percent)) for code, info in
                 device.capabilities(absinfo=True).get(ecodes.EV_ABS, [])
                 if code < ecodes.ABS_MT_SLOT}
 
@@ -690,6 +700,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'require_snapshot': bool(args.require_snapshot or args.cec),
         'axis_deadzone_percent': args.axis_deadzone_percent,
         'rz_deadzone_percent': args.rz_deadzone_percent,
+        'device_axis_deadzones': getattr(args, 'device_axis_deadzones', {}),
     })
     startup_error = None
     equipment_snapshot = {
@@ -799,9 +810,10 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
 
         try:
             staged_provider = activity_provider_factory(
-                ecodes, config['axis_deadzone_percent'], config['rz_deadzone_percent'])
+                ecodes, config['axis_deadzone_percent'], config['rz_deadzone_percent'],
+                config['device_axis_deadzones'])
             reseed = any(config[key] != runtime_config[key] for key in (
-                'axis_deadzone_percent', 'rz_deadzone_percent'))
+                'axis_deadzone_percent', 'rz_deadzone_percent', 'device_axis_deadzones'))
             current = {state['identity']: state for state in devices.values()}
             selected_identities = set()
             selected_paths = []
@@ -816,9 +828,9 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     device = InputDevice(path)
                     opened.append(device)
                     state = {'path': path, 'identity': identity, 'device': device,
-                             'axes': staged_provider.seed(device), 'dropped': False}
-                elif reseed:
-                    state = {**state, 'axes': staged_provider.seed(state['device'])}
+                             'axes': staged_provider.seed(device, path), 'dropped': False}
+                elif reseed or state['path'] != path:
+                    state = {**state, 'axes': staged_provider.seed(state['device'], path)}
                 if state['path'] != path:
                     state = {**state, 'path': path}
                 staged_selector.register(state['device'], selectors.EVENT_READ)
@@ -997,13 +1009,14 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     if activity_provider_factory is None:
         activity_provider_factory = EvdevActivityProvider
     activity_provider: ActivityProviderContract = activity_provider_factory(
-        ecodes, args.axis_deadzone_percent, args.rz_deadzone_percent)
+        ecodes, args.axis_deadzone_percent, args.rz_deadzone_percent,
+        runtime_config['device_axis_deadzones'])
 
     try:
         for path in dict.fromkeys(DEFAULT_CONFIG['devices'] if args.device is None else args.device):
             device = InputDevice(path)
             try:
-                axes = activity_provider.seed(device)
+                axes = activity_provider.seed(device, path)
                 selector.register(device, selectors.EVENT_READ)
             except Exception:
                 device.close()
@@ -1072,7 +1085,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                                             pass
                                     except BlockingIOError:
                                         break
-                                state['axes'] = activity_provider.seed(device)
+                                state['axes'] = activity_provider.seed(device, state['path'])
                                 state['dropped'] = False
                                 break
                             continue
@@ -2022,6 +2035,7 @@ def main():
     args.require_snapshot = config['require_snapshot']
     args.axis_deadzone_percent = config['axis_deadzone_percent']
     args.rz_deadzone_percent = config['rz_deadzone_percent']
+    args.device_axis_deadzones = config['device_axis_deadzones']
     if args.cec:
         args.require_snapshot = True
     if not math.isfinite(args.rz_deadzone_percent) or not 0 < args.rz_deadzone_percent <= 25:

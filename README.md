@@ -196,7 +196,8 @@ keys, malformed values, or unreadable files stop startup with an error.
   "kde_timeout": false,
   "require_snapshot": false,
   "axis_deadzone_percent": 2.0,
-  "rz_deadzone_percent": 5.0
+  "rz_deadzone_percent": 5.0,
+  "device_axis_deadzones": {}
 }
 ```
 
@@ -484,6 +485,15 @@ or launch; undetected/manual paths are retained. Raw event paths without a stabl
 alias remain vulnerable to Linux event-number reassignment. A `by-path` name
 identifies a connection location and may change if the device is moved to another
 port.
+
+The manual path editor scrolls when the list is long. **Controller deadzones**
+shows the absolute axes detected on selected input devices, with a separate
+percentage for each device and axis. Without an override, the existing
+`axis_deadzone_percent` default applies, except `ABS_RZ` uses
+`rz_deadzone_percent`. Overrides are retained for unavailable devices and
+stored in `device_axis_deadzones` by device path and numeric Linux axis code.
+Discovery reads sysfs capabilities without opening input devices. An updated
+host backend is required to provide axis information to the GUI.
 
 The GUI accepts the host's confirmed saved configuration even if the D-Bus owner
 changes before the reply, ignores pre-save refresh replies, and preserves any

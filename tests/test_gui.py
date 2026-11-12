@@ -951,6 +951,61 @@ class GuiChecks(unittest.TestCase):
         self.assertFalse(save.property('enabled'))
         engine.deleteLater()
 
+    def test_selected_axes_have_independent_drafts_and_manual_paths_scroll(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._config_source = 'saved'
+        backend.config = {**backend.config, 'devices': ['/dev/input/wheel'],
+                          'device_axis_deadzones': {'/dev/input/wheel': {'0': 12}}}
+        backend._set_equipment({
+            'outputs': [{'path': backend.config['target_output'], 'label': 'Display'}],
+            'adapters': [{'path': backend.config['cec_port'], 'label': 'Adapter'}],
+            'errors': [],
+            'inputs': [
+                {'path': '/dev/input/wheel', 'label': 'Wheel',
+                 'axes': [{'code': 0, 'name': 'ABS_X'}, {'code': 5, 'name': 'ABS_RZ'}]},
+                {'path': '/dev/input/other', 'label': 'Other',
+                 'axes': [{'code': 1, 'name': 'ABS_Y'}]},
+            ],
+        }, '')
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.setProperty('currentSection', 3)
+        QMetaObject.invokeMethod(window.findChild(QObject, 'manualPathsToggle'), 'click')
+        paths = window.findChild(QObject, 'devicesField')
+        paths.setProperty('text', '\n'.join(['/dev/input/wheel'] * 30))
+        app.processEvents()
+        scroll = window.findChild(QObject, 'devicesScroll')
+        self.assertGreater(scroll.property('contentHeight'), scroll.property('height'))
+        rows = window.findChild(QObject, 'axisChoices')
+        self.assertEqual(rows.property('count'), 2)
+        engine.rootContext().setContextProperty('axisRows', rows)
+        first = QQmlExpression(engine.rootContext(), window, 'axisRows.itemAt(0)').evaluate()[0]
+        second = QQmlExpression(engine.rootContext(), window, 'axisRows.itemAt(1)').evaluate()[0]
+        self.assertEqual(first.property('value'), 12)
+        self.assertEqual(second.property('value'), 5)
+        second.setProperty('value', 9)
+        QMetaObject.invokeMethod(second, 'valueModified')
+        expression = QQmlExpression(engine.rootContext(), window, 'JSON.stringify(settingsValues().deviceAxisDeadzones)')
+        draft = json.loads(expression.evaluate()[0])
+        self.assertEqual(draft, {'/dev/input/wheel': {'0': 12, '5': 9}})
+        self.assertTrue(window.property('settingsDirty'))
+        with patch.object(backend, '_service_interface', return_value=Mock(isValid=lambda: True)), \
+                patch.object(backend, '_async_call') as call:
+            QQmlExpression(engine.rootContext(), window, 'topcec.applySettings(settingsValues())').evaluate()
+            self.assertTrue(call.called, backend.actionMessage)
+            sent = json.loads(call.call_args.args[3])
+            self.assertEqual(sent['device_axis_deadzones'], draft)
+        paths.setProperty('text', '/dev/input/other')
+        app.processEvents()
+        self.assertEqual(rows.property('count'), 1)
+        self.assertEqual(json.loads(expression.evaluate()[0]), draft)
+        engine.deleteLater()
+
     def test_missing_required_capabilities_show_update_without_guessing_from_transport_errors(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         methods = ('GetStatus', 'GetConfig', 'GetEquipment', 'ApplySettings', 'RequestPower')
@@ -1387,7 +1442,8 @@ class GuiChecks(unittest.TestCase):
             method, callback, args = requests.pop()
             self.assertEqual(method, 'ApplySettings')
             config = json.loads(args[0])
-            self.assertEqual(config, {'schema_version': 1, **DEFAULT_CONFIG})
+            self.assertNotIn('device_axis_deadzones', config)
+            self.assertEqual(validate_config(config), DEFAULT_CONFIG)
             callback(topcec_gui.QDBusMessage.createError('org.example.Error', 'Access denied'))
             self.assertIn('Access denied', backend.actionMessage)
             self.assertTrue(retry.property('enabled'))

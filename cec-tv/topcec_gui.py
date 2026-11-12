@@ -98,6 +98,8 @@ def config_from_settings(current, values):
         'require_snapshot': True,
         'axis_deadzone_percent': float(values['axisDeadzone']),
         'rz_deadzone_percent': float(values['rzDeadzone']),
+        'device_axis_deadzones': values.get(
+            'deviceAxisDeadzones', current['device_axis_deadzones']),
     }
     return validate_config(config)
 
@@ -320,7 +322,9 @@ class GuiBackend(QObject):
         return error
 
     def _set_equipment(self, equipment, message):
-        known = equipment is not None and not equipment.get('errors')
+        known = equipment is not None and not any(
+            not error.startswith('Input axis discovery (')
+            for error in equipment.get('errors', []))
         adapter_known = equipment is not None and not any(
             error.startswith('CEC adapter discovery:') for error in equipment.get('errors', []))
         equipment = equipment or {'outputs': [], 'adapters': [], 'inputs': []}
@@ -660,6 +664,13 @@ class GuiBackend(QObject):
                         or not isinstance(item.get('label'), str)
                         or not isinstance(item.get('aliases', []), list)
                         or any(not isinstance(alias, str) for alias in item.get('aliases', []))
+                        or ('axes' in item and item['axes'] is not None
+                            and (not isinstance(item['axes'], list) or any(
+                                not isinstance(axis, dict)
+                                or type(axis.get('code')) is not int
+                                or not 0 <= axis['code'] < 47
+                                or not isinstance(axis.get('name'), str)
+                                for axis in item['axes'])))
                         for item in equipment[key]):
                     raise ValueError('Invalid ' + key + ' inventory')
             errors = equipment.get('errors')
@@ -668,12 +679,15 @@ class GuiBackend(QObject):
         except (IndexError, TypeError, ValueError) as error:
             self._set_equipment(None, 'Invalid host equipment response: ' + str(error))
         else:
+            availability_errors = [
+                error for error in errors if not error.startswith('Input axis discovery (')]
             self._set_equipment(equipment,
                 'Equipment refreshes automatically from the host. '
                 'Your selections are retained, not replaced. ' +
                 ('Undetected equipment has unknown availability because discovery '
-                 'did not complete successfully. Discovery diagnostics: ' + '; '.join(errors) if errors else
-                 'An empty list means no equipment was detected by that discovery method.'))
+                 'did not complete successfully. ' if availability_errors else
+                 'An empty list means no equipment was detected by that discovery method. ') +
+                ('Discovery diagnostics: ' + '; '.join(errors) if errors else ''))
 
     @Slot()
     def refresh(self):
@@ -819,9 +833,10 @@ class GuiBackend(QObject):
                 if not interface.isValid():
                     self._set_unavailable()
                     raise RuntimeError('topCEC host service is not available')
-                serialized = json.dumps({
-                    'schema_version': 1, **validated,
-                }, sort_keys=True)
+                payload = {'schema_version': 1, **validated}
+                if not payload['device_axis_deadzones']:
+                    del payload['device_axis_deadzones']
+                serialized = json.dumps(payload, sort_keys=True)
                 self._action_message = ('Retrying monitoring with the saved settings.'
                                         if retry_monitoring else
                                         'Saving settings through the host service.')

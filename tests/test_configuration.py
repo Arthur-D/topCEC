@@ -123,6 +123,9 @@ class ConfigurationChecks(unittest.TestCase):
             {'schema_version': SCHEMA_VERSION, 'devices': ['/dev/input/event0', '']},
             {'schema_version': SCHEMA_VERSION, 'cec_enabled': 1},
             {'schema_version': SCHEMA_VERSION, 'axis_deadzone_percent': 26},
+            {'schema_version': SCHEMA_VERSION, 'device_axis_deadzones': {'/dev/input/a': {'5': 0}}},
+            {'schema_version': SCHEMA_VERSION, 'device_axis_deadzones': {'/dev/input/a': {'47': 2}}},
+            {'schema_version': SCHEMA_VERSION, 'device_axis_deadzones': {'/dev/input/a': {'05': 2}}},
         )
         for value in invalid:
             with self.subTest(value=value), self.assertRaises(ValueError):

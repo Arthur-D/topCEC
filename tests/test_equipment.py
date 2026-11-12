@@ -26,6 +26,8 @@ class EquipmentChecks(unittest.TestCase):
             stable.symlink_to('../event7')
             (root / 'dev/input/by-path/platform-event-kbd').symlink_to('../event7')
             (root / 'sys/class/input/event7/device/name').write_text('Test keyboard')
+            (root / 'sys/class/input/event7/device/capabilities').mkdir()
+            (root / 'sys/class/input/event7/device/capabilities/abs').write_text('0')
             adapter = root / 'dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter'
             adapter.touch()
             (root / 'dev/serial/by-id/usb-unrelated-serial').touch()
@@ -55,6 +57,7 @@ class EquipmentChecks(unittest.TestCase):
                 'path': str(stable), 'label': f'Test keyboard - {stable}',
                 'aliases': [str(root / 'dev/input/by-path/platform-event-kbd'),
                             str(root / 'dev/input/event7')],
+                'axes': [],
             }])
             self.assertEqual(inventory['errors'], [])
             self.assertEqual(command.call_count, 3)
@@ -89,6 +92,17 @@ class EquipmentChecks(unittest.TestCase):
             self.assertEqual(inventory['inputs'][0]['path'], str(event))
             self.assertIn('event8', inventory['inputs'][0]['label'])
             self.assertTrue(inventory['errors'])
+
+    def test_axes_are_read_from_sysfs_without_opening_input_devices(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            device = root / 'sys/class/input/event3/device'
+            (device / 'capabilities').mkdir(parents=True)
+            (device / 'capabilities/abs').write_text('21')
+            with patch.object(equipment, 'Path', side_effect=lambda path: root / str(path).lstrip('/')):
+                axes = equipment._input_axes(Path('/dev/input/event3'))
+            self.assertEqual(axes, [{'code': 0, 'name': 'ABS_X'},
+                                    {'code': 5, 'name': 'ABS_RZ'}])
 
     def test_denied_metadata_enumeration_is_reported_not_called_empty_detection(self):
         def denied(directory):
