@@ -575,7 +575,6 @@ class GuiBackend(QObject):
             'Automatic standby allowed' if not reason
             else 'Automatic standby blocked: ' + str(reason))
         diagnostic_items = [
-            f"Service: {self._service_status}",
             f"Scan: {self._service_data.get('scan_status') or 'healthy'}",
             f"CEC fault: {self._service_data.get('cec_fault') or 'none'}",
             f"Pending action: {self._service_data.get('pending_action') or 'none'}",

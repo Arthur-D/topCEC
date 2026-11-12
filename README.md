@@ -224,12 +224,13 @@ fail or a CEC recovery/standby operation is active.
 
 The native Qt Quick/Kirigami panel follows the current Plasma theme. Its
 **Overview** shows TV power, service state, recovery notices, and equipment and
-standby summaries. The navigation sidebar opens **Equipment**,
-**Automatic standby**, and **Diagnostics**; on narrow windows it becomes a
-navigation drawer. Unsaved settings and input selections are retained when
-switching sections. **Advanced** exposes Firefox mute-label settings, controller
-deadzones, and manual-action simulation. The persistent **Save and apply** footer
-is available from every section.
+standby summaries. The navigation sidebar opens **Display**, **Standby**,
+**Input**, and **Diagnostics**; on narrow windows it becomes a navigation
+drawer. Input-device choices and editable paths are shown directly in **Input**.
+Unsaved settings and input selections are retained when switching sections.
+**Advanced** exposes Firefox mute-label settings, controller deadzones, and
+manual-action simulation. The persistent **Save and apply** footer is available
+from every section.
 
 The panel provides output and adapter selection, input-device settings,
 KDE-managed/custom/disabled inactivity timeouts, diagnostics, and manual power

@@ -186,8 +186,7 @@ class GuiChecks(unittest.TestCase):
                 'errors': [],
             }
             backend._equipment_reply(0, self.reply(inventory))
-            window.setProperty('currentSection', 2)
-            window.findChild(QObject, 'inputChooserToggle').setProperty('checked', True)
+            window.setProperty('currentSection', 3)
             app.processEvents()
             keyboard = self.input_choice(engine, window, '/dev/input/by-path/keyboard')
             mouse = self.input_choice(engine, window, '/dev/input/by-id/mouse')
@@ -257,7 +256,7 @@ class GuiChecks(unittest.TestCase):
             fresh._equipment_reply(0, self.reply({**changed, 'inputs': []}))
             self.assertEqual(fresh_window.findChild(QObject, 'inputChoices').property('count'), 0)
             self.assertEqual(fresh_window.findChild(QObject, 'devicesField').property('text'), retained)
-            self.assertIn('unlisted', fresh_window.findChild(QObject, 'inputChooserToggle').property('text'))
+            self.assertIn('unlisted', fresh_window.findChild(QObject, 'retainedInputs').property('text').lower())
             fresh._equipment_reply(0, self.reply(changed))
             self.assertTrue(self.input_choice(fresh_engine, fresh_window, '/dev/input/by-id/keyboard').property('checked'))
             self.assertEqual(load_config(host_path)['devices'], saved['devices'])
@@ -386,7 +385,7 @@ class GuiChecks(unittest.TestCase):
         self.assertIsNotNone(app)
         engine.deleteLater()
 
-    def test_compact_input_chooser_bounds_keyboard_scrolling_and_copy(self):
+    def test_input_choices_are_expanded_and_copyable(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         self.addCleanup(app.clipboard().setText, app.clipboard().text())
         backend = GuiBackend(dbus_only=True)
@@ -402,36 +401,40 @@ class GuiChecks(unittest.TestCase):
                      'inputs': [{'path': f'/dev/input/by-id/{index}', 'label': f'Device {index}'}
                                 for index in range(18)]}
         backend._equipment_reply(0, self.reply(inventory))
-        window.setProperty('currentSection', 2)
+        window.setProperty('currentSection', 3)
         app.processEvents()
-        scroll = window.findChild(QObject, 'inputChooserScroll')
-        toggle = window.findChild(QQuickItem, 'inputChooserToggle')
-        self.assertFalse(scroll.property('visible'))
-        self.assertIn('1 selected', window.findChild(QObject, 'inputChooserToggle').property('text'))
-        QMetaObject.invokeMethod(toggle, 'forceActiveFocus')
-        QTest.keyClick(window, Qt.Key.Key_Space)
-        QTest.qWait(50)
-        self.assertTrue(scroll.property('visible'))
-        self.assertLessEqual(scroll.property('height'), 200)
-        engine.rootContext().setContextProperty('chooserScroll', scroll)
-        self.assertGreater(QQmlExpression(
-            engine.rootContext(), window, 'chooserScroll.contentItem.contentHeight').evaluate()[0],
-                           scroll.property('height'))
+        self.assertTrue(window.findChild(QObject, 'inputSection').property('visible'))
+        self.assertEqual(window.findChild(QObject, 'inputChoices').property('count'), 18)
+        self.assertTrue(window.findChild(QObject, 'devicesField').property('visible'))
+        self.assertTrue(window.findChild(QObject, 'inputSaveHelp').property('visible'))
+        self.assertIsNone(window.findChild(QObject, 'inputChooserToggle'))
+        self.assertIsNone(window.findChild(QObject, 'manualInputs'))
         first = self.input_choice(engine, window, '/dev/input/by-id/0')
-        QMetaObject.invokeMethod(first, 'forceActiveFocus')
-        for _ in range(17):
-            QTest.keyClick(window, Qt.Key.Key_Tab)
         last = self.input_choice(engine, window, '/dev/input/by-id/17')
+        self.assertTrue(first.property('checked'))
+        self.assertTrue(last.property('visible'))
+        QMetaObject.invokeMethod(last, 'forceActiveFocus')
+        app.processEvents()
         self.assertTrue(last.property('activeFocus'))
-        self.assertGreater(QQmlExpression(
-            engine.rootContext(), window, 'chooserScroll.contentItem.contentY').evaluate()[0], 0)
-        QTest.keyClick(window, Qt.Key.Key_Space)
-        self.assertTrue(last.property('activeFocus'))
+        engine.rootContext().setContextProperty(
+            'pageForInputScroll', window.findChild(QObject, 'settingsPage'))
+        engine.rootContext().setContextProperty('inputChoiceItem', last)
+        top = QQmlExpression(
+            engine.rootContext(), window,
+            'inputChoiceItem.mapToItem(pageForInputScroll.flickable.contentItem, 0, 0).y')
+        scroll = QQmlExpression(
+            engine.rootContext(), window, 'pageForInputScroll.flickable.contentY')
+        viewport = QQmlExpression(
+            engine.rootContext(), window, 'pageForInputScroll.flickable.height')
+        self.assertGreaterEqual(top.evaluate()[0], scroll.evaluate()[0])
+        self.assertLessEqual(
+            top.evaluate()[0] + last.property('height'),
+            scroll.evaluate()[0] + viewport.evaluate()[0])
+        last.setProperty('checked', True)
+        QMetaObject.invokeMethod(last, 'toggled')
         self.assertTrue(last.property('checked'))
         QMetaObject.invokeMethod(window.findChild(QObject, 'copySelectedInputs'), 'clicked')
         self.assertEqual(app.clipboard().text(), '/dev/input/by-id/0\n/dev/input/by-id/17')
-        toggle.setProperty('checked', False)
-        self.assertFalse(scroll.property('visible'))
         engine.deleteLater()
 
     def test_plasma_navigation_preserves_drafts_and_exposes_recovery_at_compact_width(self):
@@ -501,11 +504,17 @@ class GuiChecks(unittest.TestCase):
         self.assertFalse(equipment.property('visible'))
         self.assertFalse(standby.property('visible'))
         for name, title in (
-                ('equipmentHeader', 'Equipment'),
-                ('standbyHeader', 'Automatic standby')):
+                ('equipmentHeader', 'Display'),
+                ('standbyHeader', 'Standby'),
+                ('inputHeader', 'Input')):
             header = window.findChild(QObject, name)
             self.assertIsNotNone(header)
             self.assertEqual(header.property('title'), title)
+        for name, label in (
+                ('equipmentNavigation', 'Display'),
+                ('standbyNavigation', 'Standby'),
+                ('inputNavigation', 'Input')):
+            self.assertEqual(window.findChild(QObject, name).property('text'), label)
         self.assertEqual(window.findChild(QObject, 'advancedToggle').property('text'), 'Advanced')
         for name in ('equipmentFormCard', 'standbyFormCard'):
             card = window.findChild(QObject, name)
@@ -514,7 +523,17 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(window.findChild(QObject, 'serviceStatusLabel').property('text'),
                          'Configuration only')
         self.assertEqual(window.findChild(QObject, 'powerStateLabel').property('text'), 'unknown')
-        self.assertTrue(window.findChild(QObject, 'warningBanner').property('visible'))
+        power_state = window.findChild(QQuickItem, 'powerStateLabel')
+        monitoring = window.findChild(QQuickItem, 'monitoringStatusRow')
+        self.assertGreaterEqual(
+            monitoring.mapToScene(QPointF(0, 0)).y(),
+            power_state.mapToScene(QPointF(0, 0)).y() + power_state.height() - 1)
+        warning = window.findChild(QObject, 'warningBanner')
+        self.assertTrue(warning.property('visible'))
+        self.assertIn(
+            'Automatic standby is blocked: Cannot read input: Permission denied',
+            warning.property('text'))
+        self.assertIn('Monitoring is inactive.', warning.property('text'))
         self.assertTrue(window.findChild(QObject, 'applyFooter').property('visible'))
         save = window.findChild(QObject, 'saveSettingsButton')
         self.assertTrue(save.property('enabled'))
@@ -546,13 +565,15 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(window.property('currentSection'), 2)
         self.assertFalse(equipment.property('visible'))
         self.assertTrue(standby.property('visible'))
-        chooser = window.findChild(QObject, 'inputChooserToggle')
-        scroll = window.findChild(QObject, 'inputChooserScroll')
-        self.assertFalse(scroll.property('visible'))
-        chooser.setProperty('checked', True)
-        self.assertTrue(scroll.property('visible'))
-        self.assertIn('2 selected', window.findChild(QObject, 'inputChooserToggle').property('text'))
+        self.assertEqual(window.findChild(QObject, 'standbyHeader').property('title'), 'Standby')
+        QMetaObject.invokeMethod(window.findChild(QObject, 'inputNavigation'), 'trigger')
+        app.processEvents()
+        self.assertEqual(window.property('currentSection'), 3)
+        self.assertTrue(window.findChild(QObject, 'inputSection').property('visible'))
+        self.assertTrue(window.findChild(QObject, 'devicesField').property('visible'))
 
+        QMetaObject.invokeMethod(window.findChild(QObject, 'standbyNavigation'), 'trigger')
+        app.processEvents()
         timeout = window.findChild(QObject, 'timeoutMode')
         minutes = window.findChild(QObject, 'timeoutMinutes')
         self.assertTrue(minutes.property('visible'))
@@ -584,8 +605,20 @@ class GuiChecks(unittest.TestCase):
         QMetaObject.invokeMethod(recovery, 'clicked')
         app.processEvents()
         QTest.qWait(80)
-        self.assertEqual(window.property('currentSection'), 3)
+        self.assertEqual(window.property('currentSection'), 4)
         self.assertTrue(window.findChild(QObject, 'diagnosticsPanel').property('visible'))
+        diagnostics = window.findChild(QObject, 'backendDiagnostics')
+        self.assertIn('Scan:', diagnostics.property('text'))
+        self.assertNotIn('Service:', diagnostics.property('text'))
+        self.assertEqual(
+            window.findChild(QObject, 'diagnosticsStatusExplanation').property('text'),
+            'Structured status reported by the host service; this is not log output.')
+        standby_diagnostics = window.findChild(QObject, 'standbyDiagnostics')
+        self.assertTrue(standby_diagnostics.property('visible'))
+        backend._standby_reason = backend._connection_message
+        backend.changed.emit()
+        app.processEvents()
+        self.assertFalse(standby_diagnostics.property('visible'))
         self.assertTrue(window.findChild(QObject, 'inputPermissionHelp').property('visible'))
         self.assertEqual(window.findChild(QObject, 'inputPermissionCommand').property('text'),
                          backend.inputPermissionCommand)
@@ -621,26 +654,22 @@ class GuiChecks(unittest.TestCase):
         engine.rootContext().setContextProperty('topcec', backend)
         engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
         window = engine.rootObjects()[0]
-        window.setProperty('currentSection', 2)
-        window.findChild(QObject, 'inputChooserToggle').setProperty('checked', True)
+        window.setProperty('currentSection', 3)
         window.show()
         app.processEvents()
         for name, role, label in (
                 ('saveSettingsButton', QAccessible.Role.Button, 'Save and apply settings'),
                 ('outputField', QAccessible.Role.ComboBox, 'Display detection unavailable'),
-                ('manualInputs', QAccessible.Role.CheckBox, 'Enter input paths manually'),
                 ('devicesField', QAccessible.Role.EditableText, 'Input device paths (one per line)')):
             with self.subTest(control=name):
                 interface = QAccessible.queryAccessibleInterface(window.findChild(QObject, name))
                 self.assertIsNotNone(interface)
                 self.assertEqual(interface.role(), role)
                 self.assertEqual(interface.text(QAccessible.Text.Name), label)
-        control = window.findChild(QQuickItem, 'manualInputs')
+        control = window.findChild(QQuickItem, 'devicesField')
         QMetaObject.invokeMethod(control, 'forceActiveFocus')
         self.assertTrue(control.property('activeFocus'))
-        QTest.keyClick(window, Qt.Key.Key_Tab)
-        self.assertFalse(control.property('activeFocus'))
-        self.assertIsNotNone(window.activeFocusItem())
+        self.assertTrue(control.property('visible'))
         engine.deleteLater()
 
     def test_gui_launchers_preserve_accessibility_and_diagnostics(self):
@@ -654,7 +683,7 @@ class GuiChecks(unittest.TestCase):
             self.assertNotIn(disabled, sources)
         self.assertNotIn('qInstallMessageHandler', sources)
 
-    def test_single_detected_devices_are_selected_and_save_requires_explicit_resolution(self):
+    def test_detected_and_manual_devices_are_selected_and_editable(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
@@ -700,18 +729,15 @@ class GuiChecks(unittest.TestCase):
             engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
         self.assertFalse(device.property('checked'))
         self.assertEqual(paths.property('text'), '\n'.join(original['devices']))
-        self.assertFalse(save.property('enabled'))
-        with patch.object(backend, 'applySettings') as apply:
-            QMetaObject.invokeMethod(save, 'clicked')
-            apply.assert_not_called()
+        self.assertTrue(save.property('enabled'))
         self.assertEqual(backend.config, original)
 
         select(output)
         select(adapter)
         device.setProperty('checked', True)
         QMetaObject.invokeMethod(device, 'toggled')
-        # Choosing actual hardware must not silently erase the retained inputs.
-        self.assertFalse(save.property('enabled'))
+        # Choosing actual hardware must not silently erase retained paths.
+        self.assertTrue(save.property('enabled'))
         self.assertIn(original['devices'][0], paths.property('text'))
         QMetaObject.invokeMethod(window.findChild(QObject, 'removeUndetectedInputs'), 'clicked')
         self.assertEqual(paths.property('text'), '/dev/input/by-id/real')
@@ -750,14 +776,12 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(adapter.property('currentIndex'), 0)
         self.assertTrue(save.property('enabled'))
 
-        # Manual drafts survive refresh but are never substituted for a detected
-        # selection unless the user explicitly enables manual entry.
+        # Display and adapter drafts remain separate from detected selections.
         window.findChild(QObject, 'manualOutput').setProperty('checked', True)
         output.setProperty('editText', 'MANUAL-DRAFT')
         inventory([], [], [])
         self.assertFalse(save.property('enabled'))
-        for name in ('manualAdapter', 'manualInputs'):
-            window.findChild(QObject, name).setProperty('checked', True)
+        window.findChild(QObject, 'manualAdapter').setProperty('checked', True)
         self.assertTrue(output.property('editable'))
         self.assertEqual(output.property('editText'), 'MANUAL-DRAFT')
         self.assertEqual(adapter.property('editText'), '/dev/real-CEC')
@@ -1112,7 +1136,7 @@ class GuiChecks(unittest.TestCase):
         engine.rootContext().setContextProperty('topcec', backend)
         engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
         window = engine.rootObjects()[0]
-        window.setProperty('currentSection', 3)
+        window.setProperty('currentSection', 4)
         self.assertTrue(window.findChild(QObject, 'inputPermissionHelp').property('visible'))
         self.assertIn('Updating only the Flatpak', backend.inputPermissionMessage)
         self.assertIn('bash packaging/install-user.sh', backend.inputPermissionMessage)
@@ -1149,7 +1173,7 @@ class GuiChecks(unittest.TestCase):
         help_item = window.findChild(QObject, 'inputPermissionHelp')
         command = window.findChild(QObject, 'inputPermissionCommand')
         copy = window.findChild(QObject, 'copyInputPermissionCommand')
-        window.setProperty('currentSection', 3)
+        window.setProperty('currentSection', 4)
         self.assertTrue(help_item.property('visible'))
         self.assertEqual(command.property('text'), backend.inputPermissionCommand)
         self.assertTrue(command.property('selectByMouse'))
@@ -1187,7 +1211,6 @@ class GuiChecks(unittest.TestCase):
                 self.assertEqual(field.property('selectedText'), field.property('text'))
                 QMetaObject.invokeMethod(field, 'copy')
                 self.assertEqual(app.clipboard().text(), field.property('text'))
-        window.findChild(QObject, 'manualInputs').setProperty('checked', True)
         window.setProperty('currentSection', 3)
         for name in ('devicesField',):
             field = window.findChild(QObject, name)
@@ -1257,10 +1280,8 @@ class GuiChecks(unittest.TestCase):
         self.assertIn('Save and apply', copied)
         self.assertNotIn('topCEC Backend Not Available', text)
         self.assertFalse(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
-        chooser = window.findChild(QObject, 'inputChooserToggle')
-        self.assertIn('unlisted', chooser.property('text'))
-        window.setProperty('currentSection', 2)
-        chooser.setProperty('checked', True)
+        self.assertIn('unlisted', window.findChild(QObject, 'retainedInputs').property('text').lower())
+        window.setProperty('currentSection', 3)
         app.processEvents()
         text, _ = expression.evaluate()
         for path in backend.config['devices']:
@@ -1520,6 +1541,7 @@ class GuiChecks(unittest.TestCase):
             'Automatic standby blocked: Waiting for Firefox snapshot from the live bridge')
         self.assertIn('Scan: Waiting for Firefox snapshot from the live bridge',
                       backend.diagnostics)
+        self.assertNotIn('Service: running', backend.diagnostics)
 
     def test_flatpak_missing_service_is_generic_and_actionable(self):
         bus = Mock()
@@ -1779,9 +1801,8 @@ class GuiChecks(unittest.TestCase):
         connect(config)
         self.assertEqual(devices.property('text'), config['devices'][0])
         self.assertEqual(output.property('editText'), 'DP-1')
-        self.assertFalse(save.property('enabled'))
+        self.assertTrue(save.property('enabled'))
         self.assertTrue(save.property('visible'))
-        window.findChild(QObject, 'manualInputs').setProperty('checked', True)
         QMetaObject.invokeMethod(devices, 'forceActiveFocus')
         devices.setProperty('text', '/dev/input/by-id/draft-keyboard')
         self.assertTrue(window.property('settingsDirty'))
@@ -1808,13 +1829,13 @@ class GuiChecks(unittest.TestCase):
             save = window.findChild(QObject, 'saveSettingsButton')
             self.assertTrue(save.property('visible'))
             self.assertFalse(save.property('enabled'))
-            for name in ('manualOutput', 'manualAdapter', 'manualInputs'):
+            for name in ('manualOutput', 'manualAdapter'):
                 window.findChild(QObject, name).setProperty('checked', True)
             self.assertFalse(save.property('enabled'))
             window.findChild(QObject, 'outputField').setProperty('editText', 'MANUAL-DISPLAY')
             window.findChild(QObject, 'adapterField').setProperty('editText', '/dev/manual-adapter')
             window.findChild(QObject, 'devicesField').setProperty('text', '/dev/manual-input')
-            window.setProperty('currentSection', 2)
+            window.setProperty('currentSection', 3)
             app.processEvents()
             self.assertTrue(save.property('enabled'))
             devices = window.findChild(QObject, 'devicesField')
