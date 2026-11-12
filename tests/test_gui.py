@@ -647,6 +647,76 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(qml_warnings, [])
         engine.deleteLater()
 
+    def test_navigation_toggle_and_sidebar_recover_after_resizing(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        engine = QQmlApplicationEngine()
+        warnings = []
+        engine.warnings.connect(lambda items: warnings.extend(str(item) for item in items))
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.resize(980, 800)
+        window.show()
+        QTest.qWait(350)
+        drawer = window.findChild(QObject, 'navigationDrawer')
+        button = window.findChild(QQuickItem, 'navigationButton')
+        close_button = window.findChild(QQuickItem, 'drawerNavigationButton')
+        engine.rootContext().setContextProperty('testDrawer', drawer)
+        handle_visible = QQmlExpression(engine.rootContext(), window, 'testDrawer.handle.visible')
+
+        def click(item):
+            self.assertTrue(item.isVisible())
+            point = item.mapToScene(QPointF(item.width() / 2, item.height() / 2)).toPoint()
+            QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+            QTest.qWait(350)
+
+        self.assertTrue(drawer.property('opened'))
+        self.assertTrue(button.isVisible())
+        self.assertEqual(QAccessible.queryAccessibleInterface(button).text(QAccessible.Text.Name),
+                         'Hide navigation')
+        click(button)
+        self.assertFalse(drawer.property('visible'))
+        self.assertEqual(QAccessible.queryAccessibleInterface(button).text(QAccessible.Text.Name),
+                         'Show navigation')
+        click(button)
+        self.assertTrue(drawer.property('opened'))
+
+        for _ in range(2):
+            window.resize(430, 760)
+            QTest.qWait(350)
+            self.assertTrue(drawer.property('modal'))
+            self.assertFalse(drawer.property('visible'))
+            click(button)
+            self.assertTrue(drawer.property('opened'))
+            self.assertFalse(handle_visible.evaluate()[0])
+            click(close_button)
+            self.assertFalse(drawer.property('visible'))
+            window.resize(980, 800)
+            QTest.qWait(350)
+            self.assertFalse(drawer.property('modal'))
+            self.assertTrue(drawer.property('opened'))
+            self.assertTrue(button.isVisible())
+
+        for width in (430, 980, 430, 980):
+            window.resize(width, 800)
+            QTest.qWait(20)
+        QTest.qWait(350)
+        self.assertTrue(drawer.property('opened'))
+
+        window.resize(430, 760)
+        QTest.qWait(350)
+        click(button)
+        window.resize(980, 800)
+        QTest.qWait(350)
+        self.assertTrue(drawer.property('opened'))
+
+        self.assertFalse(handle_visible.hasError(), handle_visible.error().toString())
+        self.assertEqual(warnings, [])
+        window.close()
+        engine.deleteLater()
+        app.processEvents()
+
     def test_diagnostics_disclosures_and_full_report_at_wide_and_compact_sizes(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         self.addCleanup(app.clipboard().setText, app.clipboard().text())

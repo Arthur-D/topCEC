@@ -28,6 +28,19 @@ Kirigami.ApplicationWindow {
         titleIcon: topcec.applicationIcon
         modal: !root.wideScreen
         handleVisible: false
+        onModalChanged: {
+            if (!modal) {
+                Qt.callLater(() => {
+                    if (!navigationDrawer.modal)
+                        navigationDrawer.drawerOpen = true
+                })
+            }
+        }
+        Binding {
+            target: navigationDrawer.handle
+            property: "visible"
+            value: false
+        }
         header: Controls.ToolBar {
             objectName: "appIdentityHeader"
             implicitHeight: pageToolbar.implicitHeight
@@ -35,6 +48,15 @@ Kirigami.ApplicationWindow {
             rightPadding: Kirigami.Units.largeSpacing
             contentItem: RowLayout {
                 spacing: Kirigami.Units.smallSpacing
+                Controls.ToolButton {
+                    objectName: "drawerNavigationButton"
+                    visible: navigationDrawer.modal
+                    icon.name: "application-menu"
+                    text: "Hide navigation"
+                    display: Controls.AbstractButton.IconOnly
+                    Accessible.name: text
+                    onClicked: navigationDrawer.drawerOpen = false
+                }
                 Kirigami.Icon {
                     objectName: "appIdentityLogo"
                     source: navigationDrawer.titleIcon
@@ -573,11 +595,11 @@ Kirigami.ApplicationWindow {
             contentItem: RowLayout {
                 Controls.ToolButton {
                     objectName: "navigationButton"
-                    visible: !root.wideScreen
                     icon.name: "application-menu"
-                    text: "Show navigation"
+                    text: navigationDrawer.drawerOpen ? "Hide navigation" : "Show navigation"
                     display: Controls.AbstractButton.IconOnly
-                    onClicked: navigationDrawer.open()
+                    Accessible.name: text
+                    onClicked: navigationDrawer.drawerOpen = !navigationDrawer.drawerOpen
                 }
                 Kirigami.Heading {
                     Layout.fillWidth: true
