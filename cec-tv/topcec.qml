@@ -897,21 +897,21 @@ Kirigami.ApplicationWindow {
                                     level: 2
                                     text: "TV power"
                                 }
-                                SelectableLabel {
-                                    objectName: "powerStateLabel"
-                                    Layout.fillWidth: true
-                                    font.bold: true
-                                    text: topcec.powerState
-                                }
                                 RowLayout {
                                     objectName: "monitoringStatusRow"
                                     Layout.fillWidth: true
+                                    spacing: Kirigami.Units.smallSpacing
                                     SelectableLabel {
                                         objectName: "serviceStatusLabel"
-                                        Layout.fillWidth: true
-                                        text: root.headerStatus
+                                        text: root.headerStatus + ","
                                         color: root.serviceHealthy
                                             ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.textColor
+                                    }
+                                    SelectableLabel {
+                                        objectName: "powerStateLabel"
+                                        Layout.fillWidth: true
+                                        font.bold: true
+                                        text: topcec.powerState.replace(/_/g, " ")
                                     }
                                 }
                             }
