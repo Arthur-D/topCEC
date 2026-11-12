@@ -128,7 +128,7 @@ Kirigami.ApplicationWindow {
     function equipmentSummary(selector) {
         if (selector.detected)
             return selector.selectedValue
-        if (topcec.configurationSource === "defaults" && !selector.manualEntry)
+        if (topcec.configurationSource !== "saved" && !selector.manualEntry)
             return "Not configured"
         return selector.valueToSave.length ? root.retainedValue(selector.valueToSave) : "Not configured"
     }
@@ -301,6 +301,7 @@ Kirigami.ApplicationWindow {
         property bool availabilityKnown: topcec.equipmentAvailabilityKnown
         property bool syncing: false
         property bool manualEntry: false
+        property bool automaticSelection: false
         property string prompt: "Choose a detected device"
         property string selectedValue: ""
         readonly property bool detected: equipment.some(item => item.path === selectedValue
@@ -315,6 +316,7 @@ Kirigami.ApplicationWindow {
         function load(value, showConfigured) {
             configuredValue = value
             initialValue = showConfigured ? value : ""
+            automaticSelection = false
             synchronize(initialValue)
         }
         editable: manualEntry
@@ -322,22 +324,31 @@ Kirigami.ApplicationWindow {
         textRole: "label"
         function synchronize(value) {
             syncing = true
-            selectedValue = value
-            model = root.equipmentChoices(equipment, [value])
-            currentIndex = model.findIndex(item => item.path === value)
-            editText = value
+            let selection = value
+            if (automaticSelection) {
+                selection = equipment.length === 1 ? equipment[0].path : ""
+            } else if (!selection.length && equipment.length === 1) {
+                selection = equipment[0].path
+                automaticSelection = true
+            }
+            selectedValue = selection
+            model = root.equipmentChoices(equipment, [selection])
+            currentIndex = model.findIndex(item => item.path === selection)
+            editText = selection
             syncing = false
         }
         onEquipmentChanged: synchronize(selectedValue)
         onAvailabilityKnownChanged: synchronize(selectedValue)
         onManualEntryChanged: synchronize(selectedValue)
         onActivated: {
+            automaticSelection = false
             selectedValue = model[index].path
             editText = model[index].path
             root.settingsDirty = true
         }
         onEditTextChanged: {
             if (!syncing && manualEntry) {
+                automaticSelection = false
                 selectedValue = editText
                 if (activeFocus)
                     root.settingsDirty = true
@@ -348,7 +359,7 @@ Kirigami.ApplicationWindow {
     function loadSettings() {
         if (settingsDirty)
             return
-        let showConfigured = topcec.configurationSource !== "defaults"
+        let showConfigured = topcec.configurationSource === "saved"
         outputField.load(topcec.setting("target_output"), showConfigured)
         adapterField.load(topcec.setting("cec_port"), showConfigured)
         timeoutMode.currentIndex = topcec.usesKdeTimeout() ? 0
@@ -736,7 +747,9 @@ Kirigami.ApplicationWindow {
                         FormCard.FormCard {
                             Layout.fillWidth: true
                             FormCard.FormTextDelegate {
+                                id: displaySummary
                                 objectName: "displaySummary"
+                                visible: root.equipmentSummary(outputField) !== "Not configured"
                                 text: "TV display"
                                 description: root.equipmentSummary(outputField)
                                 leading: Kirigami.Icon {
@@ -745,9 +758,13 @@ Kirigami.ApplicationWindow {
                                     implicitHeight: Kirigami.Units.iconSizes.medium
                                 }
                             }
-                            FormCard.FormDelegateSeparator {}
+                            FormCard.FormDelegateSeparator {
+                                visible: displaySummary.visible && adapterSummary.visible
+                            }
                             FormCard.FormTextDelegate {
+                                id: adapterSummary
                                 objectName: "adapterSummary"
+                                visible: root.equipmentSummary(adapterField) !== "Not configured"
                                 text: "CEC adapter"
                                 description: root.equipmentSummary(adapterField)
                                 leading: Kirigami.Icon {
@@ -756,7 +773,9 @@ Kirigami.ApplicationWindow {
                                     implicitHeight: Kirigami.Units.iconSizes.medium
                                 }
                             }
-                            FormCard.FormDelegateSeparator {}
+                            FormCard.FormDelegateSeparator {
+                                visible: displaySummary.visible || adapterSummary.visible
+                            }
                             CopyableFormButton {
                                 objectName: "configureEquipmentButton"
                                 text: "Configure equipment…"

@@ -307,19 +307,22 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(window.findChild(QObject, 'devicesField').property('text'), '')
         for path in DEFAULT_CONFIG['devices']:
             self.assertFalse(self.input_choice(engine, window, path).property('checked'))
-        self.assertEqual(window.findChild(QObject, 'outputField').property('currentIndex'), -1)
-        self.assertEqual(window.findChild(QObject, 'adapterField').property('currentIndex'), -1)
+        self.assertEqual(window.findChild(QObject, 'outputField').property('currentIndex'), 0)
+        self.assertEqual(window.findChild(QObject, 'adapterField').property('currentIndex'), 0)
         self.assertFalse(window.findChild(QObject, 'saveSettingsButton').property('enabled'))
         self.assertEqual(backend.config['devices'], DEFAULT_CONFIG['devices'])
 
-        # A first input save can use the existing runtime settings without
-        # preselecting a display or requiring an attached CEC adapter.
+        # With no equipment detected, defaults stay unselected and unshown.
         keyboard_path = '/dev/input/by-id/keyboard'
         backend._equipment_reply(0, self.reply({
-            'outputs': [{'path': 'eDP-1', 'label': 'Laptop display'}],
+            'outputs': [],
             'adapters': [],
             'inputs': [{'path': keyboard_path, 'label': 'Keyboard'}],
             'errors': []}))
+        self.assertEqual(window.findChild(QObject, 'outputField').property('currentIndex'), -1)
+        self.assertEqual(window.findChild(QObject, 'adapterField').property('currentIndex'), -1)
+        self.assertFalse(window.findChild(QObject, 'displaySummary').property('visible'))
+        self.assertFalse(window.findChild(QObject, 'adapterSummary').property('visible'))
         keyboard = self.input_choice(engine, window, keyboard_path)
         keyboard.setProperty('checked', True)
         QMetaObject.invokeMethod(keyboard, 'toggled')
@@ -339,13 +342,17 @@ class GuiChecks(unittest.TestCase):
         backend = GuiBackend(dbus_only=True)
         backend._service_data = {'service': 'running', 'configuration_saved': True}
         config = {'schema_version': 1, **DEFAULT_CONFIG}
-        backend._config_reply(0, self.reply(config))
         engine = QQmlApplicationEngine()
         engine.rootContext().setContextProperty('topcec', backend)
         engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
         window = engine.rootObjects()[0]
         display = window.findChild(QObject, 'displaySummary')
         adapter = window.findChild(QObject, 'adapterSummary')
+        self.assertEqual(display.property('description'), 'Not configured')
+        self.assertEqual(adapter.property('description'), 'Not configured')
+        self.assertFalse(display.property('visible'))
+        self.assertFalse(adapter.property('visible'))
+        backend._config_reply(0, self.reply(config))
         self.assertIn('availability unknown', display.property('description'))
         self.assertIn('availability unknown', adapter.property('description'))
         backend._equipment_reply(0, self.reply({
@@ -364,8 +371,10 @@ class GuiChecks(unittest.TestCase):
         self.assertNotIn('Enter display name manually', copied)
         backend._service_data['configuration_saved'] = False
         backend._config_reply(0, self.reply(config))
-        self.assertEqual(display.property('description'), 'Not configured')
-        self.assertEqual(adapter.property('description'), 'Not configured')
+        self.assertEqual(display.property('description'), config['target_output'])
+        self.assertEqual(adapter.property('description'), config['cec_port'])
+        self.assertTrue(display.property('visible'))
+        self.assertTrue(adapter.property('visible'))
         self.assertIsNotNone(app)
         engine.deleteLater()
 
@@ -637,7 +646,7 @@ class GuiChecks(unittest.TestCase):
             self.assertNotIn(disabled, sources)
         self.assertNotIn('qInstallMessageHandler', sources)
 
-    def test_absent_hardware_is_not_selected_and_save_requires_explicit_resolution(self):
+    def test_single_detected_devices_are_selected_and_save_requires_explicit_resolution(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
@@ -676,9 +685,9 @@ class GuiChecks(unittest.TestCase):
         inventory(detected_outputs, detected_adapters, detected_inputs)
         for field in (output, adapter):
             self.assertEqual(field.property('count'), 1)
-            self.assertEqual(field.property('currentIndex'), -1)
+            self.assertEqual(field.property('currentIndex'), 0)
             self.assertFalse(field.property('editable'))
-            self.assertIn('Choose a detected', field.property('displayText'))
+            self.assertNotIn('Choose a detected', field.property('displayText'))
         device = QQmlExpression(
             engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
         self.assertFalse(device.property('checked'))
@@ -894,6 +903,9 @@ class GuiChecks(unittest.TestCase):
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
         backend._service_status = 'configuration-only'
+        original_config = dict(backend.config)
+        backend._service_data = {'configuration_saved': True}
+        backend._config_reply(0, self.reply({'schema_version': 1, **original_config}))
         original_config = dict(backend.config)
         engine = QQmlApplicationEngine()
         engine.rootContext().setContextProperty('topcec', backend)
@@ -1740,6 +1752,7 @@ class GuiChecks(unittest.TestCase):
         def connect(config):
             backend._service_data = {
                 'service': 'configuration-only', 'cec_enabled': False,
+                'configuration_saved': True,
                 'fail_safe_reason': 'Cannot read input: Permission denied',
             }
             backend._config_reply(backend._refresh_generation, SimpleNamespace(
