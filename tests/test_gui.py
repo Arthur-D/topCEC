@@ -321,8 +321,14 @@ class GuiChecks(unittest.TestCase):
             'errors': []}))
         self.assertEqual(window.findChild(QObject, 'outputField').property('currentIndex'), -1)
         self.assertEqual(window.findChild(QObject, 'adapterField').property('currentIndex'), -1)
+        self.assertEqual(window.findChild(QObject, 'outputField').property('displayText'),
+                         'No display has been detected')
+        self.assertEqual(window.findChild(QObject, 'adapterField').property('displayText'),
+                         'No CEC adapter has been detected')
         self.assertFalse(window.findChild(QObject, 'displaySummary').property('visible'))
-        self.assertFalse(window.findChild(QObject, 'adapterSummary').property('visible'))
+        self.assertTrue(window.findChild(QObject, 'adapterSummary').property('visible'))
+        self.assertEqual(window.findChild(QObject, 'adapterSummary').property('description'),
+                         'No CEC adapter detected')
         keyboard = self.input_choice(engine, window, keyboard_path)
         keyboard.setProperty('checked', True)
         QMetaObject.invokeMethod(keyboard, 'toggled')
@@ -348,21 +354,19 @@ class GuiChecks(unittest.TestCase):
         window = engine.rootObjects()[0]
         display = window.findChild(QObject, 'displaySummary')
         adapter = window.findChild(QObject, 'adapterSummary')
-        self.assertEqual(display.property('description'), 'Not configured')
-        self.assertEqual(adapter.property('description'), 'Not configured')
+        self.assertEqual(display.property('description'), 'Display detection unavailable')
+        self.assertEqual(adapter.property('description'), 'CEC adapter detection unavailable')
         self.assertFalse(display.property('visible'))
-        self.assertFalse(adapter.property('visible'))
         backend._config_reply(0, self.reply(config))
-        self.assertEqual(display.property('description'), 'Not configured')
-        self.assertEqual(adapter.property('description'), 'Not configured')
+        self.assertEqual(display.property('description'), 'Display detection unavailable')
+        self.assertEqual(adapter.property('description'), 'CEC adapter detection unavailable')
         self.assertFalse(display.property('visible'))
-        self.assertFalse(adapter.property('visible'))
         backend._equipment_reply(0, self.reply({
             'outputs': [], 'adapters': [], 'inputs': [], 'errors': []}))
-        self.assertEqual(display.property('description'), 'Not configured')
-        self.assertEqual(adapter.property('description'), 'Not configured')
+        self.assertEqual(display.property('description'), 'No display detected')
+        self.assertEqual(adapter.property('description'), 'No CEC adapter detected')
         self.assertFalse(display.property('visible'))
-        self.assertFalse(adapter.property('visible'))
+        self.assertTrue(adapter.property('visible'))
         backend._equipment_reply(0, self.reply({
             'outputs': [{'path': config['target_output'], 'label': 'Detected TV'}],
             'adapters': [{'path': config['cec_port'], 'label': 'Detected adapter'}],
@@ -623,7 +627,7 @@ class GuiChecks(unittest.TestCase):
         app.processEvents()
         for name, role, label in (
                 ('saveSettingsButton', QAccessible.Role.Button, 'Save and apply settings'),
-                ('outputField', QAccessible.Role.ComboBox, 'Choose a detected display'),
+                ('outputField', QAccessible.Role.ComboBox, 'Display detection unavailable'),
                 ('manualInputs', QAccessible.Role.CheckBox, 'Enter input paths manually'),
                 ('devicesField', QAccessible.Role.EditableText, 'Input device paths (one per line)')):
             with self.subTest(control=name):
@@ -961,7 +965,7 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(configured_adapter.property('editText'), '/dev/serial/by-id/real-CEC')
         self.assertEqual(configured_output.property('count'), 0)
         self.assertEqual(configured_output.property('currentIndex'), -1)
-        self.assertEqual(configured_output.property('displayText'), 'Choose a detected display')
+        self.assertEqual(configured_output.property('displayText'), 'No display has been detected')
         self.assertFalse(window.findChild(QObject, 'retainedOutput').property('visible'))
         self.assertIn('/dev/input/by-id/real-kbd', configured_inputs.property('text'))
         # Replug updates the same configuration controls without losing drafts.

@@ -125,12 +125,14 @@ Kirigami.ApplicationWindow {
             ? " (unavailable / not detected)" : " (availability unknown)")
     }
 
-    function equipmentSummary(selector) {
+    function equipmentSummary(selector, emptyMessage, unknownMessage, chooseMessage) {
         if (selector.detected)
             return selector.selectedValue
         if (selector.manualEntry && selector.valueToSave.length)
             return root.retainedValue(selector.valueToSave)
-        return "Not configured"
+        if (selector.equipment.length)
+            return chooseMessage
+        return selector.availabilityKnown ? emptyMessage : unknownMessage
     }
 
     readonly property bool equipmentReady: outputField.acceptable && adapterField.acceptable
@@ -303,7 +305,11 @@ Kirigami.ApplicationWindow {
         property bool manualEntry: false
         property bool automaticSelection: false
         property bool explicitSelection: false
-        property string prompt: "Choose a detected device"
+        property string choosePrompt: "Choose a detected device"
+        property string emptyPrompt: "No applicable hardware has been detected"
+        property string unknownPrompt: "Hardware detection unavailable"
+        readonly property string prompt: equipment.length > 0
+            ? choosePrompt : (availabilityKnown ? emptyPrompt : unknownPrompt)
         property string selectedValue: ""
         readonly property bool detected: equipment.some(item => item.path === selectedValue
             || (item.aliases || []).includes(selectedValue))
@@ -757,9 +763,12 @@ Kirigami.ApplicationWindow {
                             FormCard.FormTextDelegate {
                                 id: displaySummary
                                 objectName: "displaySummary"
-                                visible: root.equipmentSummary(outputField) !== "Not configured"
+                                visible: outputField.detected
+                                    || (manualOutput.checked && outputField.valueToSave.length > 0)
                                 text: "TV display"
-                                description: root.equipmentSummary(outputField)
+                                description: root.equipmentSummary(
+                                    outputField, "No display detected", "Display detection unavailable",
+                                    "Choose a detected display in Equipment")
                                 leading: Kirigami.Icon {
                                     source: "video-display"
                                     implicitWidth: Kirigami.Units.iconSizes.medium
@@ -772,9 +781,12 @@ Kirigami.ApplicationWindow {
                             FormCard.FormTextDelegate {
                                 id: adapterSummary
                                 objectName: "adapterSummary"
-                                visible: root.equipmentSummary(adapterField) !== "Not configured"
+                                visible: true
                                 text: "CEC adapter"
-                                description: root.equipmentSummary(adapterField)
+                                description: root.equipmentSummary(
+                                    adapterField, "No CEC adapter detected",
+                                    "CEC adapter detection unavailable",
+                                    "Choose a detected CEC adapter in Equipment")
                                 leading: Kirigami.Icon {
                                     source: "network-wired"
                                     implicitWidth: Kirigami.Units.iconSizes.medium
@@ -865,7 +877,9 @@ Kirigami.ApplicationWindow {
                                             Layout.minimumWidth: 120
                                             equipment: topcec.detectedOutputs
                                             manualEntry: manualOutput.checked
-                                            prompt: "Choose a detected display"
+                                            choosePrompt: "Choose a detected display"
+                                            emptyPrompt: "No display has been detected"
+                                            unknownPrompt: "Display detection unavailable"
                                         }
                                     }
                                     SelectableLabel {
@@ -897,7 +911,9 @@ Kirigami.ApplicationWindow {
                                             Layout.minimumWidth: 120
                                             equipment: topcec.detectedAdapters
                                             manualEntry: manualAdapter.checked
-                                            prompt: "Choose a detected CEC adapter"
+                                            choosePrompt: "Choose a detected CEC adapter"
+                                            emptyPrompt: "No CEC adapter has been detected"
+                                            unknownPrompt: "CEC adapter detection unavailable"
                                         }
                                     }
                                     SelectableLabel {
