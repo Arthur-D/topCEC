@@ -1113,7 +1113,7 @@ Kirigami.ApplicationWindow {
                                             objectName: "timeoutMode"
                                             Layout.fillWidth: true
                                             Accessible.name: "Idle timeout"
-                                            model: ["Follow KDE", "Custom", "Disabled"]
+                                            model: [topcec.plasmaTimeoutLabel, "Custom", "Disabled"]
                                             onActivated: root.settingsDirty = true
                                         }
                                     }

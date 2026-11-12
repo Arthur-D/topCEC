@@ -135,6 +135,11 @@ class GuiBackend(QObject):
         self._input_save_timer.setInterval(500)
         self._input_save_timer.timeout.connect(self._save_pending_inputs)
         self._input_save_timer.start()
+        self._status_poll_timer = QTimer(self)
+        self._status_poll_timer.setInterval(5000)
+        self._status_poll_timer.timeout.connect(self._poll_service_status)
+        self._status_poll_timer.start()
+        self._status_poll_in_flight = False
         self._config_source = 'unknown' if self.dbus_only else 'defaults'
         self._service_data = {}
         self._equipment = {'outputs': [], 'adapters': [], 'inputs': []}
@@ -348,6 +353,20 @@ class GuiBackend(QObject):
     def usesKdeTimeout(self):
         return self.config['kde_timeout']
 
+    @Property(str, notify=changed)
+    def plasmaTimeoutLabel(self):
+        label = 'Follow Plasma power setting'
+        if self._service_data.get('plasma_timeout_read') is not True:
+            return label
+        seconds = self._service_data.get('plasma_timeout_seconds')
+        if seconds is None:
+            return label + ' (disabled)'
+        if type(seconds) is not int or seconds <= 0:
+            return label
+        minutes = seconds / 60
+        unit = 'minute' if minutes == 1 else 'minutes'
+        return f'{label} ({minutes:g} {unit})'
+
     @Slot(result=str)
     def deviceList(self):
         pending = self._input_preferences.value('pending')
@@ -396,6 +415,48 @@ class GuiBackend(QObject):
         return QDBusInterface(
             SERVICE, OBJECT, INTERFACE, QDBusConnection.sessionBus())
 
+    @Slot()
+    def _poll_service_status(self):
+        if (not self.backendAvailable or not self.config['kde_timeout']
+                or self._refresh_in_flight
+                or self._settings_in_flight or self._status_poll_in_flight):
+            return
+        interface = self._service_interface()
+        if not interface.isValid():
+            self.refresh()
+            return
+        self._status_poll_in_flight = True
+        generation = self._refresh_generation
+        self._async_call(
+            interface, 'GetStatus',
+            lambda reply: self._status_poll_reply(generation, reply))
+
+    def _status_poll_reply(self, generation, reply):
+        self._status_poll_in_flight = False
+        if generation != self._refresh_generation:
+            return
+        error = self._reply_error(reply)
+        if error:
+            self._connection_failed(generation, error)
+            return
+        try:
+            data = json.loads(str(reply.arguments()[0]))
+            if not isinstance(data, dict):
+                raise ValueError('Status response must be an object')
+            read = data.get('plasma_timeout_read', False)
+            seconds = data.get('plasma_timeout_seconds')
+            if (type(read) is not bool
+                    or (seconds is not None and
+                        (type(seconds) is not int or seconds <= 0))
+                    or (seconds is not None and not read)):
+                raise ValueError('Invalid Plasma timeout status')
+        except (IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
+            self._connection_failed(
+                generation, 'Invalid monitor status response: ' + str(error))
+            return
+        self._service_data = {**self._service_data, **data}
+        self.changed.emit()
+
     def _ensure_owner_watch(self):
         if self._owner_watch_registered:
             return
@@ -411,6 +472,7 @@ class GuiBackend(QObject):
         if name != SERVICE or old_owner == new_owner:
             return
         self._refresh_generation += 1
+        self._status_poll_in_flight = False
         self._failed_input_draft = None
         self._refresh_in_flight = False
         self._service_data = {}
@@ -527,6 +589,7 @@ class GuiBackend(QObject):
         self._standby_reason = self._connection_message
         self._diagnostics = self._connection_message
         self._refresh_in_flight = False
+        self._status_poll_in_flight = False
         self.changed.emit()
 
     def _set_connection_error(self, message):

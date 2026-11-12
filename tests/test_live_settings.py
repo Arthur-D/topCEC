@@ -78,7 +78,8 @@ class TestPower(monitor.CecPower):
 
 
 class LiveSettingsChecks(unittest.TestCase):
-    def run_service(self, path, scenario, *, initial=None, fail_inputs=(), fail_adapter=None):
+    def run_service(self, path, scenario, *, initial=None, fail_inputs=(), fail_adapter=None,
+                    plasma_timeout_seconds='unread'):
         config = {**DEFAULT_CONFIG, 'devices': ['/mock/keyboard'], 'cec_port': '/mock/cec',
                   **(initial or {})}
         context = SimpleNamespace(receiver=None, callbacks={}, inputs=[], selectors=[],
@@ -167,7 +168,7 @@ class LiveSettingsChecks(unittest.TestCase):
                 patch.object(monitor, 'log'), \
                 patch.object(monitor.time, 'monotonic', side_effect=lambda: context.now), \
                 patch.object(monitor, 'KdeTimeout', side_effect=lambda: Mock(
-                    poll=Mock(return_value=None), value='unread', next_read=0)), \
+                    poll=Mock(return_value=None), value=plasma_timeout_seconds, next_read=0)), \
                 patch.object(monitor, 'Timer', side_effect=make_timer):
             context.args = args
             self.assertEqual(monitor.run(args, cec_backend_factory=make_power,
@@ -288,6 +289,20 @@ class LiveSettingsChecks(unittest.TestCase):
             fresh = self.run_service(path, lambda context: self.assertEqual(context.inputs, []),
                                      initial=load_config(path))
             self.assertEqual(fresh.inputs, [])
+
+    def test_status_reports_fetched_plasma_timeout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                self.assertTrue(context.callbacks[100]())
+                status = json.loads(context.receiver.GetStatus())
+                self.assertTrue(status['plasma_timeout_read'])
+                self.assertEqual(status['plasma_timeout_seconds'], 420)
+
+            self.run_service(
+                path, scenario, initial={'kde_timeout': True},
+                plasma_timeout_seconds=420)
 
     def test_seed_or_registration_failure_retains_previous_resources(self):
         with tempfile.TemporaryDirectory() as directory:
