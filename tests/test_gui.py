@@ -63,7 +63,8 @@ class GuiChecks(unittest.TestCase):
                     self.assertFalse(backend.settingsEnabled)
                     callback(self.reply({'accepted': True, 'applied_live': True,
                                          'config': json.loads(args[0])}))
-                self.assertIn('applied live', backend.actionMessage)
+                self.assertEqual(backend.actionMessage, '')
+                self.assertFalse(window.findChild(QObject, 'actionFeedback').property('visible'))
                 self.assertFalse(window.property('settingsDirty'))
                 self.assertTrue(backend.settingsEnabled)
                 self.assertEqual(window.findChild(QObject, 'saveSettingsButton').property('text'),
@@ -107,7 +108,7 @@ class GuiChecks(unittest.TestCase):
             self.assertEqual(saved['devices'], ['/dev/input/latest'])
             callback(self.reply({'accepted': True, 'applied_live': True, 'config': saved}))
             self.assertFalse(backend.hasInputDraft())
-            self.assertIn('applied live', backend.actionMessage)
+            self.assertEqual(backend.actionMessage, '')
 
     def test_auto_input_save_queues_latest_selection_and_preserves_other_settings(self):
         app = QGuiApplication.instance() or QGuiApplication([])
@@ -1869,6 +1870,7 @@ class GuiChecks(unittest.TestCase):
         with patch.object(backend, '_service_interface', return_value=interface), \
                 patch.object(backend, '_async_call'):
             backend.requestPower('on')
+        self.assertEqual(backend.actionMessage, '')
         self.assertEqual(backend.powerState, 'on')
         self.assertIn('Pending action: on\n', backend.diagnostics)
 
