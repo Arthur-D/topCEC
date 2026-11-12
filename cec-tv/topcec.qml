@@ -28,6 +28,29 @@ Kirigami.ApplicationWindow {
         titleIcon: Qt.resolvedUrl("net.local.topcec.svg")
         modal: !root.wideScreen
         handleVisible: false
+        header: Controls.ToolBar {
+            objectName: "appIdentityHeader"
+            implicitHeight: pageToolbar.implicitHeight
+            leftPadding: Kirigami.Units.largeSpacing
+            rightPadding: Kirigami.Units.largeSpacing
+            contentItem: RowLayout {
+                spacing: Kirigami.Units.smallSpacing
+                Kirigami.Icon {
+                    objectName: "appIdentityLogo"
+                    source: navigationDrawer.titleIcon
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
+                    Accessible.ignored: true
+                }
+                Kirigami.Heading {
+                    objectName: "appIdentityName"
+                    Layout.fillWidth: true
+                    text: navigationDrawer.title
+                    level: 2
+                    elide: Text.ElideRight
+                }
+            }
+        }
         actions: [
             Kirigami.Action {
                 objectName: "overviewNavigation"
@@ -363,6 +386,8 @@ Kirigami.ApplicationWindow {
         title: root.setupRequired
             ? "Host service" : root.sectionNames[root.currentSection]
         header: Controls.ToolBar {
+            id: pageToolbar
+            objectName: "pageToolbar"
             contentItem: RowLayout {
                 Controls.ToolButton {
                     objectName: "navigationButton"
