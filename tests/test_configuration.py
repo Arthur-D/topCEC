@@ -87,6 +87,8 @@ class ConfigurationChecks(unittest.TestCase):
         self.assertTrue(config['cec_enabled'])
         self.assertEqual(config['devices'], ['/dev/input/event42'])
         self.assertEqual(config['mute_labels'], DEFAULT_CONFIG['mute_labels'])
+        self.assertTrue(config['consider_input_devices'])
+        self.assertIsNone(config['mouse_output'])
 
     def test_cli_values_override_config_only_when_explicit(self):
         config = validate_config({
@@ -122,6 +124,8 @@ class ConfigurationChecks(unittest.TestCase):
             {'schema_version': SCHEMA_VERSION, 'mapping_ttl_seconds': float('nan')},
             {'schema_version': SCHEMA_VERSION, 'devices': ['/dev/input/event0', '']},
             {'schema_version': SCHEMA_VERSION, 'cec_enabled': 1},
+            {'schema_version': SCHEMA_VERSION, 'consider_input_devices': 1},
+            {'schema_version': SCHEMA_VERSION, 'mouse_output': ''},
             {'schema_version': SCHEMA_VERSION, 'axis_deadzone_percent': 26},
             {'schema_version': SCHEMA_VERSION, 'device_axis_deadzones': {'/dev/input/a': {'5': 0}}},
             {'schema_version': SCHEMA_VERSION, 'device_axis_deadzones': {'/dev/input/a': {'47': 2}}},
@@ -162,6 +166,8 @@ class ConfigurationChecks(unittest.TestCase):
                 'target_output': 'DP-1',
                 'cec_enabled': False,
                 'timeout_seconds': None,
+                'consider_input_devices': False,
+                'mouse_output': 'DP-2',
             }), encoding='utf-8')
             with patch('sys.argv', ['monitor.py', '--config', str(path),
                                     '--target', 'HDMI-A-1']), \
@@ -169,6 +175,8 @@ class ConfigurationChecks(unittest.TestCase):
                         self.assertEqual(args.target, 'HDMI-A-1'),
                         self.assertIsNone(args.timeout_seconds),
                         self.assertFalse(args.cec),
+                        self.assertFalse(args.consider_input_devices),
+                        self.assertEqual(args.mouse_output, 'DP-2'),
                         0)[-1]):
                 self.assertEqual(monitor.main(), 0)
 

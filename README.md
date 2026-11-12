@@ -45,7 +45,7 @@ configuration, external research repositories and credentials are excluded.
 - Target display is `HDMI-A-2`. The mouse bridge maps cursor position using KWin's
   current output geometries; gaps and overlapping geometry are treated as unknown.
   The bridge reports activity with its actual output name; the monitor filters
-  it using `target_output`, including non-default displays. No separate KWin
+  it using `mouse_output`, or `target_output` when unset. No separate KWin
   target configuration is required. Legacy TV-only mouse reports are accepted
   only for the original default display.
 - CEC adapter: `/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00`;
@@ -190,6 +190,8 @@ keys, malformed values, or unreadable files stop startup with an error.
   "timeout_seconds": 60,
   "mapping_ttl_seconds": 15,
   "devices": ["/dev/input/event10", "/dev/input/event14"],
+  "consider_input_devices": true,
+  "mouse_output": null,
   "mute_labels": ["Mute tab"],
   "cec_enabled": false,
   "cec_port": "/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00",
@@ -203,6 +205,10 @@ keys, malformed values, or unreadable files stop startup with an error.
 
 Set `timeout_seconds` to `null` to disable inactivity standby. CEC remains
 disabled by default; enabling it retains the live Firefox snapshot requirement.
+Set `consider_input_devices` to `false` to ignore the selected input devices
+without removing their paths. `mouse_output` selects the display whose mouse
+movement prevents standby; `null` follows `target_output`. Mouse movement is
+independent of the input-device setting.
 The installed live launcher can load the same file with
 `cec-tv/start.py --config ~/.config/topcec/config.json`; it continues to force
 live CEC and the fresh-snapshot safety requirement. If no `--config` is passed,
@@ -228,8 +234,9 @@ The native Qt Quick/Kirigami panel follows the current Plasma theme. Its
 standby summaries. The navigation sidebar opens **Display**, **Standby**,
 **Input**, and **Diagnostics**; on narrow windows it becomes a navigation
 drawer. **Input** keeps device choices visible, with disclosures for manual
-paths and controller deadzones. **Standby** contains Firefox mute-tab labels,
-and **Overview** contains manual power-action simulation. The **Save and apply**
+paths and controller deadzones. **Standby** contains the input-device toggle
+and mouse-movement display selector, and **Overview** contains manual
+power-action simulation. The **Save and apply**
 footer appears when there are edits to apply or configuration needs attention.
 Switching sections preserves unsaved settings and input selections.
 

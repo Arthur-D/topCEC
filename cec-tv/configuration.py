@@ -12,6 +12,8 @@ DEFAULT_CONFIG = {
     'timeout_seconds': 60,
     'mapping_ttl_seconds': 15.0,
     'devices': ['/dev/input/event10', '/dev/input/event14'],
+    'consider_input_devices': True,
+    'mouse_output': None,
     'mute_labels': ['Mute tab'],
     'cec_enabled': False,
     'cec_port': '/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00',
@@ -55,9 +57,12 @@ def validate_config(value):
         if (not isinstance(values, list) or (key == 'mute_labels' and not values)
                 or any(not isinstance(item, str) or not item.strip() for item in values)):
             raise ValueError(f'{key} must be a non-empty array of non-empty strings')
-    for key in ('cec_enabled', 'kde_timeout', 'require_snapshot'):
+    for key in ('cec_enabled', 'kde_timeout', 'require_snapshot', 'consider_input_devices'):
         if type(config[key]) is not bool:
             raise ValueError(f'{key} must be a boolean')
+    if config['mouse_output'] is not None and (
+            not isinstance(config['mouse_output'], str) or not config['mouse_output'].strip()):
+        raise ValueError('mouse_output must be a non-empty string or null')
     for key in ('cec_port',):
         if not isinstance(config[key], str) or not config[key].strip():
             raise ValueError(f'{key} must be a non-empty string')

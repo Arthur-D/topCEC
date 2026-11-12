@@ -695,6 +695,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'timeout_seconds': getattr(args, 'timeout_seconds', int(DEFAULT_TIMEOUT)),
         'mapping_ttl_seconds': getattr(args, 'mapping_ttl', 15.0),
         'devices': DEFAULT_CONFIG['devices'] if args.device is None else args.device,
+        'consider_input_devices': getattr(args, 'consider_input_devices', True),
+        'mouse_output': getattr(args, 'mouse_output', None),
         'mute_labels': DEFAULT_CONFIG['mute_labels'] if args.mute_label is None else args.mute_label,
         'cec_enabled': bool(args.cec),
         'cec_port': args.cec_port,
@@ -818,8 +820,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 'axis_deadzone_percent', 'rz_deadzone_percent', 'device_axis_deadzones'))
             current = {state['identity']: state for state in devices.values()}
             selected_identities = set()
-            selected_paths = []
-            for path in dict.fromkeys(config['devices']):
+            selected_paths = [] if config['consider_input_devices'] else list(config['devices'])
+            for path in dict.fromkeys(config['devices'] if config['consider_input_devices'] else []):
                 identity = str(Path(path).resolve())
                 if identity in selected_identities:
                     continue
@@ -922,9 +924,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                             axis.reset()
             elif message.startswith('Mouse-activity: '):
                 output = message[len('Mouse-activity: '):].strip()
-                if output == target_output and output not in ('unknown', 'ingen', ''):
+                mouse_output = runtime_config['mouse_output'] or target_output
+                if output == mouse_output and output not in ('unknown', 'ingen', ''):
                     activity('mouse (TV activity report from KWin)')
-            elif message == 'TV-aktivitet: mus' and target_output == TARGET:
+            elif (message == 'TV-aktivitet: mus'
+                  and (runtime_config['mouse_output'] or target_output) == TARGET):
                 # Older bridges identify only the original default TV output.
                 activity('mouse (TV activity report from KWin)')
             elif message.startswith("Desktop-snapshot: "):
@@ -1015,7 +1019,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         runtime_config['device_axis_deadzones'])
 
     try:
-        for path in dict.fromkeys(DEFAULT_CONFIG['devices'] if args.device is None else args.device):
+        for path in dict.fromkeys(runtime_config['devices'] if runtime_config['consider_input_devices'] else []):
             device = InputDevice(path)
             try:
                 axes = activity_provider.seed(device, path)
@@ -2043,6 +2047,8 @@ def main():
     args.timeout_seconds = config['timeout_seconds']
     args.mapping_ttl = config['mapping_ttl_seconds']
     args.device = config['devices']
+    args.consider_input_devices = config['consider_input_devices']
+    args.mouse_output = config['mouse_output']
     args.mute_label = config['mute_labels']
     args.cec = config['cec_enabled']
     args.cec_port = config['cec_port']

@@ -90,6 +90,9 @@ def config_from_settings(current, values):
         'mapping_ttl_seconds': current['mapping_ttl_seconds'],
         'devices': [item.strip() for item in str(values['devices']).splitlines()
                     if item.strip()],
+        'consider_input_devices': values.get(
+            'considerInputDevices', current['consider_input_devices']),
+        'mouse_output': values.get('mouseOutput', current['mouse_output']),
         'mute_labels': [item.strip() for item in str(values['muteLabels']).splitlines()
                         if item.strip()],
         'cec_enabled': True,
@@ -841,7 +844,9 @@ class GuiBackend(QObject):
                 raise ValueError('Host did not confirm that settings were saved')
             config = result['config']
             # Older hosts returned the complete configuration without its version.
-            if isinstance(config, dict) and config.keys() == DEFAULT_CONFIG.keys():
+            if isinstance(config, dict) and set(config) in (
+                    set(DEFAULT_CONFIG),
+                    set(DEFAULT_CONFIG) - {'consider_input_devices', 'mouse_output'}):
                 config = {'schema_version': SCHEMA_VERSION, **config}
             saved = validate_config(config)
         except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
