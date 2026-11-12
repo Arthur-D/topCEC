@@ -126,6 +126,8 @@ Kirigami.ApplicationWindow {
                 : (timeoutMode.currentIndex === 1 ? "custom" : "never"),
             timeoutMinutes: timeoutMinutes.value,
             devices: devicesField.text,
+            considerInputDevices: considerInputDevices.checked,
+            mouseOutput: mouseOutput.selectedOutput.length ? mouseOutput.selectedOutput : null,
             muteLabels: labelsField.text,
             axisDeadzone: deadzoneField.value,
             rzDeadzone: rzDeadzoneField.value
@@ -192,7 +194,7 @@ Kirigami.ApplicationWindow {
     }
 
     readonly property bool equipmentReady: outputField.acceptable && adapterField.acceptable
-        && inputPaths().length > 0
+        && (!considerInputDevices.checked || inputPaths().length > 0)
 
     function inputPaths() {
         return devicesField.text.split("\n").map(path => path.trim()).filter(path => path.length)
@@ -381,7 +383,7 @@ Kirigami.ApplicationWindow {
             return "Connect to the host service to save settings."
         if (!outputField.acceptable || !adapterField.acceptable)
             return "Choose a display and CEC adapter."
-        if (!inputPaths().length)
+        if (considerInputDevices.checked && !inputPaths().length)
             return "Select at least one input device."
         if (root.settingsDirty)
             return "Unsaved changes."
@@ -554,6 +556,8 @@ Kirigami.ApplicationWindow {
         timeoutMode.currentIndex = topcec.usesKdeTimeout() ? 0
             : (topcec.setting("timeout_seconds") === null ? 2 : 1)
         timeoutMinutes.value = topcec.timeoutMinutes()
+        considerInputDevices.checked = topcec.setting("consider_input_devices")
+        mouseOutput.selectedOutput = topcec.setting("mouse_output") || ""
         devicesField.text = topcec.deviceList()
         labelsField.text = topcec.muteLabelList()
         deadzoneField.value = Math.round(topcec.setting("axis_deadzone_percent"))
@@ -1140,6 +1144,49 @@ Kirigami.ApplicationWindow {
                                             Keys.onMenuPressed: root.showCaption(textFromValue(value, locale))
                                         }
                                         SelectableLabel { text: "minutes" }
+                                    }
+                                    CopyableCheckBox {
+                                        id: considerInputDevices
+                                        objectName: "considerInputDevices"
+                                        text: "Consider input devices"
+                                        onClicked: root.settingsDirty = true
+                                    }
+                                    SelectableLabel {
+                                        Layout.fillWidth: true
+                                        text: "Use selected input devices to prevent standby. Mouse movement is controlled separately below."
+                                    }
+                                    SelectableLabel {
+                                        Layout.fillWidth: true
+                                        text: "Display where mouse movement prevents standby"
+                                    }
+                                    CopyableComboBox {
+                                        id: mouseOutput
+                                        objectName: "mouseOutput"
+                                        Layout.fillWidth: true
+                                        Accessible.name: "Display where mouse movement prevents standby"
+                                        property string selectedOutput: ""
+                                        readonly property var choices: {
+                                            let items = [{path: "", label: "TV display (default)"}]
+                                            for (let output of topcec.detectedOutputs)
+                                                items.push({path: output.path, label: output.label})
+                                            if (selectedOutput.length && !items.some(item => item.path === selectedOutput))
+                                                items.push({path: selectedOutput, label: selectedOutput + " (not detected)"})
+                                            return items
+                                        }
+                                        model: choices
+                                        textRole: "label"
+                                        currentIndex: choices.findIndex(item => item.path === selectedOutput)
+                                        onActivated: function(index) {
+                                            selectedOutput = choices[index].path
+                                            root.settingsDirty = true
+                                        }
+                                    }
+                                    SelectableLabel {
+                                        Layout.fillWidth: true
+                                        visible: !topcec.detectedOutputs.length
+                                        text: topcec.equipmentAvailabilityKnown
+                                            ? "No displays detected; the TV display remains available."
+                                            : "Display detection unavailable; the TV display remains available."
                                     }
                                 }
                             }

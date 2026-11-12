@@ -1664,6 +1664,58 @@ class GuiChecks(unittest.TestCase):
         self.assertFalse(config['kde_timeout'])
         self.assertEqual(config['rz_deadzone_percent'], 6.0)
 
+    def test_older_unversioned_save_reply_receives_new_defaults(self):
+        backend = GuiBackend(dbus_only=True)
+        old_config = {key: value for key, value in DEFAULT_CONFIG.items()
+                      if key not in ('consider_input_devices', 'mouse_output')}
+        with patch.object(backend, 'refresh'):
+            backend._settings_reply(0, self.reply({'accepted': True, 'config': old_config}))
+        self.assertTrue(backend.config['consider_input_devices'])
+        self.assertIsNone(backend.config['mouse_output'])
+        self.assertIn('saved', backend.actionMessage.lower())
+
+    def test_standby_input_toggle_and_mouse_display_selection(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._config_source = 'saved'
+        backend.config = {**DEFAULT_CONFIG, 'devices': []}
+        backend._set_equipment({
+            'outputs': [{'path': 'DP-1', 'label': 'Monitor'},
+                        {'path': 'HDMI-A-2', 'label': 'TV'}],
+            'adapters': [{'path': backend.config['cec_port'], 'label': 'Adapter'}],
+            'inputs': [], 'errors': [],
+        }, '')
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        checkbox = window.findChild(QObject, 'considerInputDevices')
+        selector = window.findChild(QObject, 'mouseOutput')
+        self.assertTrue(checkbox.property('checked'))
+        self.assertEqual(selector.property('currentIndex'), 0)
+        self.assertFalse(window.property('equipmentReady'))
+        QMetaObject.invokeMethod(checkbox, 'click')
+        self.assertTrue(window.property('settingsDirty'))
+        self.assertTrue(window.property('equipmentReady'))
+        engine.rootContext().setContextProperty('mouseSelector', selector)
+        expression = QQmlExpression(engine.rootContext(), window, 'mouseSelector.activated(1)')
+        expression.evaluate()
+        self.assertFalse(expression.hasError(), expression.error().toString())
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        config = config_from_settings(backend.config, values)
+        self.assertFalse(config['consider_input_devices'])
+        self.assertEqual(config['mouse_output'], 'DP-1')
+        backend._set_equipment({'outputs': [], 'adapters': [], 'inputs': [], 'errors': []}, '')
+        self.assertEqual(selector.property('selectedOutput'), 'DP-1')
+        self.assertIn('not detected', selector.property('currentText'))
+        engine.deleteLater()
+
     def test_kde_and_disabled_timeout_modes(self):
         kde = config_from_settings(
             self.config, {**self.values, 'timeoutMode': 'kde'})

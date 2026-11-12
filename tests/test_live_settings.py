@@ -157,6 +157,8 @@ class LiveSettingsChecks(unittest.TestCase):
             mute_label=config['mute_labels'], cec=config['cec_enabled'],
             cec_port=config['cec_port'], kde_timeout=config['kde_timeout'],
             require_snapshot=config['require_snapshot'],
+            consider_input_devices=config['consider_input_devices'],
+            mouse_output=config['mouse_output'],
             axis_deadzone_percent=config['axis_deadzone_percent'],
             rz_deadzone_percent=config['rz_deadzone_percent'], config=str(path))
         with patch.dict(sys.modules, modules), \
@@ -215,6 +217,41 @@ class LiveSettingsChecks(unittest.TestCase):
             self.run_service(path, lambda context: self.assertEqual(
                 self.config(context.receiver)['devices'], ['/mock/mouse']),
                 initial=load_config(path))
+
+    def test_input_toggle_and_mouse_output_apply_live_and_survive_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                receiver = context.receiver
+                keyboard = context.inputs[0]
+                self.apply(receiver, consider_input_devices=False, mouse_output='DP-9')
+                self.assertTrue(keyboard.closed)
+                self.assertEqual(self.config(receiver)['devices'], ['/mock/keyboard'])
+                context.now = 10
+                receiver.Report('Mouse-activity: HDMI-A-2')
+                self.assertNotEqual(context.timer.last, 10)
+                receiver.Report('Mouse-activity: DP-9')
+                self.assertEqual(context.timer.last, 10)
+                context.denied.add('/mock/keyboard')
+                with self.assertRaisesRegex(RuntimeError, 'previous configuration retained'):
+                    self.apply(receiver, consider_input_devices=True)
+                self.assertFalse(self.config(receiver)['consider_input_devices'])
+                context.denied.clear()
+                self.apply(receiver, consider_input_devices=True)
+                self.assertEqual(len(context.inputs), 2)
+
+            self.run_service(path, scenario)
+            saved = load_config(path)
+            self.assertTrue(saved['consider_input_devices'])
+            self.assertEqual(saved['mouse_output'], 'DP-9')
+            self.run_service(path, lambda context: self.assertEqual(
+                self.config(context.receiver)['mouse_output'], 'DP-9'), initial=saved)
+
+            saved['consider_input_devices'] = False
+            save_config(path, {'schema_version': 1, **saved})
+            self.run_service(path, lambda context: self.assertEqual(context.inputs, []),
+                             initial=load_config(path), fail_inputs=['/mock/keyboard'])
 
     def test_input_and_disk_failure_roll_back_without_losing_monitoring(self):
         with tempfile.TemporaryDirectory() as directory:
