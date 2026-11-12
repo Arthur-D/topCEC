@@ -223,6 +223,9 @@ Kirigami.ApplicationWindow {
             : (topcec.serviceStatus === "configuration-only"
                 ? (root.width < 500 ? "Config only" : "Configuration only")
                 : (topcec.serviceStatus === "running" ? "Monitoring" : topcec.serviceStatus)))
+    readonly property bool standbyBlocked: topcec.standbyReason.startsWith("Automatic standby blocked:")
+    readonly property string standbyBlockReason: root.standbyBlocked
+        ? topcec.standbyReason.slice("Automatic standby blocked:".length).trim() : ""
     readonly property bool serviceHealthy: topcec.backendAvailable
         && topcec.serviceStatus === "running"
 
@@ -694,9 +697,24 @@ Kirigami.ApplicationWindow {
                                     font.bold: true
                                     text: topcec.powerState
                                 }
-                                SelectableLabel {
+                                RowLayout {
+                                    objectName: "monitoringStatusRow"
                                     Layout.fillWidth: true
-                                    text: topcec.standbyReason
+                                    Kirigami.Icon {
+                                        source: root.serviceHealthy ? "emblem-success" : "data-warning"
+                                        color: root.serviceHealthy
+                                            ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                                        Accessible.ignored: true
+                                    }
+                                    SelectableLabel {
+                                        objectName: "serviceStatusLabel"
+                                        Layout.fillWidth: true
+                                        text: root.headerStatus
+                                        color: root.serviceHealthy
+                                            ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                                    }
                                 }
                             }
                         }
@@ -722,45 +740,29 @@ Kirigami.ApplicationWindow {
                             }
                             Item { Layout.fillWidth: true }
                         }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Kirigami.Icon {
-                                source: root.serviceHealthy ? "emblem-success" : "data-warning"
-                                color: root.serviceHealthy
-                                    ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
-                                Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                                Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                                Accessible.ignored: true
-                            }
-                            SelectableLabel {
-                                objectName: "serviceStatusLabel"
-                                Layout.fillWidth: true
-                                text: root.headerStatus
-                                color: root.serviceHealthy
-                                    ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
-                            }
-                        }
                     }
 
                     Kirigami.InlineMessage {
                         objectName: "warningBanner"
                         Layout.fillWidth: true
                         visible: root.currentSection === 0 && topcec.backendAvailable
-                            && (topcec.serviceStatus === "configuration-only"
-                                || topcec.standbyReason.startsWith("Automatic standby blocked:"))
+                            && (topcec.serviceStatus === "configuration-only" || root.standbyBlocked)
                         type: Kirigami.MessageType.Warning
-                        text: topcec.inputPermissionMessage.length > 0
-                            ? "Input access is blocked. Monitoring is inactive."
-                            : (topcec.serviceStatus === "configuration-only"
-                                ? "Monitoring is inactive."
-                                : "Automatic standby is blocked.")
+                        text: root.standbyBlocked
+                            ? "Automatic standby is blocked: "
+                                + (root.standbyBlockReason.length
+                                    ? root.standbyBlockReason : "No reason was reported.")
+                                + (topcec.serviceStatus === "configuration-only"
+                                    ? " Monitoring is inactive." : "")
+                            : (topcec.inputPermissionMessage.length > 0
+                                ? "Input access is blocked. Monitoring is inactive."
+                                : "Monitoring is inactive.")
                     }
                     CopyableButton {
                         objectName: "viewRecoverySteps"
                         Layout.alignment: Qt.AlignRight
                         visible: root.currentSection === 0 && topcec.backendAvailable
-                            && (topcec.serviceStatus === "configuration-only"
-                                || topcec.standbyReason.startsWith("Automatic standby blocked:"))
+                            && (topcec.serviceStatus === "configuration-only" || root.standbyBlocked)
                         text: "View recovery steps"
                         icon.name: "help-hint"
                         onClicked: root.openDiagnostics()

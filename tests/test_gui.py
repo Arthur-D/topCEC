@@ -523,7 +523,17 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(window.findChild(QObject, 'serviceStatusLabel').property('text'),
                          'Configuration only')
         self.assertEqual(window.findChild(QObject, 'powerStateLabel').property('text'), 'unknown')
-        self.assertTrue(window.findChild(QObject, 'warningBanner').property('visible'))
+        power_state = window.findChild(QQuickItem, 'powerStateLabel')
+        monitoring = window.findChild(QQuickItem, 'monitoringStatusRow')
+        self.assertGreaterEqual(
+            monitoring.mapToScene(QPointF(0, 0)).y(),
+            power_state.mapToScene(QPointF(0, 0)).y() + power_state.height() - 1)
+        warning = window.findChild(QObject, 'warningBanner')
+        self.assertTrue(warning.property('visible'))
+        self.assertIn(
+            'Automatic standby is blocked: Cannot read input: Permission denied',
+            warning.property('text'))
+        self.assertIn('Monitoring is inactive.', warning.property('text'))
         self.assertTrue(window.findChild(QObject, 'applyFooter').property('visible'))
         save = window.findChild(QObject, 'saveSettingsButton')
         self.assertTrue(save.property('enabled'))
