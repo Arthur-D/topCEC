@@ -25,7 +25,7 @@ Kirigami.ApplicationWindow {
         id: navigationDrawer
         objectName: "navigationDrawer"
         title: "topCEC"
-        titleIcon: Qt.resolvedUrl("net.local.topcec.svg")
+        titleIcon: topcec.applicationIcon
         modal: !root.wideScreen
         handleVisible: false
         header: Controls.ToolBar {

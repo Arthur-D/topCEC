@@ -170,6 +170,10 @@ class GuiBackend(QObject):
         if self.config['cec_port'] not in self.adapters:
             self.adapters.insert(0, self.config['cec_port'])
 
+    @Property(QIcon, constant=True)
+    def applicationIcon(self):
+        return application_icon()
+
     @Property(str, notify=changed)
     def serviceStatus(self):
         return self._service_status
