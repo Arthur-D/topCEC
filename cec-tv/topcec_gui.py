@@ -117,6 +117,7 @@ class GuiBackend(QObject):
         self.config = {'schema_version': 1, **DEFAULT_CONFIG}
         self._service_status = 'Checking service'
         self._power_state = 'unknown'
+        self._simulated_action = None
         self._standby_reason = 'Waiting for service status'
         self._diagnostics = 'No service diagnostics received.'
         self._connection_state = 'connecting'
@@ -138,6 +139,7 @@ class GuiBackend(QObject):
         self._service_data = {}
         self._equipment = {'outputs': [], 'adapters': [], 'inputs': []}
         self._equipment_known = False
+        self._adapter_inventory_known = False
         self._missing_capabilities = set()
         self._equipment_message = (
             'Equipment has not been reported by the host. Configured values may '
@@ -200,6 +202,8 @@ class GuiBackend(QObject):
 
     @Property(str, notify=changed)
     def powerState(self):
+        if self._simulated_action:
+            return ('On' if self._simulated_action == 'on' else 'Off') + ' (simulated)'
         return self._power_state
 
     @Property(str, notify=changed)
@@ -317,12 +321,19 @@ class GuiBackend(QObject):
 
     def _set_equipment(self, equipment, message):
         known = equipment is not None and not equipment.get('errors')
+        adapter_known = equipment is not None and not any(
+            error.startswith('CEC adapter discovery:') for error in equipment.get('errors', []))
         equipment = equipment or {'outputs': [], 'adapters': [], 'inputs': []}
         if (equipment != self._equipment or message != self._equipment_message
-                or known != self._equipment_known):
+                or known != self._equipment_known
+                or adapter_known != self._adapter_inventory_known):
             self._equipment = equipment
             self._equipment_message = message
             self._equipment_known = known
+            self._adapter_inventory_known = adapter_known
+            if self.backendAvailable:
+                self._update_diagnostics()
+                self.changed.emit()
             self.equipmentChanged.emit()
 
     @Slot(str, result='QVariant')
@@ -371,9 +382,10 @@ class GuiBackend(QObject):
         if action not in ('on', 'off'):
             self._action_message = 'Unsupported simulation action: ' + action
         else:
-            description = 'on' if action == 'on' else 'standby'
-            self._action_message = (
-                f'Simulation: would request TV {description}. No command sent.')
+            self._simulated_action = action
+            self._action_message = ''
+            if self.backendAvailable:
+                self._update_diagnostics()
         self.changed.emit()
 
     @Slot(str)
@@ -583,14 +595,8 @@ class GuiBackend(QObject):
         self._standby_reason = (
             'Automatic standby allowed' if not reason
             else 'Automatic standby blocked: ' + str(reason))
-        diagnostic_items = [
-            f"Scan: {self._service_data.get('scan_status') or 'healthy'}",
-            f"CEC fault: {self._service_data.get('cec_fault') or 'none'}",
-            f"Pending action: {self._service_data.get('pending_action') or 'none'}",
-            f"Settings error: {self._service_data.get('settings_error') or 'none'}",
-        ]
-        self._diagnostics = '\n'.join(diagnostic_items)
         self._connection_state = 'connected'
+        self._update_diagnostics()
         self._connection_message = (
             'Connected for configuration only. Monitoring could not start. '
             'Correct the input devices and their host read permissions, then '
@@ -605,6 +611,21 @@ class GuiBackend(QObject):
             self._async_call(
                 interface, 'GetEquipment',
                 lambda equipment_reply: self._equipment_reply(generation, equipment_reply))
+
+    def _update_diagnostics(self):
+        fault = self._service_data.get('cec_fault')
+        if not fault and self._adapter_inventory_known and not self._equipment['adapters']:
+            fault = 'adapter not found'
+        pending = self._service_data.get('pending_action') or 'none'
+        if self._simulated_action:
+            pending = ('on' if self._simulated_action == 'on' else 'standby') + ' (simulated)'
+        diagnostic_items = [
+            f"Scan: {self._service_data.get('scan_status') or 'healthy'}",
+            f"CEC fault: {fault or 'none'}",
+            f"Pending action: {pending}",
+            f"Settings error: {self._service_data.get('settings_error') or 'none'}",
+        ]
+        self._diagnostics = '\n'.join(diagnostic_items)
 
     def _equipment_reply(self, generation, reply):
         if generation != self._refresh_generation:
@@ -708,6 +729,8 @@ class GuiBackend(QObject):
                     'Cannot control the TV because the topCEC service disconnected.')
             else:
                 generation = self._refresh_generation
+                self._simulated_action = None
+                self._update_diagnostics()
                 self._action_message = 'Sending TV power request.'
                 self._async_call(
                     interface, 'RequestPower',
