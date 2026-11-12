@@ -671,6 +671,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'power_state': 'unknown',
         'pending_action': None,
         'cec_fault': None,
+        'plasma_timeout_read': False,
+        'plasma_timeout_seconds': None,
         'fail_safe_reason': 'monitor poll has not completed',
         'playback_active': False,
         'scan_status': scan_error,
@@ -1043,6 +1045,14 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     worker.communicate()
                     worker = None
                     next_scan = 0
+                if kde_settings:
+                    kde_settings.poll(timer, time.monotonic())
+                    status_snapshot.update({
+                        'plasma_timeout_read': kde_settings.value != 'unread',
+                        'plasma_timeout_seconds': (
+                            kde_settings.value
+                            if type(kde_settings.value) is int else None),
+                    })
                 status_snapshot.update(power_status())
             except (OSError, subprocess.SubprocessError) as error:
                 message = 'Paused monitor recovery failed: ' + str(error)
@@ -1186,6 +1196,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             status_snapshot.update({
                 'service': 'running',
                 **power_status(),
+                'plasma_timeout_read': bool(
+                    kde_settings and kde_settings.value != 'unread'),
+                'plasma_timeout_seconds': (
+                    kde_settings.value
+                    if kde_settings and type(kde_settings.value) is int else None),
                 'fail_safe_reason': reason,
                 'playback_active': audible,
                 'scan_status': scan_error,

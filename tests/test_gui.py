@@ -573,7 +573,19 @@ class GuiChecks(unittest.TestCase):
         timeout = window.findChild(QObject, 'timeoutMode')
         minutes = window.findChild(QObject, 'timeoutMinutes')
         self.assertTrue(minutes.property('visible'))
+        backend._status_poll_reply(0, self.reply({
+            'plasma_timeout_read': True,
+            'plasma_timeout_seconds': 600,
+        }))
         timeout.setProperty('currentIndex', 0)
+        self.assertEqual(timeout.property('currentText'),
+                         'Follow Plasma power setting (10 minutes)')
+        backend._status_poll_reply(0, self.reply({
+            'plasma_timeout_read': True,
+            'plasma_timeout_seconds': 300,
+        }))
+        self.assertEqual(timeout.property('currentText'),
+                         'Follow Plasma power setting (5 minutes)')
         self.assertFalse(minutes.property('visible'))
         timeout.setProperty('currentIndex', 1)
         self.assertTrue(minutes.property('visible'))
