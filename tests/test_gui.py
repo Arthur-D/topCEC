@@ -1324,6 +1324,42 @@ class GuiChecks(unittest.TestCase):
                       locate.call_args.args)
         self.assertIsNotNone(app)
 
+    def test_installed_header_logo_renders_without_an_adjacent_svg(self):
+        from PySide6.QtGui import QIcon
+
+        app = QGuiApplication.instance() or QGuiApplication([])
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            qml_path = directory / 'lib/topcec/topcec.qml'
+            qml_path.parent.mkdir(parents=True)
+            qml_path.write_bytes((ROOT / 'cec-tv/topcec.qml').read_bytes())
+            icon_path = directory / 'share/icons/hicolor/scalable/apps/net.local.topcec.svg'
+            icon_path.parent.mkdir(parents=True)
+            icon_path.write_bytes((ROOT / 'cec-tv/net.local.topcec.svg').read_bytes())
+            with patch.object(topcec_gui, '__file__', str(qml_path.with_suffix('.py'))), \
+                    patch.object(QStandardPaths, 'locate', return_value=str(icon_path)), \
+                    patch.object(QIcon, 'fromTheme', side_effect=lambda name, fallback: fallback):
+                backend = GuiBackend(dbus_only=True)
+                engine = QQmlApplicationEngine()
+                engine.rootContext().setContextProperty('topcec', backend)
+                engine.load(QUrl.fromLocalFile(str(qml_path)))
+                self.assertTrue(engine.rootObjects())
+                window = engine.rootObjects()[0]
+                window.show()
+                QTest.qWait(50)
+                header = window.findChild(QQuickItem, 'appIdentityHeader')
+                engine.rootContext().setContextProperty('testAppHeader', header)
+                expression = QQmlExpression(
+                    engine.rootContext(), window,
+                    'testAppHeader.contentItem.children.find('
+                    'item => item.objectName === "appIdentityLogo").valid')
+                valid, _ = expression.evaluate()
+                self.assertFalse(expression.hasError(), expression.error().toString())
+                self.assertTrue(valid, 'The installed header must load an actual logo image')
+                window.close()
+                engine.deleteLater()
+                app.processEvents()
+
     def setUp(self):
         preferences = tempfile.TemporaryDirectory()
         self.addCleanup(preferences.cleanup)
