@@ -633,6 +633,24 @@ Upstream PySide/Shiboken license texts are installed under
 `/app/share/licenses/pyside`; other third-party notices remain in their packages.
 The source URL and checksum are recorded in `packaging/flatpak/pyside.yml`.
 
+To update an existing checkout, reinstall the host files, restart the service,
+build/install the user Flatpak, and launch it, run:
+
+```sh
+./packaging/update-user.sh
+```
+
+The updater requires a clean checkout and pulls the current branch's upstream
+with `git pull --ff-only`. Commit or stash local changes first. It uses native
+`flatpak-builder` when available, otherwise `flathub-build` from the
+`org.flatpak.Builder` Flatpak, and downloads missing build dependencies from
+the host user's Flathub remote. It installs the built app through the host's
+Flatpak command. From Toolbx it forwards
+to the desktop host using `host-spawn`. A failed step stops the update; if the
+Flatpak build fails, the host service has already been updated. After a successful
+build it closes any running topCEC Flatpak and launches the installed version.
+The script stays attached to the GUI until it exits.
+
 Build from the repository root with the Flatpak-packaged builder (this builds
 and exports the app without installing it):
 
