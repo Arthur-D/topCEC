@@ -7,14 +7,63 @@ import org.kde.kirigamiaddons.formcard as FormCard
 
 Kirigami.ApplicationWindow {
     id: root
-    title: topcec.dbusOnly && !topcec.backendAvailable
+    title: root.setupRequired
         ? "topCEC Backend Not Available" : "topCEC"
+    width: 1060
+    height: 800
     minimumWidth: 380
     minimumHeight: 500
     pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
     readonly property int pageInset: Kirigami.Units.largeSpacing
+    property int currentSection: 0
+    readonly property bool setupRequired: topcec.dbusOnly && !topcec.backendAvailable
+    readonly property var sectionNames: ["Overview", "Equipment", "Automatic standby", "Diagnostics"]
     property bool settingsDirty: false
     property string submittedSettings: ""
+
+    globalDrawer: Kirigami.GlobalDrawer {
+        id: navigationDrawer
+        objectName: "navigationDrawer"
+        title: "topCEC"
+        titleIcon: Qt.resolvedUrl("net.local.topcec.svg")
+        modal: !root.wideScreen
+        handleVisible: false
+        actions: [
+            Kirigami.Action {
+                objectName: "overviewNavigation"
+                text: "Overview"
+                icon.name: "view-dashboard"
+                checked: root.currentSection === 0
+                onTriggered: root.currentSection = 0
+            },
+            Kirigami.Action {
+                objectName: "equipmentNavigation"
+                text: "Equipment"
+                icon.name: "video-display"
+                checked: root.currentSection === 1
+                onTriggered: root.currentSection = 1
+            },
+            Kirigami.Action {
+                objectName: "standbyNavigation"
+                text: "Automatic standby"
+                icon.name: "preferences-system-power-management"
+                checked: root.currentSection === 2
+                onTriggered: root.currentSection = 2
+            },
+            Kirigami.Action {
+                objectName: "diagnosticsNavigation"
+                text: "Diagnostics"
+                icon.name: "utilities-log-viewer"
+                checked: root.currentSection === 3
+                onTriggered: root.openDiagnostics()
+            }
+        ]
+    }
+
+    onCurrentSectionChanged: {
+        if (settingsPage.flickable)
+            settingsPage.flickable.contentY = 0
+    }
 
     function settingsValues() {
         return {
@@ -51,6 +100,14 @@ Kirigami.ApplicationWindow {
     function retainedValue(value) {
         return value + (topcec.equipmentAvailabilityKnown
             ? " (unavailable / not detected)" : " (availability unknown)")
+    }
+
+    function equipmentSummary(selector) {
+        if (selector.detected)
+            return selector.selectedValue
+        if (topcec.configurationSource === "defaults" && !selector.manualEntry)
+            return "Not configured"
+        return selector.valueToSave.length ? root.retainedValue(selector.valueToSave) : "Not configured"
     }
 
     readonly property bool equipmentReady: outputField.acceptable && adapterField.acceptable
@@ -105,7 +162,8 @@ Kirigami.ApplicationWindow {
         if (!item.visible)
             return ""
         if (typeof item.text === "string" && item.text.length)
-            return item.text
+            return item.text + (typeof item.description === "string" && item.description.length
+                ? "\n" + item.description : "")
         let parts = []
         for (let child of item.children) {
             let text = displayedText(child)
@@ -146,13 +204,13 @@ Kirigami.ApplicationWindow {
     }
 
     function copyPageText() {
-        return root.title + "\nService: " + root.headerStatus + "\n"
+        return root.title + "\n" + settingsPage.title + "\nService: " + root.headerStatus + "\n"
             + root.displayedText(pageContent) + "\n"
             + saveSettingsButton.text + "\n" + settingsSaveStatus.text
     }
 
     function openDiagnostics() {
-        diagnosticsToggle.checked = true
+        root.currentSection = 3
         recoveryScrollTimer.restart()
     }
 
@@ -175,21 +233,20 @@ Kirigami.ApplicationWindow {
         Keys.onMenuPressed: root.showCaption(text)
     }
 
+    component CopyableFormButton: FormCard.FormButtonDelegate {
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onTapped: root.showCaption(parent.text)
+        }
+        Keys.onMenuPressed: root.showCaption(text)
+    }
+
     component DisclosureButton: CopyableButton {
-        id: disclosure
         Layout.fillWidth: true
         flat: true
         checkable: true
-        contentItem: RowLayout {
-            Controls.Label {
-                Layout.fillWidth: true
-                text: disclosure.text
-            }
-            Controls.Label {
-                text: disclosure.checked ? "⌄" : "›"
-                Accessible.ignored: true
-            }
-        }
+        display: Controls.AbstractButton.TextBesideIcon
+        icon.name: checked ? "arrow-up" : "arrow-down"
     }
 
     component CopyableCheckBox: Controls.CheckBox {
@@ -300,143 +357,69 @@ Kirigami.ApplicationWindow {
         color: Kirigami.Theme.backgroundColor
     }
 
-    header: Controls.ToolBar {
-        id: appHeader
-        contentItem: RowLayout {
-            spacing: Kirigami.Units.smallSpacing
-            Rectangle {
-                Layout.preferredWidth: 32
-                Layout.preferredHeight: 32
-                radius: 8
-                color: Kirigami.Theme.alternateBackgroundColor
-                Item {
-                    anchors.centerIn: parent
-                    width: 24
-                    height: 24
-                    Accessible.ignored: true
-                    Rectangle {
-                        x: 3
-                        y: 3
-                        width: 18
-                        height: 14
-                        radius: 2
-                        color: "transparent"
-                        border.width: 2
-                        border.color: Kirigami.Theme.highlightColor
-                    }
-                    Rectangle {
-                        x: 8
-                        y: 18
-                        width: 2
-                        height: 3
-                        color: Kirigami.Theme.highlightColor
-                    }
-                    Rectangle {
-                        x: 14
-                        y: 18
-                        width: 2
-                        height: 3
-                        color: Kirigami.Theme.highlightColor
-                    }
-                }
-            }
-            SelectableLabel {
-                text: "topCEC"
-                font.bold: true
-                Layout.preferredWidth: 66
-                Layout.preferredHeight: 26
-                wrapMode: TextEdit.NoWrap
-            }
-            Item { Layout.fillWidth: true }
-            Rectangle {
-                Layout.preferredWidth: Math.min(210, Math.max(116, root.headerStatus.length * 8 + 44))
-                Layout.preferredHeight: 30
-                radius: 16
-                color: Kirigami.Theme.alternateBackgroundColor
-                border.color: root.serviceHealthy
-                    ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 10
-                    spacing: 7
-                    Rectangle {
-                        Layout.preferredWidth: 7
-                        Layout.preferredHeight: 7
-                        radius: 4
-                        color: root.serviceHealthy
-                            ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
-                    }
-                    SelectableLabel {
-                        objectName: "serviceStatusPill"
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 22
-                        font.pixelSize: Kirigami.Theme.smallFont.pixelSize
-                        horizontalAlignment: TextEdit.AlignHCenter
-                        verticalAlignment: TextEdit.AlignVCenter
-                        wrapMode: TextEdit.NoWrap
-                        text: root.headerStatus
-                        color: root.serviceHealthy
-                            ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
-                    }
-                }
-            }
-            CopyableButton {
-                objectName: "copyPageButton"
-                text: root.width < 500 ? "Copy" : "Copy page text"
-                Accessible.name: "Copy page text"
-                onClicked: topcec.copyText(root.copyPageText())
-            }
-        }
-        background: Rectangle {
-            color: Kirigami.Theme.backgroundColor
-            border.color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g,
-                                  Kirigami.Theme.textColor.b, 0.14)
-        }
-    }
-
-    footer: Controls.ToolBar {
-        id: applyFooter
-        objectName: "applyFooter"
-        contentItem: RowLayout {
-            spacing: Kirigami.Units.smallSpacing
-            CopyableButton {
-                id: saveSettingsButton
-                objectName: "saveSettingsButton"
-                text: "Save and apply"
-                Accessible.name: "Save and apply settings"
-                Layout.minimumWidth: 132
-                enabled: topcec.settingsEnabled && root.equipmentReady
-                onClicked: {
-                    if (!root.equipmentReady)
-                        return
-                    let values = root.settingsValues()
-                    root.submittedSettings = JSON.stringify(values)
-                    values.targetOutput = outputField.valueToSave
-                    values.adapter = adapterField.valueToSave
-                    values.devices = root.savedInputPaths()
-                    topcec.applySettings(values)
-                }
-            }
-            SelectableLabel {
-                id: settingsSaveStatus
-                objectName: "settingsSaveStatus"
-                Layout.fillWidth: true
-                verticalAlignment: TextEdit.AlignVCenter
-                text: root.saveStatusText()
-            }
-        }
-        background: Rectangle {
-            color: Kirigami.Theme.backgroundColor
-            border.color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g,
-                                  Kirigami.Theme.textColor.b, 0.14)
-        }
-    }
-
     pageStack.initialPage: FormCard.FormCardPage {
         id: settingsPage
         objectName: "settingsPage"
-        title: ""
+        title: root.setupRequired
+            ? "Host service" : root.sectionNames[root.currentSection]
+        header: Controls.ToolBar {
+            contentItem: RowLayout {
+                Controls.ToolButton {
+                    objectName: "navigationButton"
+                    visible: !root.wideScreen
+                    icon.name: "application-menu"
+                    text: "Show navigation"
+                    display: Controls.AbstractButton.IconOnly
+                    onClicked: navigationDrawer.open()
+                }
+                Kirigami.Heading {
+                    Layout.fillWidth: true
+                    text: settingsPage.title
+                    level: 2
+                    elide: Text.ElideRight
+                }
+                CopyableButton {
+                    objectName: "copyPageButton"
+                    text: root.width < 500 ? "Copy" : "Copy page text"
+                    icon.name: "edit-copy"
+                    flat: true
+                    Accessible.name: "Copy page text"
+                    onClicked: topcec.copyText(root.copyPageText())
+                }
+            }
+        }
+        footer: Controls.ToolBar {
+            id: applyFooter
+            objectName: "applyFooter"
+            contentItem: RowLayout {
+                spacing: Kirigami.Units.smallSpacing
+                SelectableLabel {
+                    id: settingsSaveStatus
+                    objectName: "settingsSaveStatus"
+                    Layout.fillWidth: true
+                    verticalAlignment: TextEdit.AlignVCenter
+                    text: root.saveStatusText()
+                }
+                CopyableButton {
+                    id: saveSettingsButton
+                    objectName: "saveSettingsButton"
+                    text: "Save and apply"
+                    icon.name: "dialog-ok-apply"
+                    Accessible.name: "Save and apply settings"
+                    enabled: topcec.settingsEnabled && root.equipmentReady
+                    onClicked: {
+                        if (!root.equipmentReady)
+                            return
+                        let values = root.settingsValues()
+                        root.submittedSettings = JSON.stringify(values)
+                        values.targetOutput = outputField.valueToSave
+                        values.adapter = adapterField.valueToSave
+                        values.devices = root.savedInputPaths()
+                        topcec.applySettings(values)
+                    }
+                }
+            }
+        }
         actions: [
             Kirigami.Action {
                 objectName: "copyPageAction"
@@ -451,6 +434,8 @@ Kirigami.ApplicationWindow {
             id: pageContent
             objectName: "pageContent"
             Layout.fillWidth: true
+            Layout.maximumWidth: 760
+            Layout.alignment: Qt.AlignHCenter
             Layout.leftMargin: root.pageInset
             Layout.rightMargin: root.pageInset
             spacing: Kirigami.Units.largeSpacing
@@ -485,14 +470,14 @@ Kirigami.ApplicationWindow {
                 }
             }
 
-            StackLayout {
+            ColumnLayout {
                 id: mainViews
                 objectName: "mainViews"
                 Layout.fillWidth: true
-                currentIndex: topcec.dbusOnly && !topcec.backendAvailable ? 0 : 1
 
                 SurfaceFrame {
                     objectName: "setupPanel"
+                    visible: root.setupRequired
                     Layout.fillWidth: true
                     ColumnLayout {
                         width: parent.width
@@ -605,116 +590,179 @@ Kirigami.ApplicationWindow {
 
                 ColumnLayout {
                     objectName: "connectedOverview"
+                    visible: !root.setupRequired
                     width: parent.width
                     spacing: Kirigami.Units.mediumSpacing
+
+                    SelectableLabel {
+                        objectName: "actionFeedback"
+                        Layout.fillWidth: true
+                        visible: topcec.actionMessage.length > 0
+                        text: topcec.actionMessage
+                    }
 
                     ColumnLayout {
                         objectName: "powerCard"
                         Layout.fillWidth: true
-                        spacing: 0
-                        SurfaceFrame {
+                        visible: root.currentSection === 0
+                        spacing: Kirigami.Units.largeSpacing
+                        RowLayout {
                             Layout.fillWidth: true
-                            maximumWidth: pageContent.width
-                            RowLayout {
-                                width: parent.width
-                                spacing: Kirigami.Units.mediumSpacing
-                                Rectangle {
-                                    Layout.preferredWidth: 44
-                                    Layout.preferredHeight: 44
-                                    radius: 10
-                                    color: Kirigami.Theme.alternateBackgroundColor
-                                    Item {
-                                        anchors.centerIn: parent
-                                        width: 30
-                                        height: 30
-                                        Accessible.ignored: true
-                                        Rectangle {
-                                            x: 4
-                                            y: 4
-                                            width: 22
-                                            height: 16
-                                            radius: 2
-                                            color: "transparent"
-                                            border.width: 2
-                                            border.color: Kirigami.Theme.highlightColor
-                                        }
-                                        Rectangle {
-                                            x: 10
-                                            y: 21
-                                            width: 2
-                                            height: 4
-                                            color: Kirigami.Theme.highlightColor
-                                        }
-                                        Rectangle {
-                                            x: 18
-                                            y: 21
-                                            width: 2
-                                            height: 4
-                                            color: Kirigami.Theme.highlightColor
-                                        }
-                                    }
+                            Layout.topMargin: Kirigami.Units.largeSpacing
+                            spacing: Kirigami.Units.largeSpacing
+                            Kirigami.Icon {
+                                source: "video-display"
+                                Layout.preferredWidth: Kirigami.Units.iconSizes.huge
+                                Layout.preferredHeight: Kirigami.Units.iconSizes.huge
+                                Accessible.ignored: true
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+                                SelectableHeading {
+                                    objectName: "powerHeading"
+                                    level: 2
+                                    text: "TV power"
                                 }
-                                ColumnLayout {
+                                SelectableLabel {
+                                    objectName: "powerStateLabel"
                                     Layout.fillWidth: true
-                                    spacing: 0
-                                    SelectableHeading {
-                                        objectName: "powerHeading"
-                                        level: 3
-                                        text: "TV power"
-                                    }
-                                    SelectableLabel {
-                                        objectName: "powerStateLabel"
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 23
-                                        wrapMode: TextEdit.NoWrap
-                                        text: topcec.powerState
-                                    }
+                                    font.bold: true
+                                    text: topcec.powerState
                                 }
-                                CopyableButton {
-                                    objectName: "tvOnButton"
-                                    text: "Turn on"
-                                    enabled: topcec.simulationMode
-                                        || (topcec.backendAvailable && topcec.serviceStatus === "running")
-                                    onClicked: topcec.requestPower("on")
-                                }
-                                CopyableButton {
-                                    objectName: "tvStandbyButton"
-                                    text: "Standby"
-                                    enabled: topcec.simulationMode
-                                        || (topcec.backendAvailable
-                                            && topcec.serviceStatus === "running"
-                                            && topcec.standbyReason === "Automatic standby allowed")
-                                    onClicked: topcec.requestPower("off")
+                                SelectableLabel {
+                                    Layout.fillWidth: true
+                                    text: topcec.standbyReason
                                 }
                             }
                         }
-                        SelectableLabel {
+                        RowLayout {
                             Layout.fillWidth: true
-                            visible: topcec.actionMessage.length > 0
-                            text: topcec.actionMessage
+                            CopyableButton {
+                                objectName: "tvOnButton"
+                                text: "Turn on"
+                                icon.name: "system-shutdown"
+                                enabled: topcec.simulationMode
+                                    || (topcec.backendAvailable && topcec.serviceStatus === "running")
+                                onClicked: topcec.requestPower("on")
+                            }
+                            CopyableButton {
+                                objectName: "tvStandbyButton"
+                                text: "Standby"
+                                icon.name: "system-suspend"
+                                enabled: topcec.simulationMode
+                                    || (topcec.backendAvailable
+                                        && topcec.serviceStatus === "running"
+                                        && topcec.standbyReason === "Automatic standby allowed")
+                                onClicked: topcec.requestPower("off")
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Kirigami.Icon {
+                                source: root.serviceHealthy ? "emblem-success" : "data-warning"
+                                color: root.serviceHealthy
+                                    ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                                Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                                Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                                Accessible.ignored: true
+                            }
+                            SelectableLabel {
+                                objectName: "serviceStatusLabel"
+                                Layout.fillWidth: true
+                                text: root.headerStatus
+                                color: root.serviceHealthy
+                                    ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                            }
                         }
                     }
 
-                    SurfaceFrame {
+                    Kirigami.InlineMessage {
                         objectName: "warningBanner"
                         Layout.fillWidth: true
-                        visible: topcec.backendAvailable
+                        visible: root.currentSection === 0 && topcec.backendAvailable
                             && (topcec.serviceStatus === "configuration-only"
                                 || topcec.standbyReason.startsWith("Automatic standby blocked:"))
-                        RowLayout {
-                            width: parent.width
-                            SelectableLabel {
-                                Layout.fillWidth: true
-                                text: topcec.inputPermissionMessage.length > 0
-                                    ? "Input access is blocked."
-                                    : (topcec.serviceStatus === "configuration-only"
-                                        ? "Monitoring is inactive."
-                                        : "Automatic standby is blocked.")
+                        type: Kirigami.MessageType.Warning
+                        text: topcec.inputPermissionMessage.length > 0
+                            ? "Input access is blocked. Monitoring is inactive."
+                            : (topcec.serviceStatus === "configuration-only"
+                                ? "Monitoring is inactive."
+                                : "Automatic standby is blocked.")
+                    }
+                    CopyableButton {
+                        objectName: "viewRecoverySteps"
+                        Layout.alignment: Qt.AlignRight
+                        visible: root.currentSection === 0 && topcec.backendAvailable
+                            && (topcec.serviceStatus === "configuration-only"
+                                || topcec.standbyReason.startsWith("Automatic standby blocked:"))
+                        text: "View recovery steps"
+                        icon.name: "help-hint"
+                        onClicked: root.openDiagnostics()
+                    }
+
+                    ColumnLayout {
+                        objectName: "overviewSummary"
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 0
+                        spacing: Kirigami.Units.smallSpacing
+                        FormCard.FormHeader { title: "Equipment" }
+                        FormCard.FormCard {
+                            Layout.fillWidth: true
+                            FormCard.FormTextDelegate {
+                                objectName: "displaySummary"
+                                text: "TV display"
+                                description: root.equipmentSummary(outputField)
+                                leading: Kirigami.Icon {
+                                    source: "video-display"
+                                    implicitWidth: Kirigami.Units.iconSizes.medium
+                                    implicitHeight: Kirigami.Units.iconSizes.medium
+                                }
                             }
-                            CopyableButton {
-                                objectName: "viewRecoverySteps"
-                                text: "View recovery steps"
-                                onClicked: root.openDiagnostics()
+                            FormCard.FormDelegateSeparator {}
+                            FormCard.FormTextDelegate {
+                                objectName: "adapterSummary"
+                                text: "CEC adapter"
+                                description: root.equipmentSummary(adapterField)
+                                leading: Kirigami.Icon {
+                                    source: "network-wired"
+                                    implicitWidth: Kirigami.Units.iconSizes.medium
+                                    implicitHeight: Kirigami.Units.iconSizes.medium
+                                }
+                            }
+                            FormCard.FormDelegateSeparator {}
+                            CopyableFormButton {
+                                objectName: "configureEquipmentButton"
+                                text: "Configure equipment…"
+                                icon.name: "configure"
+                                onClicked: root.currentSection = 1
+                            }
+                        }
+                        FormCard.FormHeader { title: "Automatic standby" }
+                        FormCard.FormCard {
+                            Layout.fillWidth: true
+                            FormCard.FormTextDelegate {
+                                text: "Idle timeout"
+                                description: timeoutMode.currentIndex === 1
+                                    ? timeoutMinutes.value + (timeoutMinutes.value === 1 ? " minute" : " minutes")
+                                    : timeoutMode.currentText
+                                leading: Kirigami.Icon {
+                                    source: "preferences-system-power-management"
+                                    implicitWidth: Kirigami.Units.iconSizes.medium
+                                    implicitHeight: Kirigami.Units.iconSizes.medium
+                                }
+                            }
+                            FormCard.FormDelegateSeparator {}
+                            CopyableFormButton {
+                                objectName: "configureStandbyButton"
+                                text: "Input devices"
+                                description: inputChooserToggle.selectionSummary
+                                icon.name: "input-keyboard"
+                                onClicked: {
+                                    root.currentSection = 2
+                                    inputChooserToggle.checked = true
+                                }
                             }
                         }
                     }
@@ -723,12 +771,14 @@ Kirigami.ApplicationWindow {
                         id: configurationGroups
                         objectName: "configurationGroups"
                         Layout.fillWidth: true
-                        columns: width >= 660 ? 2 : 1
+                        visible: root.currentSection === 1 || root.currentSection === 2
+                        columns: 1
                         columnSpacing: Kirigami.Units.mediumSpacing
                         rowSpacing: Kirigami.Units.mediumSpacing
 
                         ColumnLayout {
                             objectName: "equipmentSection"
+                            visible: root.currentSection === 1
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignTop
                             Layout.minimumWidth: 0
@@ -820,6 +870,7 @@ Kirigami.ApplicationWindow {
 
                         ColumnLayout {
                             objectName: "standbySection"
+                            visible: root.currentSection === 2
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignTop
                             Layout.minimumWidth: 0
@@ -996,6 +1047,7 @@ Kirigami.ApplicationWindow {
                     DisclosureButton {
                         id: advancedToggle
                         objectName: "advancedToggle"
+                        visible: root.currentSection === 0 || root.currentSection === 2
                         text: "Advanced"
                         Accessible.name: "Advanced settings"
                         Accessible.description: checked ? "Expanded" : "Collapsed"
@@ -1004,6 +1056,7 @@ Kirigami.ApplicationWindow {
                         objectName: "advancedPanel"
                         Layout.fillWidth: true
                         visible: advancedToggle.checked
+                            && (root.currentSection === 0 || root.currentSection === 2)
                         ColumnLayout {
                             width: parent.width
                             CopyableCheckBox {
@@ -1050,18 +1103,11 @@ Kirigami.ApplicationWindow {
                         }
                     }
 
-                    DisclosureButton {
-                        id: diagnosticsToggle
-                        objectName: "diagnosticsToggle"
-                        text: "Diagnostics"
-                        Accessible.name: "Service diagnostics"
-                        Accessible.description: checked ? "Expanded" : "Collapsed"
-                    }
                     SurfaceFrame {
                         id: diagnosticsPanel
                         objectName: "diagnosticsPanel"
                         Layout.fillWidth: true
-                        visible: diagnosticsToggle.checked
+                        visible: root.currentSection === 3
                         ColumnLayout {
                             width: parent.width
                             SelectableLabel {
@@ -1169,10 +1215,7 @@ Kirigami.ApplicationWindow {
             let flickable = settingsPage.flickable
             if (!flickable || !diagnosticsPanel.visible)
                 return
-            let bottom = diagnosticsPanel.mapToItem(
-                flickable.contentItem, 0, 0).y + diagnosticsPanel.height
-            flickable.contentY = Math.max(0, Math.min(
-                bottom - flickable.height, flickable.contentHeight - flickable.height))
+            flickable.contentY = 0
         }
     }
 
