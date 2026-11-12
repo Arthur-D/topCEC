@@ -854,18 +854,16 @@ Kirigami.ApplicationWindow {
                                     objectName: "tvOnButton"
                                     text: "Turn on"
                                     icon.name: "system-shutdown"
-                                    enabled: topcec.simulationMode
-                                        || (topcec.backendAvailable && topcec.serviceStatus === "running")
+                                    enabled: topcec.backendAvailable && topcec.serviceStatus === "running"
                                     onClicked: topcec.requestPower("on")
                                 }
                                 CopyableButton {
                                     objectName: "tvStandbyButton"
                                     text: "Standby"
                                     icon.name: "system-suspend"
-                                    enabled: topcec.simulationMode
-                                        || (topcec.backendAvailable
-                                            && topcec.serviceStatus === "running"
-                                            && topcec.standbyReason === "Automatic standby allowed")
+                                    enabled: topcec.backendAvailable
+                                        && topcec.serviceStatus === "running"
+                                        && topcec.standbyReason === "Automatic standby allowed"
                                     onClicked: topcec.requestPower("off")
                                 }
                             }
@@ -1022,7 +1020,6 @@ Kirigami.ApplicationWindow {
                                     CopyableCheckBox {
                                         id: manualOutput
                                         objectName: "manualOutput"
-                                        visible: manualEquipmentToggle.checked
                                         text: "Enter display name manually"
                                         onToggled: root.settingsDirty = true
                                     }
@@ -1056,16 +1053,10 @@ Kirigami.ApplicationWindow {
                                     CopyableCheckBox {
                                         id: manualAdapter
                                         objectName: "manualAdapter"
-                                        visible: manualEquipmentToggle.checked
                                         text: "Enter adapter path manually"
                                         onToggled: root.settingsDirty = true
                                     }
                                 }
-                            }
-                            DisclosureButton {
-                                id: manualEquipmentToggle
-                                objectName: "manualEquipmentToggle"
-                                text: "Manual device settings"
                             }
                             SelectableLabel {
                                 Layout.fillWidth: true
@@ -1292,21 +1283,6 @@ Kirigami.ApplicationWindow {
                     }
 
                     DisclosureButton {
-                        id: powerTestingToggle
-                        visible: root.currentSection === 0
-                        text: "Power control testing"
-                    }
-                    SurfaceFrame {
-                        Layout.fillWidth: true
-                        visible: root.currentSection === 0 && powerTestingToggle.checked
-                        CopyableCheckBox {
-                            objectName: "simulateManualActions"
-                            text: "Simulate manual power actions"
-                            checked: topcec.simulationMode
-                            onToggled: topcec.setSimulationMode(checked)
-                        }
-                    }
-                    DisclosureButton {
                         id: firefoxToggle
                         objectName: "firefoxToggle"
                         visible: root.currentSection === 2
@@ -1414,6 +1390,23 @@ Kirigami.ApplicationWindow {
                             Layout.fillWidth: true
                             visible: topcec.actionMessage.length > 0
                             text: topcec.actionMessage
+                        }
+                        Flow {
+                            objectName: "simulationActions"
+                            Layout.fillWidth: true
+                            spacing: Kirigami.Units.smallSpacing
+                            CopyableButton {
+                                objectName: "simulateOnButton"
+                                text: "Simulate on"
+                                icon.name: "system-shutdown"
+                                onClicked: topcec.simulatePower("on")
+                            }
+                            CopyableButton {
+                                objectName: "simulateOffButton"
+                                text: "Simulate off"
+                                icon.name: "system-suspend"
+                                onClicked: topcec.simulatePower("off")
+                            }
                         }
                         FullWidthFrame {
                             Layout.fillWidth: true

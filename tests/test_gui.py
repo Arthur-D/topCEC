@@ -551,9 +551,8 @@ class GuiChecks(unittest.TestCase):
         backend.changed.emit()
 
         manual_output = window.findChild(QObject, 'manualOutput')
-        self.assertFalse(manual_output.property('visible'))
-        QMetaObject.invokeMethod(window.findChild(QObject, 'manualEquipmentToggle'), 'click')
         self.assertTrue(manual_output.property('visible'))
+        self.assertTrue(window.findChild(QObject, 'manualAdapter').property('visible'))
         manual_output.setProperty('checked', True)
         output = window.findChild(QObject, 'outputField')
         output.setProperty('editText', 'DRAFT-DISPLAY')
@@ -579,7 +578,8 @@ class GuiChecks(unittest.TestCase):
         timeout.setProperty('currentIndex', 1)
         self.assertTrue(minutes.property('visible'))
 
-        self.assertFalse(window.findChild(QObject, 'simulateManualActions').property('visible'))
+        self.assertFalse(window.findChild(QObject, 'simulateOnButton').property('visible'))
+        self.assertFalse(window.findChild(QObject, 'simulateOffButton').property('visible'))
         QMetaObject.invokeMethod(window.findChild(QObject, 'firefoxToggle'), 'click')
         self.assertTrue(window.findChild(QObject, 'labelsField').property('visible'))
 
@@ -603,6 +603,14 @@ class GuiChecks(unittest.TestCase):
         QTest.qWait(80)
         self.assertEqual(window.property('currentSection'), 4)
         self.assertTrue(window.findChild(QObject, 'diagnosticsPanel').property('visible'))
+        simulate_on = window.findChild(QObject, 'simulateOnButton')
+        simulate_off = window.findChild(QObject, 'simulateOffButton')
+        self.assertTrue(simulate_on.property('visible'))
+        self.assertTrue(simulate_off.property('visible'))
+        QMetaObject.invokeMethod(simulate_on, 'click')
+        self.assertIn('Simulation: would request TV on', backend.actionMessage)
+        QMetaObject.invokeMethod(simulate_off, 'click')
+        self.assertIn('Simulation: would request TV standby', backend.actionMessage)
         diagnostics = window.findChild(QObject, 'backendDiagnostics')
         self.assertIn('Scan:', diagnostics.property('text'))
         self.assertNotIn('Service:', diagnostics.property('text'))
@@ -1618,12 +1626,11 @@ class GuiChecks(unittest.TestCase):
             request_manual_power(power, 'off', None)
         power.request.assert_not_called()
 
-    def test_simulation_mode_previews_without_calling_service(self):
+    def test_simulation_buttons_preview_without_calling_service(self):
         backend = GuiBackend(dbus_only=True)
         backend._service_data = {'cec_enabled': True}
-        backend.setSimulationMode(True)
         with patch.object(backend, '_service_interface') as service:
-            backend.requestPower('off')
+            backend.simulatePower('off')
         service.assert_not_called()
         self.assertEqual(backend.actionMessage,
                          'Simulation: would request TV standby. No command sent.')
