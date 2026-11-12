@@ -141,6 +141,24 @@ Kirigami.ApplicationWindow {
             ? " (unavailable / not detected)" : " (availability unknown)")
     }
 
+    function equipmentSelectionStatus(selector, noun) {
+        let status = selector.detected ? "Detected · " + selector.selectedValue : ""
+        let saved = selector.initialValue
+        if (saved.length && !selector.equipment.some(item => item.path === saved
+                || (item.aliases || []).includes(saved))) {
+            if (status.length)
+                status += "\n"
+            status += "Saved " + noun + ": " + root.retainedValue(saved)
+        }
+        if (selector.manualEntry && !selector.detected
+                && selector.valueToSave.length && selector.valueToSave !== saved) {
+            if (status.length)
+                status += "\n"
+            status += "Manual " + noun + ": " + root.retainedValue(selector.valueToSave)
+        }
+        return status
+    }
+
     function equipmentSummary(selector, emptyMessage, unknownMessage, chooseMessage) {
         if (selector.detected)
             return selector.selectedValue
@@ -156,6 +174,12 @@ Kirigami.ApplicationWindow {
 
     function inputPaths() {
         return devicesField.text.split("\n").map(path => path.trim()).filter(path => path.length)
+    }
+
+    function inputAccessBlocked(device) {
+        return topcec.blockedInputPath.length > 0
+            && (device.path === topcec.blockedInputPath
+                || (device.aliases || []).includes(topcec.blockedInputPath))
     }
 
     function savedInputPaths() {
@@ -191,6 +215,54 @@ Kirigami.ApplicationWindow {
             id: headingStyle
             visible: false
             level: parent.level
+        }
+    }
+
+    component DiagnosticState: ColumnLayout {
+        id: state
+        property string label
+        property string value
+        property color stateColor: Kirigami.Theme.disabledTextColor
+        Layout.fillWidth: true
+        Layout.alignment: Qt.AlignTop
+        spacing: Kirigami.Units.smallSpacing
+        SelectableLabel {
+            Layout.fillWidth: true
+            text: state.label
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Rectangle {
+                Layout.preferredWidth: Kirigami.Units.smallSpacing * 2
+                Layout.preferredHeight: width
+                radius: width / 2
+                color: state.stateColor
+            }
+            SelectableLabel {
+                Layout.fillWidth: true
+                font.bold: true
+                text: state.value
+            }
+        }
+    }
+
+    component DiagnosticDevice: RowLayout {
+        id: deviceRow
+        property string label
+        property string description
+        Layout.fillWidth: true
+        Layout.margins: Kirigami.Units.smallSpacing
+        spacing: Kirigami.Units.mediumSpacing
+        SelectableLabel {
+            Layout.preferredWidth: Kirigami.Units.gridUnit * 7
+            Layout.minimumWidth: 0
+            Layout.alignment: Qt.AlignTop
+            text: deviceRow.label
+        }
+        SelectableLabel {
+            Layout.fillWidth: true
+            Layout.minimumWidth: 0
+            text: deviceRow.description
         }
     }
 
@@ -233,14 +305,53 @@ Kirigami.ApplicationWindow {
     readonly property string monitoringWarningText: root.standbyBlocked
         ? "Automatic standby is blocked: "
             + (root.standbyBlockReason.length ? root.standbyBlockReason : "No reason was reported.")
-            + (topcec.serviceStatus === "configuration-only" ? " Monitoring is inactive." : "")
+            + (topcec.serviceStatus === "configuration-only"
+                ? (/[^.!?]$/.test(root.standbyBlockReason) ? ". " : " ") + "Monitoring is inactive." : "")
         : (topcec.inputPermissionMessage.length > 0
             ? "Input access is blocked. Monitoring is inactive."
             : "Monitoring is inactive.")
 
-    function detectedDeviceText(devices) {
-        return devices.length ? devices.map(device => device.label).join("\n")
-            : (topcec.equipmentAvailabilityKnown ? "None detected" : "Detection unavailable")
+    readonly property string timeoutSummary: timeoutMode.currentIndex === 1
+        ? timeoutMinutes.value + (timeoutMinutes.value === 1 ? " minute" : " minutes")
+        : timeoutMode.currentText
+    readonly property string hostConnectionStatus: topcec.backendAvailable ? "Connected"
+        : (topcec.connectionState === "connecting" ? "Connecting" : "Unavailable")
+    readonly property string monitoringStatus: !topcec.backendAvailable ? "Unknown"
+        : (root.serviceHealthy ? "Active"
+            : (topcec.serviceStatus === "configuration-only" ? "Inactive" : topcec.serviceStatus))
+
+    function detectedDeviceText(devices, includePath) {
+        return devices.length ? devices.map(device => {
+            let label = device.label
+            if (includePath && label !== device.path)
+                label += " · " + device.path
+            if (inputAccessBlocked(device))
+                label += " · Access blocked"
+            return label
+        }).join("\n") : (topcec.equipmentAvailabilityKnown ? "None detected" : "Detection unavailable")
+    }
+
+    function diagnosticReport() {
+        let sections = [
+            root.title + " — Diagnostics",
+            "Host service: " + root.hostConnectionStatus,
+            "Monitoring: " + root.monitoringStatus,
+            "TV power: " + topcec.powerState,
+            root.monitoringWarning ? root.monitoringWarningText
+                : (topcec.backendAvailable ? topcec.standbyReason : topcec.connectionMessage),
+            topcec.actionMessage,
+            topcec.inputPermissionMessage,
+            topcec.inputPermissionCommand,
+            topcec.compatibilityMessage,
+            topcec.equipmentRecoveryCommands,
+            "TV display: " + root.detectedDeviceText(topcec.detectedOutputs, true),
+            "CEC adapter: " + root.detectedDeviceText(topcec.detectedAdapters, true),
+            "Input devices: " + root.inputSelectionSummary() + "\n"
+                + root.detectedDeviceText(topcec.detectedInputs, true),
+            topcec.equipmentAvailabilityKnown ? "" : topcec.equipmentMessage,
+            "Host service status\n" + topcec.diagnostics
+        ]
+        return sections.filter(text => text.length).join("\n")
     }
 
     function saveStatusText() {
@@ -259,10 +370,20 @@ Kirigami.ApplicationWindow {
         return "All changes saved."
     }
 
+    readonly property bool onDiagnosticsPage: root.currentSection === 4 && !root.setupRequired
+
     function copyPageText() {
+        if (root.onDiagnosticsPage)
+            return root.diagnosticReport()
         return root.title + "\n" + settingsPage.title + "\nService: " + root.headerStatus + "\n"
             + root.displayedText(pageContent) + "\n"
-            + saveSettingsButton.text + "\n" + settingsSaveStatus.text
+            + (applyFooter.visible ? saveSettingsButton.text + "\n" + settingsSaveStatus.text : "")
+    }
+
+    function copyCurrentPage() {
+        topcec.copyText(root.copyPageText())
+        if (root.onDiagnosticsPage)
+            root.showPassiveNotification("Diagnostics copied")
     }
 
     function openDiagnostics() {
@@ -297,12 +418,13 @@ Kirigami.ApplicationWindow {
         Keys.onMenuPressed: root.showCaption(text)
     }
 
-    component DisclosureButton: CopyableButton {
+    component DisclosureButton: CopyableFormButton {
+        id: disclosure
         Layout.fillWidth: true
-        flat: true
         checkable: true
-        display: Controls.AbstractButton.TextBesideIcon
-        icon.name: checked ? "arrow-up" : "arrow-down"
+        trailingLogo.direction: checked ? Qt.DownArrow : Qt.RightArrow
+        Accessible.description: checked ? "Expanded" : "Collapsed"
+        Accessible.onPressAction: disclosure.click()
     }
 
     component CopyableCheckBox: Controls.CheckBox {
@@ -383,7 +505,7 @@ Kirigami.ApplicationWindow {
         onEquipmentChanged: synchronize(selectedValue)
         onAvailabilityKnownChanged: synchronize(selectedValue)
         onManualEntryChanged: synchronize(selectedValue)
-        onActivated: {
+        onActivated: function(index) {
             automaticSelection = false
             explicitSelection = true
             selectedValue = model[index].path
@@ -432,6 +554,10 @@ Kirigami.ApplicationWindow {
         padding: Kirigami.Units.smallSpacing
     }
 
+    component FullWidthFrame: SurfaceFrame {
+        maximumWidth: width
+    }
+
     background: Rectangle {
         color: Kirigami.Theme.backgroundColor
     }
@@ -461,17 +587,21 @@ Kirigami.ApplicationWindow {
                 }
                 CopyableButton {
                     objectName: "copyPageButton"
-                    text: root.width < 500 ? "Copy" : "Copy page text"
+                    text: root.onDiagnosticsPage ? "Copy diagnostics"
+                        : (root.width < 500 ? "Copy" : "Copy page text")
                     icon.name: "edit-copy"
                     flat: true
-                    Accessible.name: "Copy page text"
-                    onClicked: topcec.copyText(root.copyPageText())
+                    Accessible.name: root.onDiagnosticsPage ? "Copy diagnostics" : "Copy page text"
+                    onClicked: root.copyCurrentPage()
                 }
             }
         }
         footer: Controls.ToolBar {
             id: applyFooter
             objectName: "applyFooter"
+            visible: !root.setupRequired && (root.settingsDirty || !root.equipmentReady
+                || (!topcec.dbusOnly && !topcec.backendAvailable)
+                || (topcec.serviceStatus === "configuration-only" && !topcec.monitoringRetryAvailable))
             contentItem: RowLayout {
                 spacing: Kirigami.Units.smallSpacing
                 SelectableLabel {
@@ -504,10 +634,10 @@ Kirigami.ApplicationWindow {
         actions: [
             Kirigami.Action {
                 objectName: "copyPageAction"
-                text: "Copy page text"
+                text: root.onDiagnosticsPage ? "Copy diagnostics" : "Copy page text"
                 icon.name: "edit-copy"
                 visible: false
-                onTriggered: topcec.copyText(root.copyPageText())
+                onTriggered: root.copyCurrentPage()
             }
         ]
 
@@ -515,10 +645,12 @@ Kirigami.ApplicationWindow {
             id: pageContent
             objectName: "pageContent"
             Layout.fillWidth: true
-            Layout.maximumWidth: root.currentSection === 4 ? 1100 : 760
+            Layout.maximumWidth: root.onDiagnosticsPage ? 860 : 760
             Layout.alignment: Qt.AlignHCenter
             Layout.leftMargin: root.pageInset
             Layout.rightMargin: root.pageInset
+            Layout.topMargin: root.pageInset
+            Layout.bottomMargin: root.pageInset
             spacing: Kirigami.Units.largeSpacing
 
             ColumnLayout {
@@ -678,25 +810,19 @@ Kirigami.ApplicationWindow {
                     SelectableLabel {
                         objectName: "actionFeedback"
                         Layout.fillWidth: true
-                        visible: root.currentSection !== 4 && topcec.actionMessage.length > 0
+                        visible: root.currentSection !== 3 && root.currentSection !== 4
+                            && topcec.actionMessage.length > 0
                         text: topcec.actionMessage
                     }
 
-                    ColumnLayout {
+                    FullWidthFrame {
                         objectName: "powerCard"
                         Layout.fillWidth: true
                         visible: root.currentSection === 0
-                        spacing: Kirigami.Units.largeSpacing
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Layout.topMargin: Kirigami.Units.largeSpacing
-                            spacing: Kirigami.Units.largeSpacing
-                            Kirigami.Icon {
-                                source: "video-display"
-                                Layout.preferredWidth: Kirigami.Units.iconSizes.huge
-                                Layout.preferredHeight: Kirigami.Units.iconSizes.huge
-                                Accessible.ignored: true
-                            }
+                        GridLayout {
+                            width: parent.width
+                            columns: width >= 420 ? 2 : 1
+                            columnSpacing: Kirigami.Units.mediumSpacing
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 spacing: Kirigami.Units.smallSpacing
@@ -714,63 +840,59 @@ Kirigami.ApplicationWindow {
                                 RowLayout {
                                     objectName: "monitoringStatusRow"
                                     Layout.fillWidth: true
-                                    Kirigami.Icon {
-                                        source: root.serviceHealthy ? "emblem-success" : "data-warning"
-                                        color: root.serviceHealthy
-                                            ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
-                                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                                        Accessible.ignored: true
-                                    }
                                     SelectableLabel {
                                         objectName: "serviceStatusLabel"
                                         Layout.fillWidth: true
                                         text: root.headerStatus
                                         color: root.serviceHealthy
-                                            ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                                            ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.textColor
                                     }
                                 }
                             }
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            CopyableButton {
-                                objectName: "tvOnButton"
-                                text: "Turn on"
-                                icon.name: "system-shutdown"
-                                enabled: topcec.simulationMode
-                                    || (topcec.backendAvailable && topcec.serviceStatus === "running")
-                                onClicked: topcec.requestPower("on")
+                            RowLayout {
+                                CopyableButton {
+                                    objectName: "tvOnButton"
+                                    text: "Turn on"
+                                    icon.name: "system-shutdown"
+                                    enabled: topcec.simulationMode
+                                        || (topcec.backendAvailable && topcec.serviceStatus === "running")
+                                    onClicked: topcec.requestPower("on")
+                                }
+                                CopyableButton {
+                                    objectName: "tvStandbyButton"
+                                    text: "Standby"
+                                    icon.name: "system-suspend"
+                                    enabled: topcec.simulationMode
+                                        || (topcec.backendAvailable
+                                            && topcec.serviceStatus === "running"
+                                            && topcec.standbyReason === "Automatic standby allowed")
+                                    onClicked: topcec.requestPower("off")
+                                }
                             }
-                            CopyableButton {
-                                objectName: "tvStandbyButton"
-                                text: "Standby"
-                                icon.name: "system-suspend"
-                                enabled: topcec.simulationMode
-                                    || (topcec.backendAvailable
-                                        && topcec.serviceStatus === "running"
-                                        && topcec.standbyReason === "Automatic standby allowed")
-                                onClicked: topcec.requestPower("off")
-                            }
-                            Item { Layout.fillWidth: true }
                         }
                     }
 
-                    Kirigami.InlineMessage {
-                        objectName: "warningBanner"
+                    FullWidthFrame {
                         Layout.fillWidth: true
-                        visible: root.currentSection === 0 && root.monitoringWarning
-                        type: Kirigami.MessageType.Warning
-                        text: root.monitoringWarningText
-                    }
-                    CopyableButton {
-                        objectName: "viewRecoverySteps"
-                        Layout.alignment: Qt.AlignRight
-                        visible: root.currentSection === 0 && topcec.backendAvailable
-                            && (topcec.serviceStatus === "configuration-only" || root.standbyBlocked)
-                        text: "View recovery steps"
-                        icon.name: "help-hint"
-                        onClicked: root.openDiagnostics()
+                        visible: (root.currentSection === 0 || root.currentSection === 2)
+                            && root.monitoringWarning
+                        ColumnLayout {
+                            width: parent.width
+                            Kirigami.InlineMessage {
+                                objectName: "warningBanner"
+                                Layout.fillWidth: true
+                                visible: true
+                                type: Kirigami.MessageType.Warning
+                                text: root.monitoringWarningText
+                            }
+                            CopyableButton {
+                                objectName: "viewRecoverySteps"
+                                Layout.alignment: Qt.AlignRight
+                                text: "View recovery steps"
+                                icon.name: "help-hint"
+                                onClicked: root.openDiagnostics()
+                            }
+                        }
                     }
 
                     ColumnLayout {
@@ -778,8 +900,12 @@ Kirigami.ApplicationWindow {
                         Layout.fillWidth: true
                         visible: root.currentSection === 0
                         spacing: Kirigami.Units.smallSpacing
-                        FormCard.FormHeader { title: "Display and adapter" }
-                        FormCard.FormCard {
+                        SelectableHeading {
+                            level: 3
+                            text: "Equipment and standby"
+                        }
+                        FullWidthFrame {
+                            padding: 0
                             Layout.fillWidth: true
                             FormCard.FormTextDelegate {
                                 id: displaySummary
@@ -823,20 +949,12 @@ Kirigami.ApplicationWindow {
                                 icon.name: "configure"
                                 onClicked: root.currentSection = 1
                             }
-                        }
-                        FormCard.FormHeader { title: "Standby" }
-                        FormCard.FormCard {
-                            Layout.fillWidth: true
-                            FormCard.FormTextDelegate {
-                                text: "Idle timeout"
-                                description: timeoutMode.currentIndex === 1
-                                    ? timeoutMinutes.value + (timeoutMinutes.value === 1 ? " minute" : " minutes")
-                                    : timeoutMode.currentText
-                                leading: Kirigami.Icon {
-                                    source: "preferences-system-power-management"
-                                    implicitWidth: Kirigami.Units.iconSizes.medium
-                                    implicitHeight: Kirigami.Units.iconSizes.medium
-                                }
+                            FormCard.FormDelegateSeparator {}
+                            CopyableFormButton {
+                                text: "Automatic standby"
+                                description: (root.monitoringWarning ? "Blocked · " : "") + root.timeoutSummary
+                                icon.name: "preferences-system-power-management"
+                                onClicked: root.currentSection = 2
                             }
                             FormCard.FormDelegateSeparator {}
                             CopyableFormButton {
@@ -852,8 +970,6 @@ Kirigami.ApplicationWindow {
                     }
 
                     GridLayout {
-                        id: configurationGroups
-                        objectName: "configurationGroups"
                         Layout.fillWidth: true
                         visible: root.currentSection === 1 || root.currentSection === 2
                             || root.currentSection === 3
@@ -867,15 +983,9 @@ Kirigami.ApplicationWindow {
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignTop
                             Layout.minimumWidth: 0
-                            Layout.preferredWidth: configurationGroups.columns === 2
-                                ? (pageContent.width - configurationGroups.columnSpacing) / 2
-                                : pageContent.width
+                            Layout.preferredWidth: pageContent.width
                             Layout.maximumWidth: Layout.preferredWidth
                             spacing: Kirigami.Units.smallSpacing
-                            FormCard.FormHeader {
-                                objectName: "equipmentHeader"
-                                title: "Display"
-                            }
                             SurfaceFrame {
                                 objectName: "equipmentFormCard"
                                 Layout.fillWidth: true
@@ -906,13 +1016,13 @@ Kirigami.ApplicationWindow {
                                     SelectableLabel {
                                         objectName: "retainedOutput"
                                         Layout.fillWidth: true
-                                        visible: manualOutput.checked && !outputField.detected
-                                            && outputField.valueToSave.length > 0
-                                        text: "Saved display: " + root.retainedValue(outputField.valueToSave)
+                                        visible: text.length > 0
+                                        text: root.equipmentSelectionStatus(outputField, "display")
                                     }
                                     CopyableCheckBox {
                                         id: manualOutput
                                         objectName: "manualOutput"
+                                        visible: manualEquipmentToggle.checked
                                         text: "Enter display name manually"
                                         onToggled: root.settingsDirty = true
                                     }
@@ -940,17 +1050,22 @@ Kirigami.ApplicationWindow {
                                     SelectableLabel {
                                         objectName: "retainedAdapter"
                                         Layout.fillWidth: true
-                                        visible: manualAdapter.checked && !adapterField.detected
-                                            && adapterField.valueToSave.length > 0
-                                        text: "Saved adapter: " + root.retainedValue(adapterField.valueToSave)
+                                        visible: text.length > 0
+                                        text: root.equipmentSelectionStatus(adapterField, "adapter")
                                     }
                                     CopyableCheckBox {
                                         id: manualAdapter
                                         objectName: "manualAdapter"
+                                        visible: manualEquipmentToggle.checked
                                         text: "Enter adapter path manually"
                                         onToggled: root.settingsDirty = true
                                     }
                                 }
+                            }
+                            DisclosureButton {
+                                id: manualEquipmentToggle
+                                objectName: "manualEquipmentToggle"
+                                text: "Manual device settings"
                             }
                             SelectableLabel {
                                 Layout.fillWidth: true
@@ -965,15 +1080,9 @@ Kirigami.ApplicationWindow {
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignTop
                             Layout.minimumWidth: 0
-                            Layout.preferredWidth: configurationGroups.columns === 2
-                                ? (pageContent.width - configurationGroups.columnSpacing) / 2
-                                : pageContent.width
+                            Layout.preferredWidth: pageContent.width
                             Layout.maximumWidth: Layout.preferredWidth
                             spacing: Kirigami.Units.smallSpacing
-                            FormCard.FormHeader {
-                                objectName: "standbyHeader"
-                                title: "Standby"
-                            }
                             SurfaceFrame {
                                 objectName: "standbyFormCard"
                                 Layout.fillWidth: true
@@ -991,7 +1100,7 @@ Kirigami.ApplicationWindow {
                                             objectName: "timeoutMode"
                                             Layout.fillWidth: true
                                             Accessible.name: "Idle timeout"
-                                            model: ["KDE-managed", "Custom", "Disabled"]
+                                            model: ["Follow KDE", "Custom", "Disabled"]
                                             onActivated: root.settingsDirty = true
                                         }
                                     }
@@ -1000,7 +1109,7 @@ Kirigami.ApplicationWindow {
                                         visible: timeoutMode.currentIndex === 1
                                         SelectableLabel {
                                             Layout.fillWidth: true
-                                            text: "Minutes"
+                                            text: "Put TV in standby after"
                                         }
                                         Controls.SpinBox {
                                             id: timeoutMinutes
@@ -1017,6 +1126,7 @@ Kirigami.ApplicationWindow {
                                             }
                                             Keys.onMenuPressed: root.showCaption(textFromValue(value, locale))
                                         }
+                                        SelectableLabel { text: "minutes" }
                                     }
                                 }
                             }
@@ -1029,14 +1139,21 @@ Kirigami.ApplicationWindow {
                         Layout.fillWidth: true
                         Layout.alignment: Qt.AlignTop
                         Layout.minimumWidth: 0
-                        Layout.preferredWidth: configurationGroups.columns === 2
-                            ? (pageContent.width - configurationGroups.columnSpacing) / 2
-                            : pageContent.width
+                        Layout.preferredWidth: pageContent.width
                         Layout.maximumWidth: Layout.preferredWidth
                         spacing: Kirigami.Units.smallSpacing
-                        FormCard.FormHeader {
-                            objectName: "inputHeader"
-                            title: "Input"
+                        RowLayout {
+                            Layout.fillWidth: true
+                            SelectableHeading {
+                                Layout.fillWidth: true
+                                level: 3
+                                text: "Detected input devices"
+                            }
+                            SelectableLabel {
+                                Layout.maximumWidth: Kirigami.Units.gridUnit * 9
+                                Layout.minimumWidth: 0
+                                text: root.inputSelectionSummary()
+                            }
                         }
                         SurfaceFrame {
                             objectName: "inputFormCard"
@@ -1044,6 +1161,11 @@ Kirigami.ApplicationWindow {
                             ColumnLayout {
                                 width: parent.width
                                 spacing: Kirigami.Units.smallSpacing
+                                SelectableLabel {
+                                    Layout.fillWidth: true
+                                    visible: !topcec.detectedInputs.length
+                                    text: root.detectedDeviceText(topcec.detectedInputs, false)
+                                }
                                 Repeater {
                                     id: inputChoices
                                     objectName: "inputChoices"
@@ -1052,7 +1174,8 @@ Kirigami.ApplicationWindow {
                                         required property var modelData
                                         objectName: "inputChoice:" + modelData.path
                                         Layout.fillWidth: true
-                                        text: modelData.label
+                                        text: modelData.label + (root.inputAccessBlocked(modelData)
+                                            ? " · Access blocked" : "")
                                         checked: root.inputPaths().some(path => path === modelData.path || (modelData.aliases || []).includes(path))
                                         onToggled: root.setInputDeviceSelected(modelData, checked)
                                         onActiveFocusChanged: {
@@ -1067,38 +1190,42 @@ Kirigami.ApplicationWindow {
                                         }
                                     }
                                 }
-                                CopyableButton {
-                                    objectName: "copySelectedInputs"
-                                    text: "Copy paths"
-                                    enabled: root.inputPaths().length > 0
-                                    onClicked: topcec.copyText(root.inputPaths().join("\n"))
-                                }
+                            }
+                        }
+                        SelectableLabel {
+                            objectName: "inputSaveHelp"
+                            Layout.fillWidth: true
+                            text: !topcec.backendAvailable
+                                ? (topcec.dbusOnly
+                                    ? "Selections remain pending until the host reconnects."
+                                    : "Selections remain pending until the host reconnects or you save offline.")
+                                : topcec.liveSettingsAvailable
+                                    ? "Selections apply automatically without restarting."
+                                    : "Selections apply automatically and may restart the service."
+                        }
+                        SelectableLabel {
+                            Layout.fillWidth: true
+                            visible: topcec.actionMessage.length > 0
+                            text: topcec.actionMessage
+                        }
+                        CopyableButton {
+                            visible: topcec.inputPermissionMessage.length > 0
+                            text: "Input access recovery"
+                            onClicked: root.openDiagnostics()
+                        }
+                        DisclosureButton {
+                            id: manualPathsToggle
+                            objectName: "manualPathsToggle"
+                            text: "Manual device paths"
+                        }
+                        SurfaceFrame {
+                            Layout.fillWidth: true
+                            visible: manualPathsToggle.checked
+                            ColumnLayout {
+                                width: parent.width
                                 SelectableLabel {
-                                    objectName: "inputSaveHelp"
                                     Layout.fillWidth: true
-                                    text: !topcec.backendAvailable
-                                        ? (topcec.dbusOnly
-                                            ? "Input changes remain pending until the host connects."
-                                            : "Input changes remain pending until the host connects or you save offline.")
-                                        : topcec.liveSettingsAvailable
-                                            ? "Input changes apply automatically without restarting."
-                                            : "Input changes save automatically and may restart the service."
-                                }
-                                SelectableLabel {
-                                    objectName: "retainedInputs"
-                                    Layout.fillWidth: true
-                                    visible: root.unresolvedInputs().length > 0
-                                    text: "Unlisted input paths\n"
-                                        + root.unresolvedInputs().map(path => root.retainedValue(path)).join("\n")
-                                }
-                                CopyableButton {
-                                    objectName: "removeUndetectedInputs"
-                                    text: "Remove unlisted inputs"
-                                    visible: root.unresolvedInputs().length > 0
-                                    onClicked: {
-                                        devicesField.text = root.inputPaths().filter(path => root.inputDetected(path)).join("\n")
-                                        root.settingsDirty = true
-                                    }
+                                    text: "One device path per line"
                                 }
                                 Controls.TextArea {
                                     id: devicesField
@@ -1110,33 +1237,39 @@ Kirigami.ApplicationWindow {
                                     onTextChanged: {
                                         if (activeFocus) root.settingsDirty = true
                                     }
-                                    wrapMode: TextEdit.NoWrap
+                                    wrapMode: TextEdit.WrapAnywhere
+                                }
+                                CopyableButton {
+                                    objectName: "copySelectedInputs"
+                                    text: "Copy paths"
+                                    enabled: root.inputPaths().length > 0
+                                    onClicked: topcec.copyText(root.inputPaths().join("\n"))
                                 }
                             }
                         }
-                    }
-
-                    DisclosureButton {
-                        id: advancedToggle
-                        objectName: "advancedToggle"
-                        visible: root.currentSection === 0 || root.currentSection === 2
-                        text: "Advanced"
-                        Accessible.name: "Advanced settings"
-                        Accessible.description: checked ? "Expanded" : "Collapsed"
-                    }
-                    SurfaceFrame {
-                        objectName: "advancedPanel"
-                        Layout.fillWidth: true
-                        visible: advancedToggle.checked
-                            && (root.currentSection === 0 || root.currentSection === 2)
-                        ColumnLayout {
-                            width: parent.width
-                            CopyableCheckBox {
-                                objectName: "simulateManualActions"
-                                text: "Simulate manual actions"
-                                checked: topcec.simulationMode
-                                onToggled: topcec.setSimulationMode(checked)
+                        SelectableLabel {
+                            objectName: "retainedInputs"
+                            Layout.fillWidth: true
+                            visible: root.unresolvedInputs().length > 0
+                            text: "Unlisted input paths\n"
+                                + root.unresolvedInputs().map(path => root.retainedValue(path)).join("\n")
+                        }
+                        CopyableButton {
+                            objectName: "removeUndetectedInputs"
+                            text: "Remove unlisted inputs"
+                            visible: root.unresolvedInputs().length > 0
+                            onClicked: {
+                                devicesField.text = root.inputPaths().filter(path => root.inputDetected(path)).join("\n")
+                                root.settingsDirty = true
                             }
+                        }
+                        DisclosureButton {
+                            id: deadzonesToggle
+                            text: "Controller deadzones"
+                        }
+                        SurfaceFrame {
+                            Layout.fillWidth: true
+                            visible: deadzonesToggle.checked
                             CopyableFormSpinBox {
                                 id: deadzoneField
                                 objectName: "deadzoneField"
@@ -1155,10 +1288,39 @@ Kirigami.ApplicationWindow {
                                 to: 25
                                 onValueModified: root.settingsDirty = true
                             }
+                        }
+                    }
+
+                    DisclosureButton {
+                        id: powerTestingToggle
+                        visible: root.currentSection === 0
+                        text: "Power control testing"
+                    }
+                    SurfaceFrame {
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 0 && powerTestingToggle.checked
+                        CopyableCheckBox {
+                            objectName: "simulateManualActions"
+                            text: "Simulate manual power actions"
+                            checked: topcec.simulationMode
+                            onToggled: topcec.setSimulationMode(checked)
+                        }
+                    }
+                    DisclosureButton {
+                        id: firefoxToggle
+                        objectName: "firefoxToggle"
+                        visible: root.currentSection === 2
+                        text: "Firefox mute-tab labels"
+                    }
+                    SurfaceFrame {
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2 && firefoxToggle.checked
+                        ColumnLayout {
+                            width: parent.width
                             SelectableLabel {
                                 Layout.fillWidth: true
                                 objectName: "muteLabelsCaption"
-                                text: "Firefox mute-tab labels"
+                                text: "One label per line"
                             }
                             Controls.TextArea {
                                 id: labelsField
@@ -1166,7 +1328,6 @@ Kirigami.ApplicationWindow {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 56
                                 Accessible.name: "Firefox mute-tab labels (one per line)"
-                                placeholderText: "One per line"
                                 selectByMouse: true
                                 onTextChanged: {
                                     if (activeFocus) root.settingsDirty = true
@@ -1175,175 +1336,196 @@ Kirigami.ApplicationWindow {
                         }
                     }
 
-                    SurfaceFrame {
+                    ColumnLayout {
                         id: diagnosticsPanel
                         objectName: "diagnosticsPanel"
                         Layout.fillWidth: true
-                        maximumWidth: 1100
-                        visible: root.currentSection === 4
-                        ColumnLayout {
-                            width: parent.width
-                            spacing: Kirigami.Units.mediumSpacing
-                            SelectableHeading {
-                                level: 3
-                                text: "Current status"
+                        visible: root.onDiagnosticsPage
+                        spacing: Kirigami.Units.mediumSpacing
+
+                        FullWidthFrame {
+                            Layout.fillWidth: true
+                            visible: root.monitoringWarning || topcec.inputPermissionMessage.length > 0
+                            ColumnLayout {
+                                width: parent.width
+                                spacing: Kirigami.Units.smallSpacing
+                                Kirigami.InlineMessage {
+                                    objectName: "diagnosticsWarningBanner"
+                                    Layout.fillWidth: true
+                                    visible: root.monitoringWarning
+                                    type: Kirigami.MessageType.Warning
+                                    text: root.monitoringWarningText
+                                }
+                                DisclosureButton {
+                                    id: inputRecoveryToggle
+                                    visible: topcec.inputPermissionMessage.length > 0
+                                    text: "Input access recovery"
+                                    checked: true
+                                }
+                                ColumnLayout {
+                                    objectName: "inputPermissionHelp"
+                                    Layout.fillWidth: true
+                                    visible: inputRecoveryToggle.visible && inputRecoveryToggle.checked
+                                    SelectableLabel {
+                                        Layout.fillWidth: true
+                                        text: topcec.inputPermissionMessage
+                                    }
+                                    Controls.TextArea {
+                                        objectName: "inputPermissionCommand"
+                                        Layout.fillWidth: true
+                                        visible: topcec.inputPermissionCommand.length > 0
+                                        text: topcec.inputPermissionCommand
+                                        readOnly: true
+                                        selectByMouse: true
+                                        textFormat: TextEdit.PlainText
+                                        wrapMode: TextEdit.WrapAnywhere
+                                        font.family: "monospace"
+                                    }
+                                }
+                                Flow {
+                                    Layout.fillWidth: true
+                                    visible: (inputRecoveryToggle.visible && inputRecoveryToggle.checked
+                                        && topcec.inputPermissionCommand.length > 0)
+                                        || topcec.monitoringRetryAvailable
+                                    spacing: Kirigami.Units.smallSpacing
+                                    CopyableButton {
+                                        id: copyInputPermissionCommand
+                                        objectName: "copyInputPermissionCommand"
+                                        visible: inputRecoveryToggle.visible && inputRecoveryToggle.checked
+                                            && topcec.inputPermissionCommand.length > 0
+                                        text: "Copy command"
+                                        icon.name: "edit-copy"
+                                        onClicked: topcec.copyText(topcec.inputPermissionCommand)
+                                    }
+                                    CopyableButton {
+                                        id: retryMonitoring
+                                        objectName: "retryMonitoringButton"
+                                        visible: topcec.monitoringRetryAvailable
+                                        enabled: topcec.settingsEnabled
+                                        text: "Retry monitoring"
+                                        icon.name: "view-refresh"
+                                        onClicked: topcec.retryMonitoring()
+                                    }
+                                }
                             }
+                        }
+                        SelectableLabel {
+                            objectName: "actionDiagnostics"
+                            Layout.fillWidth: true
+                            visible: topcec.actionMessage.length > 0
+                            text: topcec.actionMessage
+                        }
+                        FullWidthFrame {
+                            Layout.fillWidth: true
                             GridLayout {
-                                Layout.fillWidth: true
-                                columns: width >= 480 ? 2 : 1
-                                columnSpacing: Kirigami.Units.largeSpacing
-                                rowSpacing: Kirigami.Units.smallSpacing
-                                SelectableLabel {
-                                    Layout.fillWidth: true
-                                    text: "Service: " + topcec.serviceStatus
-                                    font.bold: true
+                                width: parent.width
+                                columns: width >= 330 ? 3 : 1
+                                columnSpacing: Kirigami.Units.mediumSpacing
+                                DiagnosticState {
+                                    label: "Host service"
+                                    value: root.hostConnectionStatus
+                                    stateColor: topcec.backendAvailable ? Kirigami.Theme.positiveTextColor
+                                        : Kirigami.Theme.disabledTextColor
                                 }
-                                SelectableLabel {
-                                    Layout.fillWidth: true
-                                    text: "TV power: " + topcec.powerState
-                                    font.bold: true
+                                DiagnosticState {
+                                    label: "Monitoring"
+                                    value: root.monitoringStatus
+                                    stateColor: root.serviceHealthy ? Kirigami.Theme.positiveTextColor
+                                        : (topcec.backendAvailable ? Kirigami.Theme.neutralTextColor
+                                            : Kirigami.Theme.disabledTextColor)
+                                }
+                                DiagnosticState {
+                                    label: "TV power"
+                                    value: topcec.powerState.charAt(0).toUpperCase() + topcec.powerState.slice(1)
                                 }
                             }
-                            SelectableLabel {
-                                objectName: "connectionDiagnostics"
-                                Layout.fillWidth: true
-                                visible: !topcec.backendAvailable
-                                text: topcec.connectionMessage
-                            }
-                            Kirigami.InlineMessage {
-                                objectName: "diagnosticsWarningBanner"
-                                Layout.fillWidth: true
-                                visible: root.monitoringWarning
-                                type: Kirigami.MessageType.Warning
-                                text: root.monitoringWarningText
-                            }
-                            SelectableLabel {
-                                objectName: "standbyDiagnostics"
-                                Layout.fillWidth: true
-                                visible: !root.monitoringWarning
-                                    && topcec.standbyReason !== topcec.connectionMessage
-                                text: topcec.standbyReason
-                            }
-                            SelectableLabel {
-                                objectName: "actionDiagnostics"
-                                Layout.fillWidth: true
-                                visible: topcec.actionMessage.length > 0
-                                text: topcec.actionMessage
-                            }
+                        }
+                        SelectableLabel {
+                            objectName: "connectionDiagnostics"
+                            Layout.fillWidth: true
+                            visible: !topcec.backendAvailable
+                            text: topcec.connectionMessage
+                        }
+                        SelectableLabel {
+                            objectName: "standbyDiagnostics"
+                            Layout.fillWidth: true
+                            visible: topcec.backendAvailable && !root.monitoringWarning
+                                && text.length > 0 && text !== topcec.connectionMessage
+                            text: topcec.standbyReason
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
                             SelectableHeading {
+                                Layout.fillWidth: true
                                 level: 3
                                 text: "Detected devices"
                             }
-                            SelectableLabel {
+                            CopyableButton {
+                                flat: true
+                                text: "Open Display"
+                                onClicked: root.currentSection = 1
+                            }
+                        }
+                        FullWidthFrame {
+                            Layout.fillWidth: true
+                            DiagnosticDevice {
                                 objectName: "diagnosticsDisplays"
-                                Layout.fillWidth: true
-                                text: "Displays: " + root.detectedDeviceText(topcec.detectedOutputs)
+                                label: "TV display"
+                                description: root.detectedDeviceText(topcec.detectedOutputs, true)
                             }
-                            SelectableLabel {
+                            FormCard.FormDelegateSeparator {}
+                            DiagnosticDevice {
                                 objectName: "diagnosticsAdapters"
-                                Layout.fillWidth: true
-                                text: "CEC adapters: " + root.detectedDeviceText(topcec.detectedAdapters)
+                                label: "CEC adapter"
+                                description: root.detectedDeviceText(topcec.detectedAdapters, true)
                             }
-                            SelectableLabel {
+                            FormCard.FormDelegateSeparator {}
+                            DiagnosticDevice {
                                 objectName: "diagnosticsInputs"
-                                Layout.fillWidth: true
-                                text: "Input devices: " + root.detectedDeviceText(topcec.detectedInputs)
+                                visible: !topcec.detectedInputs.length
+                                label: "Input devices"
+                                description: root.detectedDeviceText(topcec.detectedInputs, false)
+                            }
+                            DisclosureButton {
+                                id: diagnosticInputsToggle
+                                objectName: "diagnosticInputsToggle"
+                                visible: topcec.detectedInputs.length > 0
+                                text: "Input devices · " + topcec.detectedInputs.length + " detected · "
+                                    + root.inputSelectionSummary()
                             }
                             SelectableLabel {
-                                objectName: "equipmentDiagnostics"
+                                objectName: "diagnosticInputList"
                                 Layout.fillWidth: true
-                                visible: !topcec.equipmentAvailabilityKnown
-                                text: topcec.equipmentMessage
-                            }
-                            ColumnLayout {
-                                objectName: "inputPermissionHelp"
-                                Layout.fillWidth: true
-                                visible: topcec.inputPermissionMessage.length > 0
-                                spacing: Kirigami.Units.smallSpacing
-                                SelectableHeading {
-                                    level: 3
-                                    text: "Input device access"
-                                }
-                                SelectableLabel {
-                                    Layout.fillWidth: true
-                                    text: topcec.inputPermissionMessage
-                                }
-                                Controls.TextArea {
-                                    objectName: "inputPermissionCommand"
-                                    Layout.fillWidth: true
-                                    visible: topcec.inputPermissionCommand.length > 0
-                                    text: topcec.inputPermissionCommand
-                                    readOnly: true
-                                    selectByMouse: true
-                                    wrapMode: TextEdit.Wrap
-                                }
-                                CopyableButton {
-                                    objectName: "copyInputPermissionCommand"
-                                    visible: topcec.inputPermissionCommand.length > 0
-                                    text: "Copy input-group command"
-                                    onClicked: topcec.copyText(topcec.inputPermissionCommand)
-                                }
-                            }
-                            SelectableLabel {
-                                Layout.fillWidth: true
-                                visible: topcec.equipmentRecoveryCommands.length > 0
-                                text: topcec.compatibilityMessage
-                            }
-                            SelectableLabel {
-                                objectName: "diagnosticsHostUpdateInstructions"
-                                Layout.fillWidth: true
-                                visible: topcec.equipmentRecoveryCommands.length > 0
-                                text: "Run the copied update command in a host terminal from any directory, then restart the service."
-                            }
-                            Controls.TextArea {
-                                objectName: "diagnosticsEquipmentRecoveryCommands"
-                                Layout.fillWidth: true
-                                visible: topcec.equipmentRecoveryCommands.length > 0
-                                readOnly: true
-                                selectByMouse: true
-                                wrapMode: TextEdit.WrapAnywhere
-                                text: topcec.equipmentRecoveryCommands
+                                visible: diagnosticInputsToggle.visible && diagnosticInputsToggle.checked
+                                text: root.detectedDeviceText(topcec.detectedInputs, false)
                             }
                             CopyableButton {
-                                objectName: "copyDiagnosticsEquipmentRecovery"
-                                visible: topcec.equipmentRecoveryCommands.length > 0
-                                text: "Copy host update command"
-                                onClicked: topcec.copyText(topcec.equipmentRecoveryCommands)
+                                visible: !diagnosticInputsToggle.visible || diagnosticInputsToggle.checked
+                                flat: true
+                                text: "Open Input"
+                                onClicked: root.currentSection = 3
                             }
-                            SelectableHeading {
-                                level: 3
-                                Layout.topMargin: Kirigami.Units.smallSpacing
-                                text: "Service status details"
+                        }
+                        SelectableLabel {
+                            objectName: "equipmentDiagnostics"
+                            Layout.fillWidth: true
+                            visible: !topcec.equipmentAvailabilityKnown
+                            text: topcec.equipmentMessage
+                        }
+                        FullWidthFrame {
+                            Layout.fillWidth: true
+                            DisclosureButton {
+                                id: diagnosticDetailsToggle
+                                objectName: "diagnosticDetailsToggle"
+                                text: "Host service status"
                             }
                             SelectableLabel {
-                                objectName: "diagnosticsStatusExplanation"
+                                objectName: "backendDiagnostics"
                                 Layout.fillWidth: true
-                                text: "Structured status reported by the host service; this is not log output."
-                            }
-                            Controls.ScrollView {
-                                objectName: "backendDiagnosticsScroll"
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: Math.max(220, Math.min(420, root.height * 0.4))
-                                clip: true
-                                rightPadding: diagnosticsScrollBar.implicitWidth
-                                Controls.ScrollBar.vertical: Controls.ScrollBar {
-                                    id: diagnosticsScrollBar
-                                    objectName: "backendDiagnosticsScrollBar"
-                                    policy: Controls.ScrollBar.AlwaysOn
-                                    orientation: Qt.Vertical
-                                    anchors.top: parent.top
-                                    anchors.bottom: parent.bottom
-                                    anchors.right: parent.right
-                                }
-                                Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
-                                Controls.TextArea {
-                                    objectName: "backendDiagnostics"
-                                    readOnly: true
-                                    selectByMouse: true
-                                    wrapMode: TextEdit.WrapAnywhere
-                                    Accessible.name: "Structured service status details (not logs)"
-                                    text: topcec.diagnostics
-                                }
+                                Layout.minimumWidth: 0
+                                visible: diagnosticDetailsToggle.checked
+                                Accessible.name: "Host service status"
+                                text: topcec.diagnostics
                             }
                         }
                     }

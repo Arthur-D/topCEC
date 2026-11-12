@@ -226,11 +226,11 @@ The native Qt Quick/Kirigami panel follows the current Plasma theme. Its
 **Overview** shows TV power, service state, recovery notices, and equipment and
 standby summaries. The navigation sidebar opens **Display**, **Standby**,
 **Input**, and **Diagnostics**; on narrow windows it becomes a navigation
-drawer. Input-device choices and editable paths are shown directly in **Input**.
-Unsaved settings and input selections are retained when switching sections.
-**Advanced** exposes Firefox mute-label settings, controller deadzones, and
-manual-action simulation. The persistent **Save and apply** footer is available
-from every section.
+drawer. **Input** keeps device choices visible, with disclosures for manual
+paths and controller deadzones. **Standby** contains Firefox mute-tab labels,
+and **Overview** contains manual power-action simulation. The **Save and apply**
+footer appears when there are edits to apply or configuration needs attention.
+Switching sections preserves unsaved settings and input selections.
 
 The panel provides output and adapter selection, input-device settings,
 KDE-managed/custom/disabled inactivity timeouts, diagnostics, and manual power
@@ -247,8 +247,9 @@ GUI headings, explanations, status, diagnostics, commands and text fields suppor
 selection and copying with Ctrl+C. Right-click a button caption, checkbox,
 selector or numeric value and choose **Copy text** without activating it (the
 keyboard Menu key opens the same action). **Copy page text** copies the current
-page, including disabled control captions and the window title; it excludes
-hidden sections and the hidden setup/configuration page.
+page, including visible disabled control captions and the window title.
+**Copy diagnostics** includes the device inventory and host status even when
+their disclosures are closed.
 
 ### Qt AT-SPI diagnostic
 
@@ -369,7 +370,9 @@ If an input device is missing or unreadable when the service starts, the host
 stays available in **configuration-only** mode instead of exiting. The Flatpak
 then shows the normal configuration panel and the input error. Choose the
 correct keyboard/wheel paths (prefer stable `/dev/input/by-id/` paths), then use
-**Save and apply settings** to resume monitoring in the same process. No new
+**Save and apply** to resume monitoring in the same process. If the saved
+settings already point to the correct devices, use **Retry monitoring** in
+**Diagnostics** to reapply them. No new
 standby commands or input monitoring run in this mode, and both live
 manual power actions are rejected.
 Unsaved GUI edits are retained across connection loss and reconnection.
@@ -562,8 +565,8 @@ Membership in `input` grants access to keyboard and other input events, not just
 the selected device. Consider scoped device permissions with your administrator
 instead if that broad access is inappropriate. Fully log out and back in so the
 desktop and user service inherit the new group. If the user manager persists
-across logout (for example with lingering), reboot. Then use **Retry Connection**
-and **Save and apply settings** to retry monitoring. If your account is
+across logout (for example with lingering), reboot. Once the GUI reconnects,
+open **Diagnostics** and choose **Retry monitoring**. If your account is
 already a member but the running backend has not inherited it, the GUI explains
 the session restart instead of offering a duplicate membership command. If the
 backend already has that group, or the device ownership/read bits do not support
