@@ -822,9 +822,7 @@ class GuiBackend(QObject):
         if generation != self._refresh_generation:
             return
         error = self._capability_error('RequestPower', reply)
-        self._action_message = (
-            'Request queued: TV ' + description if error is None
-            else 'Request rejected: ' + error)
+        self._action_message = '' if error is None else 'Request rejected: ' + error
         self.changed.emit()
 
     def _settings_reply(self, generation, reply):
