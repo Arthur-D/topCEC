@@ -516,13 +516,27 @@ class GuiChecks(unittest.TestCase):
             self.assertIsNotNone(card)
             self.assertGreater(card.property('maximumWidth'), 0)
         self.assertEqual(window.findChild(QObject, 'serviceStatusLabel').property('text'),
-                         'Configuration only')
+                         'Configuration only,')
         self.assertEqual(window.findChild(QObject, 'powerStateLabel').property('text'), 'unknown')
         power_state = window.findChild(QQuickItem, 'powerStateLabel')
         monitoring = window.findChild(QQuickItem, 'monitoringStatusRow')
-        self.assertGreaterEqual(
-            monitoring.mapToScene(QPointF(0, 0)).y(),
-            power_state.mapToScene(QPointF(0, 0)).y() + power_state.height() - 1)
+        service_status = window.findChild(QQuickItem, 'serviceStatusLabel')
+        self.assertAlmostEqual(
+            service_status.mapToScene(QPointF(0, 0)).y(),
+            power_state.mapToScene(QPointF(0, 0)).y(), delta=1)
+        self.assertLess(
+            service_status.mapToScene(QPointF(0, 0)).x(),
+            power_state.mapToScene(QPointF(0, 0)).x())
+        backend._power_state = 'turning_on'
+        backend._service_status = 'running'
+        backend.changed.emit()
+        app.processEvents()
+        self.assertEqual(service_status.property('text'), 'Monitoring,')
+        self.assertEqual(power_state.property('text'), 'turning on')
+        backend._power_state = 'unknown'
+        backend._service_status = 'configuration-only'
+        backend.changed.emit()
+        app.processEvents()
         warning = window.findChild(QObject, 'warningBanner')
         self.assertTrue(warning.property('visible'))
         self.assertIn(
