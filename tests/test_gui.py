@@ -614,7 +614,10 @@ class GuiChecks(unittest.TestCase):
             window.findChild(QObject, 'diagnosticsStatusExplanation').property('text'),
             'Structured status reported by the host service; this is not log output.')
         standby_diagnostics = window.findChild(QObject, 'standbyDiagnostics')
-        self.assertTrue(standby_diagnostics.property('visible'))
+        diagnostics_warning = window.findChild(QObject, 'diagnosticsWarningBanner')
+        self.assertTrue(diagnostics_warning.property('visible'))
+        self.assertEqual(diagnostics_warning.property('text'), warning.property('text'))
+        self.assertFalse(standby_diagnostics.property('visible'))
         backend._standby_reason = backend._connection_message
         backend.changed.emit()
         app.processEvents()
@@ -640,6 +643,64 @@ class GuiChecks(unittest.TestCase):
         self.assertIn('Config only', app.clipboard().text())
         self.assertIn('Save and apply', app.clipboard().text())
         self.assertEqual(qml_warnings, [])
+        engine.deleteLater()
+
+    def test_diagnostics_details_scroll_and_copy_at_wide_and_compact_sizes(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        self.addCleanup(app.clipboard().setText, app.clipboard().text())
+        backend = GuiBackend(dbus_only=False)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._diagnostics = '\n'.join('Diagnostic line %d' % i for i in range(100))
+        backend._set_equipment({
+            'outputs': [{'path': 'HDMI-A-1', 'label': 'HDMI-A-1'}],
+            'adapters': [{'path': '/dev/cec', 'label': 'CEC adapter'}],
+            'inputs': [{'path': '/dev/input/event1', 'label': 'Keyboard'}],
+            'errors': [],
+        }, 'Equipment refreshed')
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.setProperty('currentSection', 4)
+        window.show()
+        scroll = window.findChild(QObject, 'backendDiagnosticsScroll')
+        details = window.findChild(QObject, 'backendDiagnostics')
+        engine.rootContext().setContextProperty('diagnosticsScroll', scroll)
+        for width, height in ((1200, 900), (430, 760)):
+            window.resize(width, height)
+            QTest.qWait(100)
+            self.assertGreaterEqual(scroll.property('height'), 220)
+            self.assertTrue(details.property('readOnly'))
+            result = QQmlExpression(engine.rootContext(), window,
+                                    'diagnosticsScroll.contentHeight > diagnosticsScroll.availableHeight')
+            self.assertTrue(result.evaluate()[0], result.error().toString())
+            bar = window.findChild(QObject, 'backendDiagnosticsScrollBar')
+            self.assertTrue(bar.property('visible'))
+            self.assertGreater(bar.property('height'), 200)
+            self.assertGreater(bar.property('x'), scroll.property('width') / 2)
+        bar = window.findChild(QObject, 'backendDiagnosticsScrollBar')
+        bar.setProperty('position', 0.5)
+        position = QQmlExpression(engine.rootContext(), window,
+                                  'diagnosticsScroll.contentItem.contentY')
+        self.assertGreater(position.evaluate()[0], 0)
+        QMetaObject.invokeMethod(window.findChild(QObject, 'copyPageButton'), 'clicked')
+        self.assertIn('Diagnostic line 99', app.clipboard().text())
+        self.assertFalse(window.findChild(QObject, 'connectionDiagnostics').property('visible'))
+        for name, value in (('diagnosticsDisplays', 'HDMI-A-1'),
+                            ('diagnosticsAdapters', 'CEC adapter'),
+                            ('diagnosticsInputs', 'Keyboard')):
+            self.assertIn(value, window.findChild(QObject, name).property('text'))
+        self.assertFalse(window.findChild(QObject, 'equipmentDiagnostics').property('visible'))
+        backend._set_equipment({'outputs': [], 'adapters': [], 'inputs': [], 'errors': []}, '')
+        self.assertIn('None detected', window.findChild(QObject, 'diagnosticsDisplays').property('text'))
+        backend._set_equipment(None, 'Device detection failed')
+        self.assertIn('Detection unavailable', window.findChild(QObject, 'diagnosticsInputs').property('text'))
+        self.assertTrue(window.findChild(QObject, 'equipmentDiagnostics').property('visible'))
+        backend._connection_state = 'unavailable'
+        backend._connection_message = 'Service unavailable'
+        backend.changed.emit()
+        self.assertTrue(window.findChild(QObject, 'connectionDiagnostics').property('visible'))
         engine.deleteLater()
 
     def test_qml_accessibility_roles_names_and_keyboard_focus_remain_available(self):
