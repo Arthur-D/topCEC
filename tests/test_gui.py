@@ -678,12 +678,18 @@ class GuiChecks(unittest.TestCase):
         window = engine.rootObjects()[0]
         window.resize(980, 800)
         window.show()
-        QTest.qWait(350)
         drawer = window.findChild(QObject, 'navigationDrawer')
         button = window.findChild(QQuickItem, 'navigationButton')
         close_button = window.findChild(QQuickItem, 'drawerNavigationButton')
         engine.rootContext().setContextProperty('testDrawer', drawer)
         handle_visible = QQmlExpression(engine.rootContext(), window, 'testDrawer.handle.visible')
+
+        def wait_until(predicate):
+            for _ in range(100):
+                if predicate():
+                    return True
+                QTest.qWait(20)
+            return predicate()
 
         def click(item):
             self.assertTrue(item.isVisible())
@@ -691,7 +697,7 @@ class GuiChecks(unittest.TestCase):
             QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
             QTest.qWait(350)
 
-        self.assertTrue(drawer.property('opened'))
+        self.assertTrue(wait_until(lambda: drawer.property('opened')))
         self.assertTrue(button.isVisible())
         self.assertEqual(QAccessible.queryAccessibleInterface(button).text(QAccessible.Text.Name),
                          'Hide navigation')
@@ -1799,6 +1805,16 @@ class GuiChecks(unittest.TestCase):
             backend.requestPower('on')
         self.assertEqual(backend.powerState, 'on')
         self.assertIn('Pending action: on\n', backend.diagnostics)
+
+    def test_queued_power_request_uses_pending_action_instead_of_action_message(self):
+        backend = GuiBackend(dbus_only=True)
+        backend._service_data = {'pending_action': 'on'}
+        backend._update_diagnostics()
+
+        backend._power_reply(0, 'on', self.reply({}))
+
+        self.assertEqual(backend.actionMessage, '')
+        self.assertIn('Pending action: on', backend.diagnostics)
 
     def test_cec_fault_uses_successful_adapter_discovery(self):
         backend = GuiBackend(dbus_only=True)
