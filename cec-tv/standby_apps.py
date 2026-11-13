@@ -35,10 +35,13 @@ def observed_apps(names, apps):
         key = app_key(name)
         matches = [app for app in apps
                    if key in (app_key(app['id']), app_key(app['name']))]
+        groups = {app.get('launcher_group') for app in matches}
         if len(matches) == 1:
             app = matches[0]
         else:
             app = {'id': name, 'name': name}
+            if len(groups) == 1 and None not in groups:
+                app['launcher_group'] = groups.pop()
         result[app['id']] = app
     return list(result.values())
 

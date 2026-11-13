@@ -101,10 +101,11 @@ def discover_apps():
     from gi.repository import Gio
 
     apps = {}
+    launchers = {}
     for app in Gio.AppInfo.get_all():
         identity = app.get_id()
         name = app.get_display_name()
-        if identity and name:
+        if identity and name and identity not in apps:
             row = {'id': identity, 'name': name}
             get_window_class = getattr(app, 'get_startup_wm_class', None)
             window_class = get_window_class() if get_window_class else None
@@ -121,7 +122,23 @@ def discover_apps():
                 row['steam_id'] = steam_uri.group(1)
             elif steam_desktop:
                 row['steam_id'] = steam_desktop.group(1)
-            apps.setdefault(identity, row)
+            apps[identity] = row
+
+            get_string = getattr(app, 'get_string', None)
+            get_boolean = getattr(app, 'get_boolean', None)
+            # D-Bus activation uses the desktop ID to select the app.
+            if (commandline and get_string and get_boolean
+                    and not get_boolean('DBusActivatable')
+                    and not get_boolean('X-KDE-SubstituteUID')):
+                launcher = (name, commandline, window_class, row.get('steam_id'),
+                            get_string('Path') or '', get_boolean('Terminal'))
+                launchers.setdefault(launcher, []).append(row)
+
+    for rows in launchers.values():
+        if len(rows) > 1:
+            group = min(row['id'] for row in rows)
+            for row in rows:
+                row['launcher_group'] = group
     return sorted(apps.values(), key=lambda app: (app['name'].casefold(), app['id']))
 
 

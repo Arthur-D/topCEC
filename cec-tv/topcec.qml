@@ -729,17 +729,24 @@ Kirigami.ApplicationWindow {
 
     function appChoices() {
         let apps = topcec.observedApps.slice()
+        let installedApps = topcec.installedApps
+        let launcherGroups = new Set(apps.map(app => app.launcher_group).filter(Boolean))
+        for (let app of installedApps) {
+            if (app.launcher_group && retainedAppIds.includes(app.id))
+                launcherGroups.add(app.launcher_group)
+        }
         let firefox = firefoxApp()
         if (!apps.some(app => app.id === firefox.id))
             apps.push(firefox)
-        for (let app of topcec.installedApps) {
-            if ((showAllApps.checked || browserForApp(app) || isFirefoxApp(app.id))
+        for (let app of installedApps) {
+            if ((showAllApps.checked || browserForApp(app) || isFirefoxApp(app.id)
+                    || launcherGroups.has(app.launcher_group))
                     && !apps.some(item => item.id === app.id))
                 apps.push(app)
         }
         for (let id of retainedAppIds) {
             if (!apps.some(app => app.id === id)) {
-                let installed = topcec.installedApps.find(app => app.id === id)
+                let installed = installedApps.find(app => app.id === id)
                 apps.push(installed || {id: id, name: id + " (not installed)"})
             }
         }
@@ -747,7 +754,7 @@ Kirigami.ApplicationWindow {
         if (query && !showAllApps.checked) {
             for (let id of topcec.activeInhibitorApps) {
                 if (!apps.some(app => app.id === id)) {
-                    let installed = topcec.installedApps.find(app => app.id === id)
+                    let installed = installedApps.find(app => app.id === id)
                     apps.push(installed || {id: id, name: id})
                 }
             }
@@ -763,7 +770,8 @@ Kirigami.ApplicationWindow {
             let browser = browserForApp(app)
             let browserId = app.browserId || browser?.id || ""
             let firefoxMatch = app.id === "__firefox_audio__" || isFirefoxApp(app.id)
-            let key = browserId ? "browser:" + browserId : (firefoxMatch ? "firefox" : "app:" + app.id)
+            let key = browserId ? "browser:" + browserId : firefoxMatch ? "firefox"
+                : "app:" + (app.launcher_group || app.id)
             let existing = grouped.find(item => item.groupKey === key)
             if (existing) {
                 if (!existing.groupIds.includes(app.id))
