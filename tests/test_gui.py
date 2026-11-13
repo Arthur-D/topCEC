@@ -2239,6 +2239,10 @@ class GuiChecks(unittest.TestCase):
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
         backend._service_status = 'running'
+        browsers = [{'id': 'chromium.desktop', 'name': 'Chromium'},
+                    {'id': 'google-chrome.desktop', 'name': 'Google Chrome'}]
+        backend._service_data = {'observed_apps': browsers, 'installed_apps': browsers,
+                                 'active_inhibitor_apps': browsers}
         engine = QQmlApplicationEngine()
         engine.rootContext().setContextProperty('topcec', backend)
         engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
@@ -2246,21 +2250,154 @@ class GuiChecks(unittest.TestCase):
         window.show()
         window.setProperty('currentSection', 2)
         app.processEvents()
-        engine.rootContext().setContextProperty(
-            'browserChoices', window.findChild(QObject, 'chromiumAudioChoices'))
-        chromium = QQmlExpression(engine.rootContext(), window, 'browserChoices.itemAt(0)').evaluate()[0]
-        chrome = QQmlExpression(engine.rootContext(), window, 'browserChoices.itemAt(1)').evaluate()[0]
-        self.assertFalse(chromium.property('checked'))
-        self.assertFalse(chrome.property('checked'))
-        QMetaObject.invokeMethod(chromium, 'click')
+        initial = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertEqual(initial['chromiumAudioBlocksStandby'], [])
+        QQmlExpression(engine.rootContext(), window, 'setChromiumAudio("chromium", true)').evaluate()
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
         self.assertEqual(values['chromiumAudioBlocksStandby'], ['chromium'])
-        self.assertFalse(chrome.property('checked'))
+        self.assertNotIn('chrome', values['chromiumAudioBlocksStandby'])
         self.assertEqual(config_from_settings(backend.config, values)
                          ['chromium_audio_blocks_standby'], ['chromium'])
         window.findChild(QObject, 'autoSaveTimer').stop()
         engine.deleteLater()
+
+    def test_detected_chromium_audio_option_shares_its_app_row(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        path = '/app/chromium/chrome'
+        backend.config = {**DEFAULT_CONFIG,
+                          'idle_inhibition_apps': ['org.chromium.Chromium.desktop']}
+        backend._service_data = {
+            'installed_apps': [{'id': 'org.chromium.Chromium.desktop', 'name': 'Chromium'},
+                               {'id': 'org.mozilla.firefox.desktop', 'name': 'Mozilla Firefox'}],
+            'observed_apps': [{'id': path, 'name': path},
+                              {'id': 'firefox.desktop', 'name': 'Mozilla Firefox'}],
+            'active_inhibitor_apps': [{'id': path, 'name': path}],
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        row = self.app_row(engine, window, 0)
+        self.assertEqual(row.objectName(), 'appRow:' + path)
+        self.assertEqual(row.findChild(QObject, 'appName:' + path).property('text'), 'Chromium')
+        checkbox = row.findChild(QObject, 'browserAudio:chromium')
+        self.assertTrue(checkbox.property('visible'))
+        QMetaObject.invokeMethod(checkbox, 'click')
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertEqual(values['chromiumAudioBlocksStandby'], ['chromium'])
+        QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
+        app.processEvents()
+        choices = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(appChoices())').evaluate()[0])
+        chromium_rows = [item for item in choices if item['browserId'] == 'chromium']
+        self.assertEqual(len(chromium_rows), 1)
+        self.assertEqual(set(chromium_rows[0]['groupIds']),
+                         {path, 'org.chromium.Chromium.desktop'})
+        firefox_rows = [item for item in choices if item['isFirefox']]
+        self.assertEqual(len(firefox_rows), 1)
+        self.assertEqual(set(firefox_rows[0]['groupIds']),
+                         {'firefox.desktop', 'org.mozilla.firefox.desktop'})
+        row = self.app_row(engine, window, 0)
+        allow = row.findChild(QObject, 'idleApp:' + path)
+        self.assertFalse(allow.property('checked'))
+        QMetaObject.invokeMethod(allow, 'click')
+        app.processEvents()
+        self.assertEqual(json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+                         ['idleInhibitionApps'], [])
+        row = self.app_row(engine, window, 0)
+        QMetaObject.invokeMethod(row.findChild(QObject, 'idleApp:' + path), 'click')
+        app.processEvents()
+        self.assertEqual(set(json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+                             ['idleInhibitionApps']),
+                         {path, 'org.chromium.Chromium.desktop'})
+        for path, expected in (('/app/extra/google/chrome/chrome', 'chrome'),
+                               ('/app/brave/brave', 'brave'),
+                               ('/app/edge/msedge', 'edge'),
+                               ('/app/vivaldi/vivaldi-bin', 'vivaldi')):
+            result = QQmlExpression(
+                engine.rootContext(), window,
+                'browserForApp({id: ' + json.dumps(path) + '}).id').evaluate()[0]
+            self.assertEqual(result, expected)
+        window.findChild(QObject, 'autoSaveTimer').stop()
+        engine.deleteLater()
+
+    def test_browser_setup_guides_registration_with_explicit_flatpak_permission(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        QMetaObject.invokeMethod(window.findChild(QObject, 'browserSetupToggle'), 'click')
+        window.findChild(QObject, 'setupBrowser').setProperty('currentIndex', 0)
+        window.findChild(QObject, 'setupInstallation').setProperty('currentIndex', 0)
+        requests = []
+        with patch.object(backend, '_service_interface', return_value=Mock(isValid=lambda: True)), \
+                patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                             requests.append((method, callback, json.loads(args[0])))):
+            QMetaObject.invokeMethod(window.findChild(QObject, 'prepareBrowserExtension'), 'click')
+            method, callback, request = requests.pop()
+            self.assertEqual(method, 'SetupBrowser')
+            self.assertEqual(request, {'browser': 'chromium', 'flatpak': True,
+                                       'extension_id': '', 'grant_access': False})
+            callback(self.reply({'extension': '/tmp/extension', 'registered': False,
+                                 'flatpak': True, 'access_granted': False}))
+            self.assertEqual(backend.browserSetupPath, '/tmp/extension')
+            grant = window.findChild(QObject, 'browserGrantAccess')
+            self.assertFalse(grant.property('checked'))
+            extension_id = window.findChild(QObject, 'browserExtensionId')
+            extension_id.setProperty('text', 'a' * 32)
+            QMetaObject.invokeMethod(window.findChild(QObject, 'registerBrowserExtension'), 'click')
+            _, callback, request = requests.pop()
+            self.assertFalse(request['grant_access'])
+            callback(self.reply({'extension': '/tmp/extension', 'registered': True,
+                                 'flatpak': True, 'access_granted': False}))
+            self.assertIn('still needs to be granted', backend.browserSetupMessage)
+            QMetaObject.invokeMethod(grant, 'click')
+            QMetaObject.invokeMethod(window.findChild(QObject, 'registerBrowserExtension'), 'click')
+            _, callback, request = requests.pop()
+            self.assertEqual(request['extension_id'], 'a' * 32)
+            self.assertTrue(request['grant_access'])
+            callback(self.reply({'extension': '/tmp/extension', 'registered': True,
+                                 'flatpak': True, 'access_granted': True}))
+            self.assertIn('restart', backend.browserSetupMessage)
+        engine.deleteLater()
+
+    def test_browser_setup_reports_unsupported_host_and_ignores_stale_replies(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        requests = []
+        with patch.object(backend, '_service_interface', return_value=Mock(isValid=lambda: True)), \
+                patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                             requests.append(callback)):
+            backend.setupBrowser('chromium', True, '', False)
+            callback = requests.pop()
+            backend.resetBrowserSetup()
+            callback(self.reply({'extension': '/old', 'registered': False,
+                                 'flatpak': True, 'access_granted': False}))
+            self.assertEqual(backend.browserSetupPath, '')
+            backend.setupBrowser('chromium', True, '', False)
+            requests.pop()(topcec_gui.QDBusMessage.createError(
+                'org.freedesktop.DBus.Error.UnknownMethod', 'No such method'))
+            self.assertIn('Update the host backend', backend.browserSetupMessage)
+            self.assertFalse(backend.browserSetupPending)
 
     def test_firefox_mismatch_warning_is_only_shown_in_diagnostics(self):
         app = QGuiApplication.instance() or QGuiApplication([])

@@ -683,15 +683,58 @@ Kirigami.ApplicationWindow {
             || {id: "__firefox_audio__", name: "Mozilla Firefox", audioOnly: true}
     }
 
+    property var chromiumBrowsers: [
+        {id: "chromium", name: "Chromium", extensionsUrl: "chrome://extensions", aliases: ["chromium", "chromium-browser", "org.chromium.chromium"]},
+        {id: "chrome", name: "Google Chrome", extensionsUrl: "chrome://extensions", aliases: ["google-chrome", "google-chrome-stable", "com.google.chrome"]},
+        {id: "brave", name: "Brave", extensionsUrl: "brave://extensions", aliases: ["brave", "brave-browser", "brave-browser-stable", "com.brave.browser"]},
+        {id: "edge", name: "Microsoft Edge", extensionsUrl: "edge://extensions", aliases: ["msedge", "microsoft-edge", "microsoft-edge-stable", "com.microsoft.edge"]},
+        {id: "vivaldi", name: "Vivaldi", extensionsUrl: "vivaldi://extensions", aliases: ["vivaldi", "vivaldi-bin", "vivaldi-stable", "com.vivaldi.vivaldi"]}
+    ]
+
+    function browserForApp(app) {
+        let keys = [app.id || "", app.window_class || ""].map(
+            value => value.toLowerCase().replace(/\.desktop$/, ""))
+        for (let browser of chromiumBrowsers) {
+            if (keys.some(key => browser.aliases.includes(key)))
+                return browser
+        }
+        let path = keys[0]
+        if (path.startsWith("/")) {
+            let executable = path.substring(path.lastIndexOf("/") + 1)
+            for (let browser of chromiumBrowsers) {
+                if (browser.aliases.includes(executable))
+                    return browser
+            }
+        }
+        if (path.startsWith("/") && path.endsWith("/chrome")) {
+            if (path.includes("/chromium/")) return chromiumBrowsers[0]
+            if (path.includes("/google/chrome/")) return chromiumBrowsers[1]
+        }
+        return null
+    }
+
+    function browserApp(browserId) {
+        return topcec.observedApps.find(app => root.browserForApp(app)?.id === browserId)
+            || topcec.installedApps.find(app => root.browserForApp(app)?.id === browserId)
+            || null
+    }
+
+    function setChromiumAudio(browserId, enabled) {
+        let choices = chromiumAudioDraft.filter(id => id !== browserId)
+        if (enabled)
+            choices.push(browserId)
+        chromiumAudioDraft = choices
+    }
+
     function appChoices() {
         let apps = topcec.observedApps.slice()
         let firefox = firefoxApp()
         if (!apps.some(app => app.id === firefox.id))
             apps.push(firefox)
-        if (showAllApps.checked) {
-            for (let app of topcec.installedApps)
-                if (!apps.some(item => item.id === app.id))
-                    apps.push(app)
+        for (let app of topcec.installedApps) {
+            if ((showAllApps.checked || browserForApp(app) || isFirefoxApp(app.id))
+                    && !apps.some(item => item.id === app.id))
+                apps.push(app)
         }
         for (let id of retainedAppIds) {
             if (!apps.some(app => app.id === id)) {
@@ -708,10 +751,39 @@ Kirigami.ApplicationWindow {
                 }
             }
         }
-        return apps.filter(app => !query || ((showAllApps.checked || topcec.activeInhibitorApps.includes(app.id))
-            && (app.name + " " + app.id).toLowerCase().includes(query)))
-            .sort((a, b) => Number(topcec.activeInhibitorApps.includes(b.id))
-                - Number(topcec.activeInhibitorApps.includes(a.id))
+        for (let browser of chromiumBrowsers) {
+            if ((showAllApps.checked || chromiumAudioDraft.includes(browser.id))
+                    && !apps.some(app => browserForApp(app)?.id === browser.id))
+                apps.push({id: "__browser_audio__:" + browser.id, name: browser.name,
+                           audioOnly: true, browserId: browser.id})
+        }
+        let grouped = []
+        for (let app of apps) {
+            let browser = browserForApp(app)
+            let browserId = app.browserId || browser?.id || ""
+            let firefoxMatch = app.id === "__firefox_audio__" || isFirefoxApp(app.id)
+            let key = browserId ? "browser:" + browserId : (firefoxMatch ? "firefox" : "app:" + app.id)
+            let existing = grouped.find(item => item.groupKey === key)
+            if (existing) {
+                if (!existing.groupIds.includes(app.id))
+                    existing.groupIds.push(app.id)
+                if (!app.audioOnly)
+                    existing.audioOnly = false
+                continue
+            }
+            let primary = browserId ? browserApp(browserId) : (firefoxMatch ? firefox : null)
+            grouped.push({id: primary?.id || app.id,
+                          name: browserId ? chromiumBrowsers.find(item => item.id === browserId).name
+                                  + (app.audioOnly ? " (not detected)" : "")
+                              : (firefoxMatch ? primary.name : app.name),
+                          audioOnly: !!app.audioOnly, groupIds: [app.id],
+                          browserId: browserId, isFirefox: firefoxMatch, groupKey: key})
+        }
+        return grouped.filter(app => !query || ((showAllApps.checked
+            || app.groupIds.some(id => topcec.activeInhibitorApps.includes(id)))
+            && (app.name + " " + app.groupIds.join(" ")).toLowerCase().includes(query)))
+            .sort((a, b) => Number(b.groupIds.some(id => topcec.activeInhibitorApps.includes(id)))
+                - Number(a.groupIds.some(id => topcec.activeInhibitorApps.includes(id)))
                 || a.name.localeCompare(b.name))
     }
 
@@ -748,6 +820,18 @@ Kirigami.ApplicationWindow {
     function setForceApp(id, enabled) {
         forceAppsDraft = enabled ? [...forceAppsDraft.filter(item => item !== id), id]
             : forceAppsDraft.filter(item => item !== id)
+        root.markSettingsDirty()
+    }
+
+    function setAppGroup(ids, enabled, force) {
+        let current = force ? forceAppsDraft : idleAppsDraft
+        let updated = current.filter(id => !ids.includes(id))
+        if (enabled)
+            updated.push(...ids)
+        if (force)
+            forceAppsDraft = updated
+        else
+            idleAppsDraft = updated
         root.markSettingsDirty()
     }
 
@@ -1592,13 +1676,14 @@ Kirigami.ApplicationWindow {
                                         ? 0 : policyWidth + columnSpacing
                                     readonly property bool stackName: width < minimumNameWidth + inlinePolicyWidth
                                     readonly property bool stackPolicies: width < policyWidth
+                                    readonly property bool browserAudio: modelData.browserId.length > 0
                                     readonly property bool inlineAudio: !stackName
                                         && width >= minimumNameWidth + inlinePolicyWidth
-                                            + firefoxAudioOption.implicitWidth + columnSpacing
+                                            + audioOption.implicitWidth + columnSpacing
                                     readonly property real nameWidth: stackName ? width
                                         : Math.min(Kirigami.Units.gridUnit * 10,
                                             width - inlinePolicyWidth
-                                            - (inlineAudio ? firefoxAudioOption.implicitWidth + columnSpacing : 0))
+                                            - (inlineAudio ? audioOption.implicitWidth + columnSpacing : 0))
 
                                     SelectableLabel {
                                         objectName: "appName:" + modelData.id
@@ -1622,8 +1707,8 @@ Kirigami.ApplicationWindow {
                                         visible: !modelData.audioOnly
                                         text: "Allow standby"
                                         Accessible.name: modelData.name + " allow standby"
-                                        checked: !root.idleAppsDraft.includes(modelData.id)
-                                        onClicked: root.setIdleApp(modelData.id, !checked)
+                                        checked: !modelData.groupIds.some(id => root.idleAppsDraft.includes(id))
+                                        onClicked: root.setAppGroup(modelData.groupIds, !checked, false)
                                     }
                                     CopyableCheckBox {
                                         id: forceStandby
@@ -1635,23 +1720,29 @@ Kirigami.ApplicationWindow {
                                         visible: !modelData.audioOnly
                                         text: "Force block standby"
                                         Accessible.name: modelData.name + " force block standby"
-                                        checked: root.forceAppsDraft.includes(modelData.id)
-                                        onClicked: root.setForceApp(modelData.id, checked)
+                                        checked: modelData.groupIds.some(id => root.forceAppsDraft.includes(id))
+                                        onClicked: root.setAppGroup(modelData.groupIds, checked, true)
                                     }
                                     CopyableCheckBox {
-                                        id: firefoxAudioOption
-                                        objectName: visible ? "firefoxAudio" : ""
+                                        id: audioOption
+                                        objectName: modelData.isFirefox ? "firefoxAudio"
+                                            : (appRow.browserAudio ? "browserAudio:" + modelData.browserId : "")
                                         Layout.row: appRow.inlineAudio ? 0 : (appRow.stackPolicies ? 3 : 2)
                                         Layout.column: appRow.inlineAudio ? 3 : 0
                                         Layout.columnSpan: appRow.inlineAudio ? 1 : 4
                                         Layout.maximumWidth: implicitWidth
                                         Layout.alignment: Qt.AlignTop | Qt.AlignLeft
-                                        visible: modelData.id === root.firefoxApp().id
+                                        visible: modelData.isFirefox || appRow.browserAudio
                                         text: "Block standby while playing audio"
                                         Accessible.name: modelData.name + " block standby while playing audio"
-                                        checked: root.firefoxAudioEnabled
+                                        checked: appRow.browserAudio
+                                            ? root.chromiumAudioDraft.includes(modelData.browserId)
+                                            : root.firefoxAudioEnabled
                                         onClicked: {
-                                            root.firefoxAudioEnabled = checked
+                                            if (appRow.browserAudio)
+                                                root.setChromiumAudio(modelData.browserId, checked)
+                                            else
+                                                root.firefoxAudioEnabled = checked
                                             root.markSettingsDirty()
                                         }
                                     }
@@ -1666,44 +1757,124 @@ Kirigami.ApplicationWindow {
                         }
                     }
                     DisclosureButton {
+                        id: browserSetupToggle
+                        objectName: "browserSetupToggle"
+                        visible: root.currentSection === 2
+                        text: "Set up a browser extension"
+                    }
+                    SurfaceFrame {
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2 && browserSetupToggle.checked
+                        ColumnLayout {
+                            width: parent.width
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                text: "Choose your Chromium-based browser and installation type. Firefox uses its own optional extension."
+                            }
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+                                Controls.ComboBox {
+                                    id: setupBrowser
+                                    objectName: "setupBrowser"
+                                    model: root.chromiumBrowsers
+                                    textRole: "name"
+                                    currentIndex: -1
+                                    displayText: currentIndex < 0 ? "Select browser" : currentText
+                                    enabled: !topcec.browserSetupPending
+                                    Accessible.name: "Browser"
+                                    onCurrentIndexChanged: {
+                                        setupExtensionId.text = ""
+                                        setupGrantAccess.checked = false
+                                        topcec.resetBrowserSetup()
+                                    }
+                                }
+                                Controls.ComboBox {
+                                    id: setupInstallation
+                                    objectName: "setupInstallation"
+                                    model: ["Flatpak", "Native"]
+                                    currentIndex: -1
+                                    displayText: currentIndex < 0 ? "Installation type" : currentText
+                                    enabled: !topcec.browserSetupPending
+                                    Accessible.name: "Browser installation type"
+                                    onCurrentIndexChanged: {
+                                        setupExtensionId.text = ""
+                                        setupGrantAccess.checked = false
+                                        topcec.resetBrowserSetup()
+                                    }
+                                }
+                                Controls.Button {
+                                    objectName: "prepareBrowserExtension"
+                                    text: "Prepare extension"
+                                    enabled: setupBrowser.currentIndex >= 0
+                                        && setupInstallation.currentIndex >= 0
+                                        && !topcec.browserSetupPending
+                                    onClicked: topcec.setupBrowser(
+                                        root.chromiumBrowsers[setupBrowser.currentIndex].id,
+                                        setupInstallation.currentIndex === 0, "", false)
+                                }
+                            }
+                            SelectableLabel {
+                                objectName: "browserSetupMessage"
+                                Layout.fillWidth: true
+                                visible: topcec.browserSetupMessage.length > 0
+                                text: topcec.browserSetupMessage
+                            }
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                visible: topcec.browserSetupPath.length > 0
+                                text: setupBrowser.currentIndex < 0 ? "" : "Open "
+                                    + root.chromiumBrowsers[setupBrowser.currentIndex].extensionsUrl
+                                    + " in your browser, enable Developer mode, and load unpacked from this folder:"
+                            }
+                            SelectableLabel {
+                                objectName: "browserSetupPath"
+                                Layout.fillWidth: true
+                                visible: topcec.browserSetupPath.length > 0
+                                text: topcec.browserSetupPath
+                            }
+                            Controls.Button {
+                                objectName: "copyBrowserSetupPath"
+                                visible: topcec.browserSetupPath.length > 0
+                                text: "Copy folder path"
+                                icon.name: "edit-copy"
+                                onClicked: topcec.copyText(topcec.browserSetupPath)
+                            }
+                            Controls.TextField {
+                                id: setupExtensionId
+                                objectName: "browserExtensionId"
+                                Layout.fillWidth: true
+                                visible: topcec.browserSetupPath.length > 0
+                                placeholderText: "Paste the 32-letter extension ID shown by the browser"
+                                Accessible.name: "Browser extension ID"
+                                enabled: !topcec.browserSetupPending
+                            }
+                            CopyableCheckBox {
+                                id: setupGrantAccess
+                                objectName: "browserGrantAccess"
+                                visible: topcec.browserSetupPath.length > 0
+                                    && setupInstallation.currentIndex === 0
+                                enabled: !topcec.browserSetupPending
+                                text: "Allow this Flatpak browser to send media status to topCEC"
+                            }
+                            Controls.Button {
+                                objectName: "registerBrowserExtension"
+                                visible: topcec.browserSetupPath.length > 0
+                                text: "Register native host"
+                                enabled: !topcec.browserSetupPending
+                                    && /^[a-p]{32}$/.test(setupExtensionId.text.trim())
+                                onClicked: topcec.setupBrowser(
+                                    root.chromiumBrowsers[setupBrowser.currentIndex].id,
+                                    setupInstallation.currentIndex === 0,
+                                    setupExtensionId.text.trim(), setupGrantAccess.checked)
+                            }
+                        }
+                    }
+                    DisclosureButton {
                         id: firefoxToggle
                         objectName: "firefoxToggle"
                         visible: root.currentSection === 2
                         text: "Mute tab labels"
-                    }
-                    SelectableHeading {
-                        visible: root.currentSection === 2
-                        level: 4
-                        text: "Other browser audio"
-                    }
-                    SelectableLabel {
-                        visible: root.currentSection === 2
-                        Layout.fillWidth: true
-                        text: "Requires the topCEC browser extension and native host."
-                    }
-                    Repeater {
-                        objectName: "chromiumAudioChoices"
-                        model: [
-                            {id: "chromium", name: "Chromium"},
-                            {id: "chrome", name: "Google Chrome"},
-                            {id: "brave", name: "Brave"},
-                            {id: "edge", name: "Microsoft Edge"},
-                            {id: "vivaldi", name: "Vivaldi"}
-                        ]
-                        delegate: CopyableCheckBox {
-                            required property var modelData
-                            objectName: "browserAudio:" + modelData.id
-                            visible: root.currentSection === 2
-                            text: modelData.name + " — Block standby while playing audio"
-                            checked: root.chromiumAudioDraft.includes(modelData.id)
-                            onClicked: {
-                                let choices = root.chromiumAudioDraft.filter(id => id !== modelData.id)
-                                if (checked)
-                                    choices.push(modelData.id)
-                                root.chromiumAudioDraft = choices
-                                root.markSettingsDirty()
-                            }
-                        }
                     }
                     SurfaceFrame {
                         Layout.fillWidth: true

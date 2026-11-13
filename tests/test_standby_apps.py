@@ -111,6 +111,18 @@ class StandbyAppsChecks(unittest.TestCase):
             requests, ['player.desktop'], [], [], True, 'TV')[0]['identityUnknown'])
         self.assertEqual(matching_inhibitions(requests, [], [], [], True, 'TV'), [])
 
+    def test_browser_executable_request_matches_installed_browser_window(self):
+        requests = [{'kind': 'idle', 'app': '/app/chromium/chrome', 'reason': 'Video'}]
+        apps = [{'id': 'org.chromium.Chromium.desktop', 'name': 'Chromium',
+                 'window_class': 'chromium'}]
+        windows = [{'desktop': 'org.chromium.Chromium', 'class': 'chromium', 'output': 'other'}]
+        for enabled in (['/app/chromium/chrome'], ['org.chromium.Chromium.desktop'],
+                        ['/app/chromium/chrome', 'org.chromium.Chromium.desktop']):
+            self.assertEqual(matching_inhibitions(requests, enabled, apps, windows, True, 'TV'), [])
+            result = matching_inhibitions(requests, enabled, apps, windows, True, 'other')
+            self.assertEqual(len(result), 1)
+            self.assertFalse(result[0]['locationUnknown'])
+
     def test_ambiguous_names_and_unknown_window_outputs_block_safely(self):
         requests = [{'kind': 'idle', 'app': 'Player', 'reason': 'Playing'}]
         apps = [{'id': 'one.desktop', 'name': 'Player'},
