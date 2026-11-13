@@ -18,6 +18,15 @@ def app_key(value):
     return value[:-8] if value.endswith('.desktop') else value
 
 
+def window_aliases(identity, details):
+    aliases = {identity}
+    if details.get('window_class'):
+        aliases.add(app_key(details['window_class']))
+    if details.get('steam_id'):
+        aliases.add('steam_app_' + details['steam_id'])
+    return aliases
+
+
 def observed_apps(names, apps):
     result = {}
     for name in names:
@@ -90,9 +99,7 @@ def forced_inhibitions(enabled, apps, windows, windows_fresh, outputs):
     for app in enabled:
         identity = app_key(app)
         details = installed.get(identity, {})
-        aliases = {identity}
-        if details.get('window_class'):
-            aliases.add(app_key(details['window_class']))
+        aliases = window_aliases(identity, details)
         matches = [window for window in windows
                    if aliases & {app_key(window['desktop']), app_key(window['class'])}]
         relevant = [window for window in matches
@@ -131,9 +138,11 @@ def matching_inhibitions(inhibitions, enabled, apps, windows, windows_fresh, out
     enabled = {app_key(item): item for item in enabled}
     aliases = {}
     identities = set()
+    installed = {}
     for app in apps:
         identity = app_key(app['id'])
         identities.add(identity)
+        installed[identity] = app
         aliases.setdefault(app_key(app['name']), set()).add(identity)
     selected = []
     for request in inhibitions:
@@ -155,9 +164,10 @@ def matching_inhibitions(inhibitions, enabled, apps, windows, windows_fresh, out
         # A non-unique app name cannot be safely assigned to a specific window.
         ambiguous = len(candidates) != 1
         identity = next(iter(matches))
+        window_ids = window_aliases(identity, installed.get(identity, {}))
         app_windows = [
             row for row in windows
-            if identity in (app_key(row['desktop']), app_key(row['class']))
+            if window_ids & {app_key(row['desktop']), app_key(row['class'])}
         ]
         unknown = (ambiguous or not windows_fresh or not app_windows
                    or any(row['output'] in ('', 'ingen', 'unknown') for row in app_windows))
