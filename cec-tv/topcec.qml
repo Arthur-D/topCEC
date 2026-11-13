@@ -27,7 +27,8 @@ Kirigami.ApplicationWindow {
     property var idleAppsDraft: []
     property var forceAppsDraft: []
     property var retainedAppIds: []
-    property bool firefoxAudioEnabled: true
+    property bool firefoxAudioEnabled: false
+    property var chromiumAudioDraft: []
     property real defaultAxisDeadzone: 0
     property real defaultRzDeadzone: 0
     onSettingsDirtyChanged: {
@@ -151,6 +152,7 @@ Kirigami.ApplicationWindow {
             mouseOutputs: mouseOutputsLegacy ? null : mouseOutputsDraft,
             muteLabels: labelsField.text,
             firefoxAudioBlocksStandby: firefoxAudioEnabled,
+            chromiumAudioBlocksStandby: chromiumAudioDraft,
             idleInhibitionApps: idleAppsDraft,
             forceInhibitionApps: forceAppsDraft,
             axisDeadzone: defaultAxisDeadzone,
@@ -658,6 +660,7 @@ Kirigami.ApplicationWindow {
         devicesField.text = topcec.deviceList()
         labelsField.text = topcec.muteLabelList()
         firefoxAudioEnabled = topcec.setting("firefox_audio_blocks_standby")
+        chromiumAudioDraft = Array.from(topcec.setting("chromium_audio_blocks_standby") || [])
         idleAppsDraft = Array.from(topcec.setting("idle_inhibition_apps") || [])
         forceAppsDraft = Array.from(topcec.setting("force_inhibition_apps") || [])
         retainedAppIds = [...new Set([...idleAppsDraft, ...forceAppsDraft])]
@@ -1668,6 +1671,40 @@ Kirigami.ApplicationWindow {
                         visible: root.currentSection === 2
                         text: "Mute tab labels"
                     }
+                    SelectableHeading {
+                        visible: root.currentSection === 2
+                        level: 4
+                        text: "Other browser audio"
+                    }
+                    SelectableLabel {
+                        visible: root.currentSection === 2
+                        Layout.fillWidth: true
+                        text: "Requires the topCEC browser extension and native host."
+                    }
+                    Repeater {
+                        objectName: "chromiumAudioChoices"
+                        model: [
+                            {id: "chromium", name: "Chromium"},
+                            {id: "chrome", name: "Google Chrome"},
+                            {id: "brave", name: "Brave"},
+                            {id: "edge", name: "Microsoft Edge"},
+                            {id: "vivaldi", name: "Vivaldi"}
+                        ]
+                        delegate: CopyableCheckBox {
+                            required property var modelData
+                            objectName: "browserAudio:" + modelData.id
+                            visible: root.currentSection === 2
+                            text: modelData.name + " — Block standby while playing audio"
+                            checked: root.chromiumAudioDraft.includes(modelData.id)
+                            onClicked: {
+                                let choices = root.chromiumAudioDraft.filter(id => id !== modelData.id)
+                                if (checked)
+                                    choices.push(modelData.id)
+                                root.chromiumAudioDraft = choices
+                                root.markSettingsDirty()
+                            }
+                        }
+                    }
                     SurfaceFrame {
                         Layout.fillWidth: true
                         visible: root.currentSection === 2 && firefoxToggle.checked
@@ -1711,6 +1748,12 @@ Kirigami.ApplicationWindow {
                         text: topcec.firefoxAudioStatusMessage
                     }
                     SelectableLabel {
+                        objectName: "chromiumAudioStatus"
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2 && topcec.chromiumAudioStatusMessage.length > 0
+                        text: topcec.chromiumAudioStatusMessage
+                    }
+                    SelectableLabel {
                         Layout.fillWidth: true
                         visible: root.currentSection === 2 && topcec.inhibitionsMessage.length > 0
                         text: topcec.inhibitionsMessage
@@ -1720,6 +1763,7 @@ Kirigami.ApplicationWindow {
                         Layout.fillWidth: true
                         visible: root.currentSection === 2 && !topcec.firefoxPlaybackActive
                             && (!root.firefoxAudioEnabled || topcec.firefoxAudioStatusMessage.length === 0)
+                            && topcec.chromiumAudioStatusMessage.length === 0
                             && topcec.blockingApps.length === 0 && topcec.inhibitionsMessage.length === 0
                         text: "No apps are currently blocking standby."
                     }
@@ -1812,6 +1856,12 @@ Kirigami.ApplicationWindow {
                             Layout.fillWidth: true
                             visible: topcec.actionMessage.length > 0
                             text: topcec.actionMessage
+                        }
+                        SelectableLabel {
+                            objectName: "firefoxAccessibilityHelp"
+                            Layout.fillWidth: true
+                            visible: topcec.firefoxAccessibilityHelp.length > 0
+                            text: topcec.firefoxAccessibilityHelp
                         }
                         Flow {
                             objectName: "simulationActions"

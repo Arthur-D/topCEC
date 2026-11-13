@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 
 SCHEMA_VERSION = 1
+CHROMIUM_BROWSERS = ('chromium', 'chrome', 'brave', 'edge', 'vivaldi')
 DEFAULT_CONFIG = {
     'target_output': '',
     'timeout_seconds': 300,
@@ -16,7 +17,8 @@ DEFAULT_CONFIG = {
     'mouse_output': None,
     'mouse_outputs': None,
     'mute_labels': ['Mute tab'],
-    'firefox_audio_blocks_standby': True,
+    'firefox_audio_blocks_standby': False,
+    'chromium_audio_blocks_standby': [],
     'idle_inhibition_apps': [],
     'force_inhibition_apps': [],
     'cec_enabled': False,
@@ -68,6 +70,11 @@ def validate_config(value):
                 or any(not isinstance(item, str) or not item.strip() for item in apps)
                 or len(set(apps)) != len(apps)):
             raise ValueError(f'{key} must be an array of unique app IDs')
+    browsers = config['chromium_audio_blocks_standby']
+    if (not isinstance(browsers, list)
+            or any(not isinstance(item, str) or item not in CHROMIUM_BROWSERS for item in browsers)
+            or len(set(browsers)) != len(browsers)):
+        raise ValueError('chromium_audio_blocks_standby must contain unique supported browser IDs')
     for key in ('cec_enabled', 'kde_timeout', 'require_snapshot', 'consider_input_devices',
                 'firefox_audio_blocks_standby'):
         if type(config[key]) is not bool:

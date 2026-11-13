@@ -28,6 +28,7 @@ from configuration import (
     validate_config, mouse_outputs,
 )
 from firefox_media import FirefoxWebExtensionProvider
+from chromium_media import BROWSERS, ChromiumMedia
 from standby_apps import (InhibitionHistory, PlasmaInhibitions, decode_windows,
                           forced_inhibitions, matching_inhibitions, observed_apps)
 from providers import ActivityProvider as ActivityProviderContract
@@ -692,12 +693,14 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         media_provider = FirefoxMediaProvider()
     mapping = Mapping(args.mapping_ttl)
     webextension_media = FirefoxWebExtensionProvider()
+    chromium_media = ChromiumMedia()
     match_diagnostics = MatchDiagnostics()
     selector = selectors.DefaultSelector()
     devices = {}
     focus = None
     worker = None
     worker_labels = None
+    scan_generation = worker_generation = 0
     worker_started = next_scan = 0.0
     frames = []
     scan_stamp = None
@@ -734,7 +737,9 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'mouse_outputs': getattr(args, 'mouse_outputs', None),
         'mute_labels': DEFAULT_CONFIG['mute_labels'] if args.mute_label is None else args.mute_label,
         'firefox_audio_blocks_standby': getattr(
-            args, 'firefox_audio_blocks_standby', True),
+            args, 'firefox_audio_blocks_standby',
+            DEFAULT_CONFIG['firefox_audio_blocks_standby']),
+        'chromium_audio_blocks_standby': getattr(args, 'chromium_audio_blocks_standby', []),
         'idle_inhibition_apps': getattr(args, 'idle_inhibition_apps', []),
         'force_inhibition_apps': getattr(args, 'force_inhibition_apps', []),
         'cec_enabled': bool(args.cec),
@@ -831,6 +836,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         nonlocal selector, devices, activity_provider, runtime_config, startup_error
         nonlocal power, kde_settings, target_output, worker, frames, scan_stamp, scan_error, next_scan
         nonlocal previous_status, previous_playback
+        nonlocal scan_generation
         replacing_power = (config['cec_enabled'] != (power is not None)
                            or (power is not None and config['cec_port'] != runtime_config['cec_port']))
         if replacing_power and power is not None and (
@@ -913,9 +919,16 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         old_kde, kde_settings = kde_settings, staged_kde
         if old_kde is not None and old_kde is not kde_settings:
             retire(old_kde, 'Old KDE timeout reader')
-        if saved['mute_labels'] != old_config['mute_labels'] or startup_error:
+        if (saved['mute_labels'] != old_config['mute_labels'] or startup_error
+                or saved['firefox_audio_blocks_standby']
+                != old_config['firefox_audio_blocks_standby']):
+            if (saved['firefox_audio_blocks_standby']
+                    != old_config['firefox_audio_blocks_standby']):
+                scan_generation += 1
             frames, scan_stamp = [], None
-            scan_error = 'Waiting for a scan with the updated mute-tab labels'
+            scan_error = ('Waiting for a scan with the updated mute-tab labels'
+                          if saved['mute_labels'] != old_config['mute_labels']
+                          else 'Waiting for the first AT-SPI scan')
             next_scan = 0
         if saved['target_output'] != old_config['target_output']:
             for state in devices.values():
@@ -975,6 +988,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             elif message.startswith("Desktop-snapshot: "):
                 first = mapping.snapshot_stamp is None
                 raw_snapshot = message[len("Desktop-snapshot: "):]
+                if not chromium_media.update_windows(raw_snapshot, time.monotonic()):
+                    log('Browser window snapshot unavailable: ' + chromium_media.error)
                 try:
                     app_windows = decode_windows(raw_snapshot)
                     app_windows_stamp = time.monotonic()
@@ -1062,12 +1077,25 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 raise dbus.DBusException(str(error))
             return json.dumps({'accepted': True, 'action': str(action)})
 
+    class BrowserReceiver(dbus.service.Object):
+        @dbus.service.method('net.local.topcec.BrowserMedia', in_signature='s', out_signature='')
+        def Report(self, payload):
+            try:
+                chromium_media.update(str(payload), time.monotonic())
+            except (ValueError, TypeError, json.JSONDecodeError) as error:
+                log('Invalid browser extension snapshot: ' + str(error))
+                raise dbus.DBusException('Invalid browser extension snapshot: ' + str(error))
+
     bus = dbus.SessionBus()
     plasma_inhibitions = PlasmaInhibitions(bus, dbus)
     try:
         name = dbus.service.BusName('net.local.CecActivity', bus=bus,
                                    do_not_queue=True)
         receiver = Receiver(bus, '/net/local/CecActivity')
+        media_bus = dbus.SessionBus(private=True)
+        media_name = dbus.service.BusName('net.local.topcec.BrowserMedia', bus=media_bus,
+                                         do_not_queue=True)
+        media_receiver = BrowserReceiver(media_bus, '/net/local/topcec/BrowserMedia')
     except dbus.DBusException as error:
         log('Cannot own the D-Bus name. Stop the existing monitor first: ' + str(error))
         return 2
@@ -1108,7 +1136,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     loop = GLib.MainLoop()
     def poll():
         nonlocal worker, worker_started, next_scan, frames, scan_stamp
-        nonlocal worker_labels
+        nonlocal worker_labels, worker_generation
         nonlocal scan_error, previous_status, warning_reported, previous_playback
         nonlocal startup_error, selector
         plasma_inhibitions.poll(time.monotonic())
@@ -1174,6 +1202,13 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 except BlockingIOError:
                     pass
             now = time.monotonic()
+            if worker is not None and (
+                    not runtime_config['firefox_audio_blocks_standby']
+                    or worker_generation != scan_generation):
+                if worker.poll() is None:
+                    worker.kill()
+                worker.communicate()
+                worker = None
             if worker is not None:
                 if worker.poll() is not None:
                     output, errors = worker.communicate()
@@ -1197,7 +1232,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     worker = None
                     scan_error = 'AT-SPI did not respond within 5 seconds'
                     next_scan = now + SCAN_INTERVAL
-            if worker is None and now >= next_scan:
+            if (runtime_config['firefox_audio_blocks_standby']
+                    and worker is None and now >= next_scan):
                 command = [sys.executable, str(Path(__file__).resolve()), '--atspi-scan']
                 for label in args.mute_label:
                     command += ['--mute-label', label]
@@ -1205,6 +1241,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                                           stderr=subprocess.PIPE, text=True)
                 worker_started = now
                 worker_labels = list(args.mute_label)
+                worker_generation = scan_generation
             reason = None
             audible = False
             firefox_audio_error = None
@@ -1268,6 +1305,19 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 runtime_config['force_inhibition_apps'], equipment_snapshot.get('apps') or [],
                 app_windows, app_windows_stamp is not None
                 and now - app_windows_stamp <= mapping.ttl, media_outputs))
+            browser_errors = {}
+            for browser in runtime_config['chromium_audio_blocks_standby']:
+                if not media_outputs:
+                    continue
+                playing, error = chromium_media.state(
+                    browser, media_outputs, now, mapping.ttl)
+                if error:
+                    browser_errors[browser] = error
+                    reason = reason or (BROWSERS[browser][0] + ' audio: ' + error)
+                elif playing:
+                    blocking_apps.append({
+                        'app': BROWSERS[browser][0], 'reason': 'Audio',
+                        'identityUnknown': False, 'locationUnknown': False})
             if media_outputs and runtime_config['idle_inhibition_apps'] and inhibition_error:
                 reason = reason or inhibition_error
             if media_outputs and runtime_config['idle_inhibition_apps'] and apps_error:
@@ -1326,9 +1376,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 'fail_safe_reason': reason,
                 'playback_active': audible,
                 'firefox_audio_error': firefox_audio_error,
+                'chromium_audio_errors': browser_errors,
                 'blocking_apps': blocking_apps,
                 'inhibitions_error': inhibition_error,
-                'scan_status': scan_error,
+                'scan_status': (scan_error if runtime_config['firefox_audio_blocks_standby']
+                                else 'Firefox audio detection disabled'),
             })
         except Exception as error:
             # An input disconnect or callback failure must never become silence.
@@ -1382,7 +1434,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             state['device'].close()
         selector.close()
         # Keep D-Bus objects referenced for the entire loop lifetime.
-        del receiver, name
+        del receiver, name, media_receiver, media_name
+        media_bus.close()
         if kde_settings:
             kde_settings.close()
         if power and (not startup_error or power.process is not None or power.may_be_off):
@@ -1699,7 +1752,8 @@ def self_test():
 
             class Object:
                 def __init__(self, *args):
-                    context.receiver = self
+                    if args[1] == '/net/local/CecActivity':
+                        context.receiver = self
 
             def timeout_add(interval, callback):
                 if interval == 100:
@@ -1811,6 +1865,7 @@ def self_test():
                     [device] * input_error_after + [input_error])
             args = SimpleNamespace(kde_timeout=False, cec=True, cec_port='unused',
                                    mapping_ttl=15, require_snapshot=True, device=['unused'],
+                                   firefox_audio_blocks_standby=True,
                                    mute_label=['Mute tab'], axis_deadzone_percent=2.0,
                                    rz_deadzone_percent=5.0,
                                    timeout_seconds=timeout,
@@ -2200,6 +2255,7 @@ def main():
     args.mouse_output = config['mouse_output']
     args.mouse_outputs = config['mouse_outputs']
     args.firefox_audio_blocks_standby = config['firefox_audio_blocks_standby']
+    args.chromium_audio_blocks_standby = config['chromium_audio_blocks_standby']
     args.idle_inhibition_apps = config['idle_inhibition_apps']
     args.force_inhibition_apps = config['force_inhibition_apps']
     args.mute_label = config['mute_labels']

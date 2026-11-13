@@ -63,13 +63,17 @@ configuration, external research repositories and credentials are excluded.
 - Firefox audio detection uses the WebExtension signal when it is installed and
   reports fresh data; otherwise it falls back to AT-SPI's English `Mute tab`
   label. The Firefox row's “Block standby while playing audio” option
-  controls this detection; it uses the displays selected for mouse activity.
-  Other apps' media types cannot currently be detected. Ambiguous/stale window
-  matching blocks OFF.
+  controls this detection and is off by default; it uses the displays selected
+  for mouse activity. Existing saved choices are preserved.
+  Chromium, Google Chrome, Brave, Edge and Vivaldi have separate opt-in audio
+  settings using the optional Chromium extension described below. Other apps'
+  media types cannot currently be detected. Ambiguous/stale window matching
+  blocks OFF.
   The Standby page reports when Firefox audio detection is unavailable instead
   of treating it as inactive. Snapshot interval 2 seconds; mapping TTL 15 seconds.
-  Monitoring warnings appear on Diagnostics; standby remains blocked when
-  Firefox audio status is uncertain. AT-SPI updates are event-driven, with no
+  When enabled, monitoring warnings and Firefox accessibility setup guidance
+  appear on Diagnostics; standby remains blocked when Firefox audio status is
+  uncertain. AT-SPI updates are event-driven, with no
   documented fixed update interval
   ([AT-SPI cache protocol](https://gnome.pages.gitlab.gnome.org/at-spi2-core/devel-docs/doc-org.a11y.atspi.Cache.html)).
   The AT-SPI fallback identifies Firefox by its process executable before
@@ -123,7 +127,6 @@ in `PROVENANCE.md`.
 KWin reports window PIDs. The monitor verifies the host Firefox executable
 through /proc/<pid>/exe, including web apps with custom window classes.
 Missing or invalid process information blocks automatic OFF until recovery.
-Chromium is not supported.
 
 ### Firefox media detection
 
@@ -150,18 +153,59 @@ application audio streams, not the producing tab or display.
 
 Install the user-level native host registration with
 `bash packaging/install-firefox-native-host.sh` (also run by
-`install-user.sh`). Load the extension from
+`install-user.sh`). Installation also creates the unsigned signing package
+`~/.local/share/topcec/topcec-firefox-media.zip`. Load the extension from
 `~/.local/share/topcec/firefox-extension/manifest.json` temporarily through
 Firefox's `about:debugging` during development. For normal Firefox releases,
-the extension needs Mozilla signing; create a ZIP for signing with
-`bash packaging/build-firefox-extension.sh` (output defaults to `dist/`).
+submit the ZIP for signing through [Mozilla Add-ons Developer Hub](https://addons.mozilla.org/developers/)
+and install the signed `.xpi` returned by Mozilla. To create a separate ZIP
+without installing topCEC, run `bash packaging/build-firefox-extension.sh`
+(output defaults to `dist/`).
 Firefox Flatpak native messaging is not claimed as
 supported: its sandbox may prevent launching the host executable outside its
 filesystem, so use the WebExtension path only with a Firefox installation
 whose native-messaging support is confirmed. AT-SPI remains the safe fallback.
 
+### Chromium-based browser media detection
+
+The optional unpacked extension supports Chromium, Google Chrome, Brave, Edge
+and Vivaldi. Each browser has a separate, initially disabled audio option in
+Standby. The extension sends the active title and audible/muted tab flags for
+each browser window to a local native host; it does not send URLs or page
+contents. topCEC matches those titles against KWin windows on the selected mouse
+displays. When a browser window cannot be matched uniquely, or its extension
+data is missing or stale, standby is blocked rather than assuming silence.
+Browser window identification uses KWin's desktop-file and window-class names;
+unrecognized browser variants are not supported.
+
+After running `install-user.sh`, prepare the extension for each browser:
+
+```sh
+python3 ~/.local/share/topcec/packaging/setup-chromium-extension.py chromium --flatpak
+```
+
+Replace `chromium` with `chrome`, `brave`, `edge`, or `vivaldi` as needed.
+Omit `--flatpak` for a native installation. Open the browser's extensions page,
+enable Developer mode, and load the printed directory as an unpacked extension.
+Native-host registration uses each browser's default user-data directory;
+custom `--user-data-dir` profiles require placing the generated native-host
+manifest in that directory's `NativeMessagingHosts` subdirectory instead.
+Copy its ID and rerun the same command with `--extension-id ID`. For a Flatpak
+browser, the setup command prints a narrowly scoped `flatpak override --user
+--talk-name=net.local.topcec.BrowserMedia ...` command; run it and fully restart
+the browser. This grants access to the browser-media-only D-Bus service, not
+topCEC's power-control interface.
+The host requires `python3` and `gdbus` in the browser's environment. Browser
+extension registrations and Flatpak overrides are left in place by the topCEC
+uninstaller; remove the extension and manage the override separately.
+The unpacked extension is not a browser-store release.
+For an RPM installation, the setup script is at
+`/usr/share/topcec/packaging/setup-chromium-extension.py`.
+
 Separate Flatpak profiles on this machine needed GNOME_ACCESSIBILITY=1,
 passed with flatpak run --env=GNOME_ACCESSIBILITY=1 org.mozilla.firefox.
+If Firefox is not accessible to AT-SPI, set `accessibility.force_disabled` to
+`-1` in Firefox's `about:config`, then fully quit and restart Firefox.
 Personal desktop launchers are outside this repository. Fresh profiles must
 complete the Firefox welcome dialog before tabs become accessible. A live test
 of the same process confirmed zero tabs before and one tab after completion.

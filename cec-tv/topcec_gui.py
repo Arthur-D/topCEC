@@ -101,6 +101,8 @@ def config_from_settings(current, values):
                         if item.strip()],
         'firefox_audio_blocks_standby': values.get(
             'firefoxAudioBlocksStandby', current['firefox_audio_blocks_standby']),
+        'chromium_audio_blocks_standby': values.get(
+            'chromiumAudioBlocksStandby', current['chromium_audio_blocks_standby']),
         'idle_inhibition_apps': values.get(
             'idleInhibitionApps', current['idle_inhibition_apps']),
         'force_inhibition_apps': values.get(
@@ -131,6 +133,7 @@ class GuiBackend(QObject):
             if dbus_only is None else bool(dbus_only))
         self.config_path = Path(config_path) if config_path else default_config_path()
         self.config = {'schema_version': 1, **DEFAULT_CONFIG}
+        self._chromium_audio_supported = None
         self._service_status = 'Checking service'
         self._power_state = 'unknown'
         self._simulated_action = None
@@ -405,6 +408,27 @@ class GuiBackend(QObject):
         error = self._service_data['firefox_audio_error']
         if error:
             return 'Firefox audio status is unknown. TV standby is blocked.'
+        return ''
+
+    @Property(str, notify=changed)
+    def firefoxAccessibilityHelp(self):
+        error = self._service_data.get('firefox_audio_error')
+        if (not self.config['firefox_audio_blocks_standby'] or not error
+                or 'WebExtension' in error):
+            return ''
+        return (
+            'If AT-SPI cannot read Firefox, open about:config in Firefox and set '
+            'accessibility.force_disabled to -1, then fully quit and restart Firefox. '
+            'For Firefox Flatpak, you may also need to launch it each time with: '
+            'flatpak run --env=GNOME_ACCESSIBILITY=1 org.mozilla.firefox. '
+            'A fresh Firefox profile must finish the welcome dialog first.')
+
+    @Property(str, notify=changed)
+    def chromiumAudioStatusMessage(self):
+        errors = self._service_data.get('chromium_audio_errors')
+        if isinstance(errors, dict) and errors:
+            return ('Browser audio status is unknown. TV standby is blocked. '
+                    'See Diagnostics for details.')
         return ''
 
     @Property('QVariantList', notify=appsChanged)
@@ -755,7 +779,8 @@ class GuiBackend(QObject):
                 generation, 'Cannot read service configuration: ' + error)
             return
         try:
-            config = validate_config(json.loads(str(reply.arguments()[0])))
+            raw_config = json.loads(str(reply.arguments()[0]))
+            config = validate_config(raw_config)
         except (IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
             self._connection_failed(
                 generation, 'Cannot read service configuration: ' + str(error))
@@ -767,6 +792,7 @@ class GuiBackend(QObject):
                           or source != self._config_source)
         self._config_source = source
         self.config = config
+        self._chromium_audio_supported = 'chromium_audio_blocks_standby' in raw_config
         self.outputs = list(dict.fromkeys(
             ([config['target_output']] if config['target_output'] else []) + self.outputs))
         self.adapters = list(dict.fromkeys(
@@ -801,15 +827,28 @@ class GuiBackend(QObject):
         pending = self._service_data.get('pending_action') or 'none'
         if self._simulated_action:
             pending = ('on' if self._simulated_action == 'on' else 'standby') + ' (simulated)'
+        audio_error = self._service_data.get('firefox_audio_error')
+        audio_enabled = self.config['firefox_audio_blocks_standby']
         diagnostic_items = [
             f"Scan: {self._service_data.get('scan_status') or 'healthy'}",
             'Firefox audio: ' + (
-                self._service_data['firefox_audio_error'] or 'healthy'
+                ('disabled' if not audio_enabled else audio_error or 'healthy')
                 if 'firefox_audio_error' in self._service_data else 'not reported'),
             f"CEC fault: {fault or 'none'}",
             f"Pending action: {pending}",
             f"Settings error: {self._service_data.get('settings_error') or 'none'}",
         ]
+        if self.firefoxAccessibilityHelp:
+            diagnostic_items.append('Firefox accessibility: ' + self.firefoxAccessibilityHelp)
+        errors = self._service_data.get('chromium_audio_errors')
+        if isinstance(errors, dict):
+            for browser, error in sorted(errors.items()):
+                diagnostic_items.append(f'{browser} audio: {error}')
+            if errors:
+                diagnostic_items.append(
+                    'Check that the topCEC extension and native host are installed for '
+                    'each selected browser. For Flatpak, grant the documented '
+                    'browser-media D-Bus permission and restart the browser.')
         self._diagnostics = '\n'.join(diagnostic_items)
 
     def _equipment_reply(self, generation, reply):
@@ -959,7 +998,7 @@ class GuiBackend(QObject):
             # Older hosts returned the complete configuration without its version.
             optional = {'consider_input_devices', 'mouse_output', 'mouse_outputs',
                         'firefox_audio_blocks_standby', 'idle_inhibition_apps',
-                        'force_inhibition_apps'}
+                        'force_inhibition_apps', 'chromium_audio_blocks_standby'}
             if (isinstance(config, dict) and set(DEFAULT_CONFIG) - optional <= set(config)
                     and set(config) <= set(DEFAULT_CONFIG)):
                 config = {'schema_version': SCHEMA_VERSION, **config}
@@ -1018,6 +1057,12 @@ class GuiBackend(QObject):
                 payload = {'schema_version': 1, **validated}
                 if not payload['device_axis_deadzones']:
                     del payload['device_axis_deadzones']
+                if self._chromium_audio_supported is False:
+                    if payload['chromium_audio_blocks_standby']:
+                        raise RuntimeError(
+                            'Chromium browser audio detection requires an updated '
+                            'host backend. Update it and restart topcec.service.')
+                    del payload['chromium_audio_blocks_standby']
                 serialized = json.dumps(payload, sort_keys=True)
                 self._action_message = ('Retrying monitoring with the saved settings.'
                                         if retry_monitoring else

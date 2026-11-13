@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "topCEC browser media status",
+  "version": "0.1.0",
+  "description": "Reports tab audio flags and active window titles to topCEC.",
+  "permissions": ["tabs", "nativeMessaging"],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

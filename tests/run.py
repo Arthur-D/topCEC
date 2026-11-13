@@ -18,7 +18,7 @@ def guard(event, args):
         if path.startswith(('/dev/', '/sys/', '/proc/')):
             raise RuntimeError('Hardware-free test blocked file access: ' + path)
 
-if mode not in ('packaging', 'firefox-media'):
+if mode not in ('packaging', 'firefox-media', 'chromium-media'):
     sys.addaudithook(guard)
 sys.argv = [str(ROOT / 'cec-tv/monitor.py'), '--self-test']
 if mode == 'self-test':
@@ -41,6 +41,10 @@ elif mode == 'providers':
     runpy.run_path(str(path), run_name='__main__')
 elif mode == 'firefox-media':
     path = ROOT / 'tests/test_firefox_media.py'
+    sys.argv = [str(path)]
+    runpy.run_path(str(path), run_name='__main__')
+elif mode == 'chromium-media':
+    path = ROOT / 'tests/test_chromium_media.py'
     sys.argv = [str(path)]
     runpy.run_path(str(path), run_name='__main__')
 elif mode == 'configuration':
