@@ -2193,6 +2193,47 @@ class GuiChecks(unittest.TestCase):
         QMetaObject.invokeMethod(window.findChild(QObject, 'autoSaveTimer'), 'stop')
         engine.deleteLater()
 
+    def test_app_controls_share_a_line_when_wide_and_wrap_when_compact(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._status_poll_timer.stop()
+        firefox = {'id': 'firefox.desktop', 'name': 'Mozilla Firefox'}
+        player = {'id': 'player.desktop', 'name': 'Video Player'}
+        backend._service_data = {
+            'installed_apps': [firefox, player], 'observed_apps': [player],
+            'active_inhibitor_apps': [],
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.resize(1300, 900)
+        window.show()
+        window.setProperty('currentSection', 2)
+        QTest.qWait(50)
+
+        firefox_row = self.app_row(engine, window, 0)
+        player_row = self.app_row(engine, window, 1)
+        firefox_controls = [firefox_row.findChild(QQuickItem, name) for name in (
+            'appName:firefox.desktop', 'firefoxAudio',
+            'idleApp:firefox.desktop', 'forceApp:firefox.desktop')]
+        player_controls = [player_row.findChild(QQuickItem, name) for name in (
+            'appName:player.desktop', 'idleApp:player.desktop', 'forceApp:player.desktop')]
+        for controls in (firefox_controls, player_controls):
+            self.assertTrue(all(control.y() == controls[0].y() for control in controls))
+            for left, right in zip(controls, controls[1:]):
+                self.assertLessEqual(left.x() + left.width(), right.x())
+
+        window.resize(380, 760)
+        QTest.qWait(50)
+        self.assertGreater(firefox_controls[-1].y(), firefox_controls[0].y())
+        for control in firefox_controls + player_controls:
+            self.assertLessEqual(control.x() + control.width(), control.parentItem().width() + 1)
+            self.assertLessEqual(control.y() + control.height(), control.parentItem().height() + 1)
+        engine.deleteLater()
+
     def test_invalid_settings_are_rejected(self):
         with self.assertRaises(ValueError):
             config_from_settings(self.config, {**self.values, 'timeoutMode': 'other'})
