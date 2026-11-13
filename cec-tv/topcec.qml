@@ -1612,13 +1612,9 @@ Kirigami.ApplicationWindow {
                                                 root.markSettingsDirty()
                                             }
                                         }
-                                    }
-                                    Flow {
-                                        Layout.fillWidth: true
-                                        visible: !modelData.audioOnly
-                                        spacing: Kirigami.Units.smallSpacing
                                         CopyableCheckBox {
                                             objectName: "idleApp:" + modelData.id
+                                            visible: !modelData.audioOnly
                                             text: "Allow screen standby"
                                             Accessible.name: modelData.name + " allow screen standby"
                                             checked: !root.idleAppsDraft.includes(modelData.id)
@@ -1626,6 +1622,7 @@ Kirigami.ApplicationWindow {
                                         }
                                         CopyableCheckBox {
                                             objectName: "forceApp:" + modelData.id
+                                            visible: !modelData.audioOnly
                                             text: "Force block screen standby"
                                             Accessible.name: modelData.name + " force block screen standby"
                                             checked: root.forceAppsDraft.includes(modelData.id)
