@@ -404,7 +404,7 @@ class GuiBackend(QObject):
             return 'Firefox audio status is unavailable. Update the host service.'
         error = self._service_data['firefox_audio_error']
         if error:
-            return f'Firefox audio status is unavailable: {error}. TV standby is blocked as a precaution.'
+            return 'Firefox audio status is unknown. TV standby is blocked.'
         return ''
 
     @Property('QVariantList', notify=appsChanged)
@@ -803,6 +803,9 @@ class GuiBackend(QObject):
             pending = ('on' if self._simulated_action == 'on' else 'standby') + ' (simulated)'
         diagnostic_items = [
             f"Scan: {self._service_data.get('scan_status') or 'healthy'}",
+            'Firefox audio: ' + (
+                self._service_data['firefox_audio_error'] or 'healthy'
+                if 'firefox_audio_error' in self._service_data else 'not reported'),
             f"CEC fault: {fault or 'none'}",
             f"Pending action: {pending}",
             f"Settings error: {self._service_data.get('settings_error') or 'none'}",
