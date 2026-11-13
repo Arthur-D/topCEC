@@ -1935,7 +1935,8 @@ class GuiChecks(unittest.TestCase):
         backend._service_data = {
             'installed_apps': [{'id': 'player.desktop', 'name': 'Video Player'},
                                {'id': 'editor.desktop', 'name': 'Editor'}],
-            'observed_apps': [{'id': 'player.desktop', 'name': 'Video Player'}],
+            'observed_apps': [{'id': 'player.desktop', 'name': 'Video Player'},
+                              {'id': 'archived.desktop', 'name': 'Archived'}],
             'active_inhibitor_apps': [{'id': 'player.desktop', 'name': 'Video Player'}],
             'installed_apps_error': None,
             'inhibitions_error': None,
@@ -1950,17 +1951,30 @@ class GuiChecks(unittest.TestCase):
         window.setProperty('currentSection', 2)
         app.processEvents()
         repeater = window.findChild(QObject, 'installedAppsScroll')
-        self.assertEqual(repeater.property('count'), 2)
+        self.assertEqual(repeater.property('count'), 3)
         engine.rootContext().setContextProperty('appChoicesRepeater', repeater)
         def item(index):
             return QQmlExpression(engine.rootContext(), window,
                                   f'appChoicesRepeater.itemAtIndex({index})').evaluate()[0]
         player = item(0)
         self.assertEqual(player.objectName(), 'appRow:player.desktop')
-        self.assertEqual(item(1).objectName(), 'appRow:removed.desktop')
-        self.assertEqual(player.findChild(QObject, 'idleApp:player.desktop').property('text'),
-                         'Blocking screen standby')
-        QMetaObject.invokeMethod(player.findChild(QObject, 'idleApp:player.desktop'), 'click')
+        removed = item(2)
+        self.assertEqual(removed.objectName(), 'appRow:removed.desktop')
+        allow = player.findChild(QObject, 'idleApp:player.desktop')
+        self.assertEqual(allow.property('text'), 'Allow screen standby')
+        self.assertTrue(allow.property('checked'))
+        removed_allow = removed.findChild(QObject, 'idleApp:removed.desktop')
+        self.assertFalse(removed_allow.property('checked'))
+        QMetaObject.invokeMethod(removed_allow, 'click')
+        self.assertTrue(removed_allow.property('checked'))
+        self.assertEqual(json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+            ['idleInhibitionApps'], [])
+        QMetaObject.invokeMethod(removed_allow, 'click')
+        self.assertEqual(player.findChild(QObject, 'forceApp:player.desktop').property('text'),
+                         'Force block screen standby')
+        QMetaObject.invokeMethod(allow, 'click')
+        self.assertFalse(allow.property('checked'))
         QMetaObject.invokeMethod(player.findChild(QObject, 'forceApp:player.desktop'), 'click')
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
@@ -1969,8 +1983,24 @@ class GuiChecks(unittest.TestCase):
                          values['idleInhibitionApps'])
         self.assertEqual(config_from_settings(backend.config, values)['force_inhibition_apps'],
                          ['player.desktop'])
+        search = window.findChild(QObject, 'appSearch')
+        self.assertIn('currently', search.property('placeholderText'))
+        search.setProperty('text', 'archived')
+        app.processEvents()
+        self.assertEqual(repeater.property('count'), 0)
+        search.setProperty('text', 'player')
+        app.processEvents()
+        self.assertEqual(repeater.property('count'), 1)
+        self.assertEqual(item(0).objectName(), 'appRow:player.desktop')
+        backend._service_data['active_inhibitor_apps'] = []
+        backend.changed.emit()
+        app.processEvents()
+        self.assertEqual(repeater.property('count'), 0)
+        backend._service_data['active_inhibitor_apps'] = [{'id': 'player.desktop'}]
+        backend.changed.emit()
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
-        window.findChild(QObject, 'appSearch').setProperty('text', 'editor')
+        self.assertIn('all installed', search.property('placeholderText'))
+        search.setProperty('text', 'editor')
         app.processEvents()
         self.assertEqual(repeater.property('count'), 1)
         editor = item(0)
@@ -1979,7 +2009,7 @@ class GuiChecks(unittest.TestCase):
         window.findChild(QObject, 'appSearch').setProperty('text', '')
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         app.processEvents()
-        self.assertEqual(repeater.property('count'), 3)
+        self.assertEqual(repeater.property('count'), 4)
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
         self.assertEqual(values['forceInhibitionApps'], ['player.desktop', 'editor.desktop'])
