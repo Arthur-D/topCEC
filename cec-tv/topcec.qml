@@ -219,7 +219,6 @@ Kirigami.ApplicationWindow {
     }
 
     readonly property bool equipmentReady: outputField.acceptable && adapterField.acceptable
-        && (!considerInputDevices.checked || inputPaths().length > 0)
 
     function inputPaths() {
         return devicesField.text.split("\n").map(path => path.trim()).filter(path => path.length)
@@ -463,8 +462,6 @@ Kirigami.ApplicationWindow {
             return "Connect to the host service to save settings."
         if (!outputField.acceptable || !adapterField.acceptable)
             return "Choose a display and CEC adapter."
-        if (considerInputDevices.checked && !inputPaths().length)
-            return "Select at least one input device."
         if (root.settingsDirty)
             return "Saving changes..."
         if (topcec.actionMessage.length)
@@ -595,8 +592,7 @@ Kirigami.ApplicationWindow {
                 if (equipment.length === 1)
                     selection = equipment[0].path
             } else if (!explicitSelection && !manualEntry && equipment.length === 1
-                    && (!selection.length || !equipment.some(item => item.path === selection
-                        || (item.aliases || []).includes(selection)))) {
+                    && !selection.length) {
                 selection = equipment[0].path
                 automaticSelection = true
             }
@@ -630,7 +626,7 @@ Kirigami.ApplicationWindow {
     function loadSettings() {
         if (settingsDirty)
             return
-        let showConfigured = topcec.configurationSource === "saved"
+        let showConfigured = topcec.configurationSource !== "defaults"
         outputField.load(topcec.setting("target_output"), showConfigured)
         adapterField.load(topcec.setting("cec_port"), showConfigured)
         timeoutMode.currentIndex = topcec.usesKdeTimeout() ? 0

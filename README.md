@@ -508,9 +508,10 @@ Tab/Shift+Tab and Space work in it. **Copy selected paths** copies the complete
 selection, including retained unlisted paths. Missing selections stay visible
 in a separate notice and are never silently replaced with another device.
 
-Input checkbox changes apply automatically; other field changes remain drafts
-until **Save and apply settings** confirms them. On save, detected input aliases
-such as
+Input checkbox changes and other settings are saved automatically. An empty
+input selection is allowed; it does not prevent other settings from being saved.
+Saved display and adapter selections are retained when discovery finds different
+hardware, until explicitly changed. On save, detected input aliases such as
 `/dev/input/event10` are converted to the inventory's preferred stable
 `/dev/input/by-id` or `by-path` name when available. This avoids event-number
 changes making a saved keyboard selection look like a different device after

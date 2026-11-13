@@ -73,6 +73,55 @@ class GuiChecks(unittest.TestCase):
         self.assertFalse(window.property('settingsDirty'))
         engine.deleteLater()
 
+    def test_autosave_retains_unavailable_equipment_and_empty_input_selection(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        for saved_status in (True, None):
+            with self.subTest(configuration_saved=saved_status):
+                backend = GuiBackend(dbus_only=True)
+                backend._service_data = {'service': 'running'}
+                if saved_status is not None:
+                    backend._service_data['configuration_saved'] = saved_status
+                initial = {**DEFAULT_CONFIG, 'target_output': 'TV-SAVED',
+                           'cec_port': '/dev/saved-adapter', 'devices': []}
+                backend._config_reply(0, self.reply({'schema_version': 1, **initial}))
+                backend._set_equipment({
+                    'outputs': [{'path': 'OTHER', 'label': 'Other display'}],
+                    'adapters': [{'path': '/dev/other', 'label': 'Other adapter'}],
+                    'inputs': [], 'errors': [],
+                }, '')
+                engine = QQmlApplicationEngine()
+                engine.rootContext().setContextProperty('topcec', backend)
+                engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+                window = engine.rootObjects()[0]
+                self.assertTrue(window.property('equipmentReady'))
+                self.assertEqual(window.findChild(QObject, 'outputField').property('valueToSave'),
+                                 initial['target_output'])
+                self.assertEqual(window.findChild(QObject, 'adapterField').property('valueToSave'),
+                                 initial['cec_port'])
+                requests = []
+                interface = Mock(isValid=Mock(return_value=True))
+                with patch.object(backend, '_service_interface', return_value=interface), \
+                        patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                                     requests.append((method, callback, args))), \
+                        patch.object(backend, 'refresh'):
+                    QQmlExpression(engine.rootContext(), window,
+                                   'setIdleApp("player.desktop", true)').evaluate()
+                    QTest.qWait(350)
+                    self.assertEqual(len(requests), 1)
+                    method, callback, arguments = requests.pop()
+                    self.assertEqual(method, 'ApplySettings')
+                    saved = json.loads(arguments[0])
+                    self.assertEqual(saved['target_output'], initial['target_output'])
+                    self.assertEqual(saved['cec_port'], initial['cec_port'])
+                    self.assertEqual(saved['devices'], [])
+                    self.assertEqual(saved['idle_inhibition_apps'], ['player.desktop'])
+                    callback(self.reply({'accepted': True, 'applied_live': True,
+                                         'config': saved}))
+                    self.assertFalse(window.property('settingsDirty'))
+                    self.assertEqual(backend.config['idle_inhibition_apps'], ['player.desktop'])
+                engine.deleteLater()
+                app.processEvents()
+
     def test_standby_edits_autosave_after_inflight_save(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
@@ -250,6 +299,31 @@ class GuiChecks(unittest.TestCase):
             self.assertFalse(backend.hasInputDraft())
             self.assertEqual(backend.deviceList(), '')
 
+    def test_native_offline_input_selection_is_saved_and_failures_remain_pending(self):
+        self.autosave_patch.stop()
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(topcec_gui, 'available_outputs', return_value=[]), \
+                patch.object(topcec_gui, 'available_adapters', return_value=[]):
+            path = Path(directory) / 'config.json'
+            initial = {**DEFAULT_CONFIG, 'devices': ['/dev/input/old'],
+                       'timeout_seconds': 73}
+            save_config(path, {'schema_version': 1, **initial})
+            backend = GuiBackend(path, dbus_only=False)
+            backend._connection_state = 'unavailable'
+            with patch.object(backend, 'refresh'):
+                with patch.object(topcec_gui, 'save_config', side_effect=OSError('disk full')) as save:
+                    backend.rememberInputDraft('/dev/input/new')
+                    self.assertTrue(backend.hasInputDraft())
+                    self.assertIn('disk full', backend.actionMessage)
+                    backend._save_pending_inputs()
+                    self.assertEqual(save.call_count, 1)
+                    self.assertEqual(load_config(path)['devices'], ['/dev/input/old'])
+                backend.rememberInputDraft('/dev/input/new')
+                self.assertFalse(backend.hasInputDraft())
+                saved = load_config(path)
+                self.assertEqual(saved['devices'], ['/dev/input/new'])
+                self.assertEqual(saved['timeout_seconds'], 73)
+
     @staticmethod
     def reply(value):
         return SimpleNamespace(
@@ -327,7 +401,7 @@ class GuiChecks(unittest.TestCase):
                 method, callback, arguments = requests.pop()
                 self.assertEqual(method, 'ApplySettings')
                 submitted = json.loads(arguments[0])
-                self.assertEqual(submitted['target_output'], 'eDP-1')
+                self.assertEqual(submitted['target_output'], initial['target_output'])
                 self.assertEqual(submitted['cec_port'], initial['cec_port'])
                 self.assertEqual(submitted['devices'],
                                  ['/dev/input/by-path/keyboard', '/dev/input/by-id/mouse'])
@@ -1026,9 +1100,9 @@ class GuiChecks(unittest.TestCase):
         inventory(detected_outputs, detected_adapters, detected_inputs)
         for field in (output, adapter):
             self.assertEqual(field.property('count'), 1)
-            self.assertEqual(field.property('currentIndex'), 0)
+            self.assertEqual(field.property('currentIndex'), -1)
             self.assertFalse(field.property('editable'))
-            self.assertNotIn('Choose a detected', field.property('displayText'))
+            self.assertIn('Choose a detected', field.property('displayText'))
         device = QQmlExpression(
             engine.rootContext(), window, 'choices.itemAt(0)').evaluate()[0]
         self.assertFalse(device.property('checked'))
@@ -1325,8 +1399,8 @@ class GuiChecks(unittest.TestCase):
         update_inventory(inventory)
         for field in (configured_output, configured_adapter):
             self.assertEqual(field.property('count'), 1)
-            self.assertEqual(field.property('currentIndex'), 0)
-        self.assertEqual(configured_output.property('editText'), 'DP-NEW')
+            self.assertEqual(field.property('currentIndex'), -1)
+        self.assertEqual(configured_output.property('editText'), original_config['target_output'])
         self.assertEqual(configured_inputs.property('text'), '\n'.join(original_config['devices']))
         self.assertEqual(backend.config, original_config)
         engine.rootContext().setContextProperty('detectedChoice', configured_output)
@@ -1433,6 +1507,7 @@ class GuiChecks(unittest.TestCase):
                     self.assertIn('unavailable', window.findChild(QObject, 'retainedInputs').property('text'))
                 self.assertEqual(devices.property('text'), '\n'.join(DEFAULT_CONFIG['devices']))
                 self.assertFalse(window.property('settingsDirty'))
+            self.assertGreaterEqual(interface.asyncCallWithArgumentList.call_count, 9)
             existing.setProperty('checked', False)
             QMetaObject.invokeMethod(existing, 'toggled')
             self.assertNotIn('/dev/input/event10', devices.property('text'))
@@ -1444,7 +1519,6 @@ class GuiChecks(unittest.TestCase):
             available.setProperty('checked', True)
             QMetaObject.invokeMethod(available, 'toggled')
             self.assertIn('/dev/input/by-id/real-kbd', devices.property('text'))
-            self.assertEqual(interface.asyncCallWithArgumentList.call_count, 9)
             self.assertEqual(bus.connect.call_count, 1)
             engine.deleteLater()
 
@@ -1898,7 +1972,7 @@ class GuiChecks(unittest.TestCase):
             backend.config, {**legacy_values, 'targetOutput': 'DP-1'})
         self.assertIsNone(legacy_config['mouse_outputs'])
         self.assertEqual(legacy_config['target_output'], 'DP-1')
-        self.assertFalse(window.property('equipmentReady'))
+        self.assertTrue(window.property('equipmentReady'))
         QMetaObject.invokeMethod(checkbox, 'click')
         self.assertTrue(window.property('settingsDirty'))
         self.assertTrue(window.property('equipmentReady'))

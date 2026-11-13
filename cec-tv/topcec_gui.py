@@ -482,7 +482,8 @@ class GuiBackend(QObject):
         return self._input_preferences.contains('pending')
 
     def _save_pending_inputs(self):
-        if not self.hasInputDraft() or self._settings_in_flight or not self.backendAvailable:
+        if (not self.hasInputDraft() or self._settings_in_flight
+                or (self.dbus_only and not self.backendAvailable)):
             return
         if self.deviceList() == self._failed_input_draft:
             return
@@ -1039,7 +1040,7 @@ class GuiBackend(QObject):
                 subprocess.TimeoutExpired) as error:
             self._settings_in_flight = False
             if inputs_only:
-                self._failed_input_draft = self._submitted_input_draft
+                self._failed_input_draft = values.get('devices')
             self._action_message = (
                 'Settings saved, but could not be confirmed: ' + str(error)
                 if config_saved else 'Could not apply settings: ' + str(error))
