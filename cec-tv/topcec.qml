@@ -405,6 +405,20 @@ Kirigami.ApplicationWindow {
     readonly property bool serviceHealthy: topcec.backendAvailable
         && topcec.serviceStatus === "running"
     readonly property bool cecAdapterSelected: adapterField.detected
+    function powerStateText() {
+        if (root.serviceHealthy) {
+            if (!root.cecAdapterSelected)
+                return adapterField.availabilityKnown
+                    ? "No CEC adapter selected" : "CEC adapter detection unavailable"
+            if (!outputField.detected) {
+                if (!outputField.availabilityKnown)
+                    return "Display detection unavailable"
+                return outputField.equipment.length
+                    ? "No display selected" : "No display detected"
+            }
+        }
+        return topcec.powerState.replace(/_/g, " ")
+    }
     readonly property bool monitoringWarning: topcec.backendAvailable
         && (topcec.serviceStatus === "configuration-only" || root.standbyBlocked)
     readonly property string monitoringWarningText: root.standbyBlocked
@@ -1030,9 +1044,7 @@ Kirigami.ApplicationWindow {
                                     spacing: Kirigami.Units.smallSpacing
                                     SelectableLabel {
                                         objectName: "serviceStatusLabel"
-                                        text: root.serviceHealthy && !root.cecAdapterSelected
-                                            ? "Monitoring, no CEC adapter selected"
-                                            : root.headerStatus + ","
+                                        text: root.headerStatus + ","
                                         color: root.serviceHealthy
                                             ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.textColor
                                     }
@@ -1040,7 +1052,7 @@ Kirigami.ApplicationWindow {
                                         objectName: "powerStateLabel"
                                         Layout.fillWidth: true
                                         font.bold: true
-                                        text: topcec.powerState.replace(/_/g, " ")
+                                        text: root.powerStateText()
                                     }
                                 }
                             }
