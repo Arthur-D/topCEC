@@ -105,7 +105,12 @@ def discover_apps():
         identity = app.get_id()
         name = app.get_display_name()
         if identity and name:
-            apps.setdefault(identity, {'id': identity, 'name': name})
+            row = {'id': identity, 'name': name}
+            get_window_class = getattr(app, 'get_startup_wm_class', None)
+            window_class = get_window_class() if get_window_class else None
+            if window_class:
+                row['window_class'] = window_class
+            apps.setdefault(identity, row)
     return sorted(apps.values(), key=lambda app: (app['name'].casefold(), app['id']))
 
 

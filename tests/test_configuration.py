@@ -140,6 +140,8 @@ class ConfigurationChecks(unittest.TestCase):
             {'schema_version': SCHEMA_VERSION, 'consider_input_devices': 1},
             {'schema_version': SCHEMA_VERSION, 'firefox_audio_blocks_standby': 1},
             {'schema_version': SCHEMA_VERSION, 'idle_inhibition_apps': ['a', 'a']},
+            {'schema_version': SCHEMA_VERSION, 'force_inhibition_apps': ['a', 'a']},
+            {'schema_version': SCHEMA_VERSION, 'force_inhibition_apps': ['']},
             {'schema_version': SCHEMA_VERSION, 'mouse_output': ''},
             {'schema_version': SCHEMA_VERSION, 'mouse_outputs': ['DP-1', 'DP-1']},
             {'schema_version': SCHEMA_VERSION, 'mouse_outputs': ['']},

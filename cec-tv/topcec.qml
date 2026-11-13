@@ -25,6 +25,7 @@ Kirigami.ApplicationWindow {
     property bool mouseOutputsLegacy: false
     property bool mouseOutputsFollowTarget: false
     property var idleAppsDraft: []
+    property var forceAppsDraft: []
     property var retainedAppIds: []
     property real defaultAxisDeadzone: 2
     property real defaultRzDeadzone: 5
@@ -150,6 +151,7 @@ Kirigami.ApplicationWindow {
             muteLabels: labelsField.text,
             firefoxAudioBlocksStandby: firefoxAudio.checked,
             idleInhibitionApps: idleAppsDraft,
+            forceInhibitionApps: forceAppsDraft,
             axisDeadzone: defaultAxisDeadzone,
             rzDeadzone: defaultRzDeadzone,
             deviceAxisDeadzones: axisDraft
@@ -644,20 +646,31 @@ Kirigami.ApplicationWindow {
         labelsField.text = topcec.muteLabelList()
         firefoxAudio.checked = topcec.setting("firefox_audio_blocks_standby")
         idleAppsDraft = Array.from(topcec.setting("idle_inhibition_apps") || [])
-        retainedAppIds = idleAppsDraft.slice()
+        forceAppsDraft = Array.from(topcec.setting("force_inhibition_apps") || [])
+        retainedAppIds = [...new Set([...idleAppsDraft, ...forceAppsDraft])]
         defaultAxisDeadzone = topcec.setting("axis_deadzone_percent")
         defaultRzDeadzone = topcec.setting("rz_deadzone_percent")
         axisDraft = JSON.parse(JSON.stringify(topcec.setting("device_axis_deadzones") || {}))
     }
 
     function appChoices() {
-        let apps = topcec.installedApps.slice()
+        let apps = topcec.observedApps.slice()
+        if (showAllApps.checked) {
+            for (let app of topcec.installedApps)
+                if (!apps.some(item => item.id === app.id))
+                    apps.push(app)
+        }
         for (let id of retainedAppIds) {
-            if (!apps.some(app => app.id === id))
-                apps.push({id: id, name: id + " (not installed)"})
+            if (!apps.some(app => app.id === id)) {
+                let installed = topcec.installedApps.find(app => app.id === id)
+                apps.push(installed || {id: id, name: id + " (not installed)"})
+            }
         }
         let query = appSearch.text.trim().toLowerCase()
         return apps.filter(app => !query || (app.name + " " + app.id).toLowerCase().includes(query))
+            .sort((a, b) => Number(topcec.activeInhibitorApps.includes(b.id))
+                - Number(topcec.activeInhibitorApps.includes(a.id))
+                || a.name.localeCompare(b.name))
     }
 
     function selectedMouseDisplays() {
@@ -689,11 +702,17 @@ Kirigami.ApplicationWindow {
         root.markSettingsDirty()
     }
 
+    function setForceApp(id, enabled) {
+        forceAppsDraft = enabled ? [...forceAppsDraft.filter(item => item !== id), id]
+            : forceAppsDraft.filter(item => item !== id)
+        root.markSettingsDirty()
+    }
+
     Component.onCompleted: loadSettings()
     Connections {
         target: topcec
         function onAppsChanged() {
-            root.retainedAppIds = [...new Set([...root.retainedAppIds, ...root.idleAppsDraft])]
+            root.retainedAppIds = [...new Set([...root.retainedAppIds, ...root.idleAppsDraft, ...root.forceAppsDraft])]
         }
         function onConfigurationChanged() { root.loadSettings() }
         function onSettingsEnabledChanged() {
@@ -1494,7 +1513,17 @@ Kirigami.ApplicationWindow {
                             }
                             SelectableLabel {
                                 Layout.fillWidth: true
-                                text: "Only supported media controls are shown. Select apps whose Plasma idle-inhibition requests may also block standby."
+                                text: "Idle inhibition follows an app's Plasma request. Force inhibit blocks TV standby while the app has a window on a selected display; it does not prevent computer sleep."
+                            }
+                            CopyableCheckBox {
+                                id: showAllApps
+                                objectName: "showAllApps"
+                                text: "Show all installed apps"
+                                onClicked: {
+                                    if (!checked)
+                                        root.retainedAppIds = [...new Set([...root.retainedAppIds,
+                                            ...root.idleAppsDraft, ...root.forceAppsDraft])]
+                                }
                             }
                             Controls.TextField {
                                 id: appSearch
@@ -1510,8 +1539,14 @@ Kirigami.ApplicationWindow {
                             }
                             SelectableLabel {
                                 Layout.fillWidth: true
-                                visible: appSearch.text.length > 0 && root.appChoices().length === 0
-                                text: "No apps match this search."
+                                visible: topcec.inhibitionHistoryMessage.length > 0
+                                text: topcec.inhibitionHistoryMessage
+                            }
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                visible: root.appChoices().length === 0
+                                text: appSearch.text.length > 0 ? "No apps match this search."
+                                    : "No apps have requested idle inhibition yet. Show all installed apps to choose one."
                             }
                             ListView {
                                 objectName: "installedAppsScroll"
@@ -1521,13 +1556,32 @@ Kirigami.ApplicationWindow {
                                 clip: true
                                 model: root.appChoices()
                                 Controls.ScrollBar.vertical: Controls.ScrollBar {}
-                                delegate: CopyableCheckBox {
+                                delegate: ColumnLayout {
                                     required property var modelData
-                                    objectName: "idleApp:" + modelData.id
+                                    objectName: "appRow:" + modelData.id
                                     width: ListView.view.width
-                                    text: modelData.name + " · Idle inhibition"
-                                    checked: root.idleAppsDraft.includes(modelData.id)
-                                    onClicked: root.setIdleApp(modelData.id, checked)
+                                    SelectableLabel {
+                                        Layout.fillWidth: true
+                                        text: modelData.name
+                                    }
+                                    Flow {
+                                        Layout.fillWidth: true
+                                        spacing: Kirigami.Units.smallSpacing
+                                        CopyableCheckBox {
+                                            objectName: "idleApp:" + modelData.id
+                                            text: "Idle inhibition"
+                                            Accessible.name: modelData.name + " idle inhibition"
+                                            checked: root.idleAppsDraft.includes(modelData.id)
+                                            onClicked: root.setIdleApp(modelData.id, checked)
+                                        }
+                                        CopyableCheckBox {
+                                            objectName: "forceApp:" + modelData.id
+                                            text: "Force inhibit"
+                                            Accessible.name: modelData.name + " force inhibit"
+                                            checked: root.forceAppsDraft.includes(modelData.id)
+                                            onClicked: root.setForceApp(modelData.id, checked)
+                                        }
+                                    }
                                 }
                             }
                         }

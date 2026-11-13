@@ -26,6 +26,15 @@ class EquipmentChecks(unittest.TestCase):
                 {'id': 'hidden.desktop', 'name': 'Hidden'},
                 {'id': 'one.desktop', 'name': 'One'}])
 
+    def test_discovered_apps_expose_startup_window_class(self):
+        app = SimpleNamespace(get_id=lambda: 'player.desktop',
+                             get_display_name=lambda: 'Player',
+                             get_startup_wm_class=lambda: 'PlayerWindow')
+        gio = SimpleNamespace(AppInfo=SimpleNamespace(get_all=lambda: [app]))
+        with patch.dict(sys.modules, {'gi.repository': SimpleNamespace(Gio=gio)}):
+            self.assertEqual(equipment.discover_apps(), [
+                {'id': 'player.desktop', 'name': 'Player', 'window_class': 'PlayerWindow'}])
+
     def test_inventory_uses_stable_paths_names_and_connected_displays(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

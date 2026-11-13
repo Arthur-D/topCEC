@@ -74,7 +74,17 @@ configuration, external research repositories and credentials are excluded.
   “Currently blocking standby”; deselecting an app affects topCEC, not Plasma's
   own power policy. Unknown app identity or display, stale Plasma status, and
   failed installed-app discovery block standby when an app is selected. Selected
-  app IDs remain saved if an app is uninstalled.
+  app IDs remain saved if an app is uninstalled. The default list shows current
+  and previously observed idle-inhibiting apps and selected apps; “Show all
+  installed apps” includes the rest. Observed app names are stored in
+  `observed-inhibitors.json` beside the host configuration.
+- Each app also has a “Force inhibit” option: an open window on a selected mouse
+  display blocks TV standby even without an app inhibition request. A window on
+  an unknown display, or a stale window snapshot, blocks conservatively. This
+  matches KWin's desktop-file or window-class identity, including a desktop
+  entry's `StartupWMClass`. An unidentified window blocks conservatively.
+  Background processes without windows do not count. It does not inhibit Plasma
+  idle or system sleep.
 - Axis deadzones: ABS_RZ 5%, other axes 2%. Missing input devices stop the monitor;
   systemd retries after 15 seconds. Failed ON can retry upon activity after 10 seconds.
 - CEC operations are bounded by a 130-second monitor deadline. An unconfirmed OFF

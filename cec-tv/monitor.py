@@ -28,7 +28,8 @@ from configuration import (
     validate_config, mouse_outputs,
 )
 from firefox_media import FirefoxWebExtensionProvider
-from standby_apps import PlasmaInhibitions, decode_windows, matching_inhibitions
+from standby_apps import (InhibitionHistory, PlasmaInhibitions, decode_windows,
+                          forced_inhibitions, matching_inhibitions, observed_apps)
 from providers import ActivityProvider as ActivityProviderContract
 from providers import CecBackend, MediaProvider as MediaProviderContract
 
@@ -690,6 +691,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     }
     config_path = (Path(args.config).expanduser()
                    if getattr(args, 'config', None) else default_config_path())
+    inhibition_history = InhibitionHistory(config_path.parent / 'observed-inhibitors.json')
     runtime_config = validate_config({
         'schema_version': 1,
         'target_output': target_output,
@@ -703,6 +705,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'firefox_audio_blocks_standby': getattr(
             args, 'firefox_audio_blocks_standby', True),
         'idle_inhibition_apps': getattr(args, 'idle_inhibition_apps', []),
+        'force_inhibition_apps': getattr(args, 'force_inhibition_apps', []),
         'cec_enabled': bool(args.cec),
         'cec_port': args.cec_port,
         'kde_timeout': bool(args.kde_timeout),
@@ -977,6 +980,14 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 'installed_apps': equipment_snapshot.get('apps'),
                 'installed_apps_error': equipment_snapshot.get(
                     'apps_error', 'Installed app discovery has not completed'),
+                'observed_apps': observed_apps(
+                    inhibition_history.names, equipment_snapshot.get('apps') or []),
+                'active_inhibitor_apps': observed_apps(
+                    [request['app'] for request in plasma_inhibitions.requests
+                     if request['kind'] == 'idle' and request['app'].strip()
+                     and plasma_inhibitions.health(time.monotonic()) is None],
+                    equipment_snapshot.get('apps') or []),
+                'inhibition_history_error': inhibition_history.error,
             }, sort_keys=True)
 
         @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
@@ -1069,6 +1080,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         nonlocal scan_error, previous_status, warning_reported, previous_playback
         nonlocal startup_error, selector
         plasma_inhibitions.poll(time.monotonic())
+        inhibition_history.observe(plasma_inhibitions.requests, time.monotonic())
         if startup_error:
             try:
                 if power is not None and (power.process is not None or power.pending == 'on'):
@@ -1212,12 +1224,16 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 app_windows_stamp is not None
                 and now - app_windows_stamp <= mapping.ttl,
                 media_outputs)
+            blocking_apps.extend(forced_inhibitions(
+                runtime_config['force_inhibition_apps'], equipment_snapshot.get('apps') or [],
+                app_windows, app_windows_stamp is not None
+                and now - app_windows_stamp <= mapping.ttl, media_outputs))
             if media_outputs and runtime_config['idle_inhibition_apps'] and inhibition_error:
                 reason = reason or inhibition_error
             if media_outputs and runtime_config['idle_inhibition_apps'] and apps_error:
                 reason = reason or str(apps_error)
             if blocking_apps:
-                reason = reason or ('Plasma idle inhibition: '
+                reason = reason or ('App standby block: '
                                     + blocking_apps[0]['app'] + ' — '
                                     + blocking_apps[0]['reason'])
             if kde_settings:
@@ -2099,6 +2115,7 @@ def main():
     args.mouse_outputs = config['mouse_outputs']
     args.firefox_audio_blocks_standby = config['firefox_audio_blocks_standby']
     args.idle_inhibition_apps = config['idle_inhibition_apps']
+    args.force_inhibition_apps = config['force_inhibition_apps']
     args.mute_label = config['mute_labels']
     args.cec = config['cec_enabled']
     args.cec_port = config['cec_port']
