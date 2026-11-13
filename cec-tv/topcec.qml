@@ -1267,8 +1267,10 @@ Kirigami.ApplicationWindow {
                                     RowLayout {
                                         Layout.fillWidth: true
                                         SelectableLabel {
-                                            Layout.preferredWidth: Kirigami.Units.gridUnit * 5
+                                            objectName: "idleTimeoutLabel"
                                             text: "Idle timeout"
+                                            wrapMode: TextEdit.NoWrap
+                                            Layout.minimumWidth: implicitWidth
                                         }
                                         CopyableComboBox {
                                             id: timeoutMode
@@ -1565,60 +1567,96 @@ Kirigami.ApplicationWindow {
                                     : "No apps have requested idle inhibition yet. Show all installed apps to choose one."
                             }
                             ListView {
+                                id: appList
                                 objectName: "installedAppsScroll"
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: Math.min(300, Math.max(40, contentHeight))
                                 visible: count > 0
                                 clip: true
                                 model: root.appChoices()
-                                Controls.ScrollBar.vertical: Controls.ScrollBar {}
-                                delegate: ColumnLayout {
+                                Controls.ScrollBar.vertical: Controls.ScrollBar { id: appScrollBar }
+                                delegate: GridLayout {
+                                    id: appRow
                                     required property var modelData
                                     objectName: "appRow:" + modelData.id
-                                    width: ListView.view.width
-                                    Flow {
+                                    width: appList.width - appScrollBar.implicitWidth
+                                    columnSpacing: Kirigami.Units.smallSpacing
+                                    rowSpacing: 0
+                                    readonly property real policyWidth: allowStandby.implicitWidth
+                                        + forceStandby.implicitWidth + columnSpacing
+                                    readonly property real minimumNameWidth: Kirigami.Units.gridUnit * 6
+                                    readonly property real inlinePolicyWidth: modelData.audioOnly
+                                        ? 0 : policyWidth + columnSpacing
+                                    readonly property bool stackName: width < minimumNameWidth + inlinePolicyWidth
+                                    readonly property bool stackPolicies: width < policyWidth
+                                    readonly property bool inlineAudio: !stackName
+                                        && width >= minimumNameWidth + inlinePolicyWidth
+                                            + firefoxAudioOption.implicitWidth + columnSpacing
+                                    readonly property real nameWidth: stackName ? width
+                                        : Math.min(Kirigami.Units.gridUnit * 10,
+                                            width - inlinePolicyWidth
+                                            - (inlineAudio ? firefoxAudioOption.implicitWidth + columnSpacing : 0))
+
+                                    SelectableLabel {
+                                        objectName: "appName:" + modelData.id
+                                        Layout.row: 0
+                                        Layout.column: 0
+                                        Layout.columnSpan: appRow.stackName ? 4 : 1
+                                        Layout.minimumWidth: appRow.nameWidth
+                                        Layout.preferredWidth: appRow.nameWidth
+                                        Layout.maximumWidth: appRow.nameWidth
+                                        Layout.alignment: Qt.AlignTop | Qt.AlignLeft
+                                        text: modelData.name
+                                        topPadding: Kirigami.Units.smallSpacing
+                                    }
+                                    CopyableCheckBox {
+                                        id: allowStandby
+                                        objectName: "idleApp:" + modelData.id
+                                        Layout.row: appRow.stackName ? 1 : 0
+                                        Layout.column: appRow.stackName ? 0 : 1
+                                        Layout.maximumWidth: implicitWidth
+                                        Layout.alignment: Qt.AlignTop | Qt.AlignLeft
+                                        visible: !modelData.audioOnly
+                                        text: "Allow standby"
+                                        Accessible.name: modelData.name + " allow standby"
+                                        checked: !root.idleAppsDraft.includes(modelData.id)
+                                        onClicked: root.setIdleApp(modelData.id, !checked)
+                                    }
+                                    CopyableCheckBox {
+                                        id: forceStandby
+                                        objectName: "forceApp:" + modelData.id
+                                        Layout.row: appRow.stackPolicies ? 2 : (appRow.stackName ? 1 : 0)
+                                        Layout.column: appRow.stackPolicies ? 0 : (appRow.stackName ? 1 : 2)
+                                        Layout.maximumWidth: implicitWidth
+                                        Layout.alignment: Qt.AlignTop | Qt.AlignLeft
+                                        visible: !modelData.audioOnly
+                                        text: "Force block standby"
+                                        Accessible.name: modelData.name + " force block standby"
+                                        checked: root.forceAppsDraft.includes(modelData.id)
+                                        onClicked: root.setForceApp(modelData.id, checked)
+                                    }
+                                    CopyableCheckBox {
+                                        id: firefoxAudioOption
+                                        objectName: visible ? "firefoxAudio" : ""
+                                        Layout.row: appRow.inlineAudio ? 0 : (appRow.stackPolicies ? 3 : 2)
+                                        Layout.column: appRow.inlineAudio ? 3 : 0
+                                        Layout.columnSpan: appRow.inlineAudio ? 1 : 4
+                                        Layout.maximumWidth: implicitWidth
+                                        Layout.alignment: Qt.AlignTop | Qt.AlignLeft
+                                        visible: modelData.id === root.firefoxApp().id
+                                        text: "Block standby while playing audio"
+                                        Accessible.name: modelData.name + " block standby while playing audio"
+                                        checked: root.firefoxAudioEnabled
+                                        onClicked: {
+                                            root.firefoxAudioEnabled = checked
+                                            root.markSettingsDirty()
+                                        }
+                                    }
+                                    Item {
+                                        visible: !appRow.stackName
+                                        Layout.row: 0
+                                        Layout.column: 4
                                         Layout.fillWidth: true
-                                        spacing: Kirigami.Units.smallSpacing
-                                        SelectableLabel {
-                                            id: appNameLabel
-                                            objectName: "appName:" + modelData.id
-                                            width: Math.min(appNameMetrics.advanceWidth
-                                                + Kirigami.Units.smallSpacing * 2, parent.width)
-                                            text: modelData.name
-                                            topPadding: Kirigami.Units.smallSpacing
-                                            TextMetrics {
-                                                id: appNameMetrics
-                                                font: appNameLabel.font
-                                                text: appNameLabel.text
-                                            }
-                                        }
-                                        CopyableCheckBox {
-                                            objectName: modelData.id === root.firefoxApp().id ? "firefoxAudio" : ""
-                                            visible: modelData.id === root.firefoxApp().id
-                                            text: "Block standby while playing audio"
-                                            Accessible.name: modelData.name + " block standby while playing audio"
-                                            checked: root.firefoxAudioEnabled
-                                            onClicked: {
-                                                root.firefoxAudioEnabled = checked
-                                                root.markSettingsDirty()
-                                            }
-                                        }
-                                        CopyableCheckBox {
-                                            objectName: "idleApp:" + modelData.id
-                                            visible: !modelData.audioOnly
-                                            text: "Allow standby"
-                                            Accessible.name: modelData.name + " allow standby"
-                                            checked: !root.idleAppsDraft.includes(modelData.id)
-                                            onClicked: root.setIdleApp(modelData.id, !checked)
-                                        }
-                                        CopyableCheckBox {
-                                            objectName: "forceApp:" + modelData.id
-                                            visible: !modelData.audioOnly
-                                            text: "Force block standby"
-                                            Accessible.name: modelData.name + " force block standby"
-                                            checked: root.forceAppsDraft.includes(modelData.id)
-                                            onClicked: root.setForceApp(modelData.id, checked)
-                                        }
                                     }
                                 }
                             }

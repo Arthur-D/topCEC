@@ -2405,14 +2405,25 @@ class GuiChecks(unittest.TestCase):
         firefox_row = self.app_row(engine, window, 0)
         player_row = self.app_row(engine, window, 1)
         firefox_controls = [firefox_row.findChild(QQuickItem, name) for name in (
-            'appName:firefox.desktop', 'firefoxAudio',
-            'idleApp:firefox.desktop', 'forceApp:firefox.desktop')]
+            'appName:firefox.desktop', 'idleApp:firefox.desktop',
+            'forceApp:firefox.desktop', 'firefoxAudio')]
         player_controls = [player_row.findChild(QQuickItem, name) for name in (
             'appName:player.desktop', 'idleApp:player.desktop', 'forceApp:player.desktop')]
-        for controls in (firefox_controls, player_controls):
-            self.assertTrue(all(control.y() == controls[0].y() for control in controls))
-            for left, right in zip(controls, controls[1:]):
-                self.assertLessEqual(left.x() + left.width(), right.x())
+        for width in (1300, 775):
+            window.resize(width, 900)
+            QTest.qWait(50)
+            self.assertEqual(window.findChild(QObject, 'idleTimeoutLabel').property('lineCount'), 1)
+            for controls in (firefox_controls[:3], player_controls):
+                self.assertEqual(controls[0].property('lineCount'), 1)
+                self.assertTrue(all(control.y() == controls[0].y() for control in controls))
+                for left, right in zip(controls, controls[1:]):
+                    self.assertLessEqual(left.x() + left.width(), right.x())
+            for firefox_control, player_control in zip(firefox_controls, player_controls):
+                self.assertEqual(firefox_control.x(), player_control.x())
+            if width == 1300:
+                self.assertEqual(firefox_controls[-1].y(), firefox_controls[0].y())
+                self.assertLessEqual(firefox_controls[-2].x() + firefox_controls[-2].width(),
+                                     firefox_controls[-1].x())
 
         window.resize(380, 760)
         QTest.qWait(50)
