@@ -403,6 +403,7 @@ Kirigami.ApplicationWindow {
         ? topcec.standbyReason.slice("Automatic standby blocked:".length).trim() : ""
     readonly property bool serviceHealthy: topcec.backendAvailable
         && topcec.serviceStatus === "running"
+    readonly property bool cecAdapterSelected: adapterField.acceptable
     readonly property bool monitoringWarning: topcec.backendAvailable
         && (topcec.serviceStatus === "configuration-only" || root.standbyBlocked)
     readonly property string monitoringWarningText: root.standbyBlocked
@@ -1027,7 +1028,9 @@ Kirigami.ApplicationWindow {
                                     spacing: Kirigami.Units.smallSpacing
                                     SelectableLabel {
                                         objectName: "serviceStatusLabel"
-                                        text: root.headerStatus + ","
+                                        text: root.serviceHealthy && !root.cecAdapterSelected
+                                            ? "Monitoring, no CEC adapter selected"
+                                            : root.headerStatus + ","
                                         color: root.serviceHealthy
                                             ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.textColor
                                     }
@@ -1044,7 +1047,7 @@ Kirigami.ApplicationWindow {
                                     objectName: "tvOnButton"
                                     text: "Turn on"
                                     icon.name: "system-shutdown"
-                                    enabled: topcec.backendAvailable && topcec.serviceStatus === "running"
+                                    enabled: root.serviceHealthy && root.cecAdapterSelected
                                     onClicked: topcec.requestPower("on")
                                 }
                                 CopyableButton {
