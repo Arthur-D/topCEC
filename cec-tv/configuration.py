@@ -14,7 +14,10 @@ DEFAULT_CONFIG = {
     'devices': ['/dev/input/event10', '/dev/input/event14'],
     'consider_input_devices': True,
     'mouse_output': None,
+    'mouse_outputs': None,
     'mute_labels': ['Mute tab'],
+    'firefox_audio_blocks_standby': True,
+    'idle_inhibition_apps': [],
     'cec_enabled': False,
     'cec_port': '/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00',
     'kde_timeout': False,
@@ -57,12 +60,24 @@ def validate_config(value):
         if (not isinstance(values, list) or (key == 'mute_labels' and not values)
                 or any(not isinstance(item, str) or not item.strip() for item in values)):
             raise ValueError(f'{key} must be a non-empty array of non-empty strings')
-    for key in ('cec_enabled', 'kde_timeout', 'require_snapshot', 'consider_input_devices'):
+    apps = config['idle_inhibition_apps']
+    if (not isinstance(apps, list)
+            or any(not isinstance(item, str) or not item.strip() for item in apps)
+            or len(set(apps)) != len(apps)):
+        raise ValueError('idle_inhibition_apps must be an array of unique app IDs')
+    for key in ('cec_enabled', 'kde_timeout', 'require_snapshot', 'consider_input_devices',
+                'firefox_audio_blocks_standby'):
         if type(config[key]) is not bool:
             raise ValueError(f'{key} must be a boolean')
     if config['mouse_output'] is not None and (
             not isinstance(config['mouse_output'], str) or not config['mouse_output'].strip()):
         raise ValueError('mouse_output must be a non-empty string or null')
+    outputs = config['mouse_outputs']
+    if outputs is not None and (
+            not isinstance(outputs, list)
+            or any(not isinstance(item, str) or not item.strip() for item in outputs)
+            or len(set(outputs)) != len(outputs)):
+        raise ValueError('mouse_outputs must be null or an array of unique display names')
     for key in ('cec_port',):
         if not isinstance(config[key], str) or not config[key].strip():
             raise ValueError(f'{key} must be a non-empty string')
@@ -85,6 +100,12 @@ def validate_config(value):
                     or not 0 < number <= 25):
                 raise ValueError('Invalid device axis deadzone')
     return config
+
+
+def mouse_outputs(config):
+    if config['mouse_outputs'] is not None:
+        return config['mouse_outputs']
+    return [config['mouse_output'] or config['target_output']]
 
 
 def load_config(path):

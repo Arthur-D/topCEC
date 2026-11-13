@@ -11,6 +11,7 @@ PROJECT_FILES = (
     'cec-tv/cec_power_state.py',
     'cec-tv/configuration.py',
     'cec-tv/firefox_media.py',
+    'cec-tv/standby_apps.py',
     'cec-tv/monitor.py',
     'cec-tv/native_messaging.py',
     'cec-tv/firefox-native-host.py',

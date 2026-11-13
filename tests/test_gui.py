@@ -67,6 +67,63 @@ class GuiChecks(unittest.TestCase):
         self.assertFalse(window.property('settingsDirty'))
         engine.deleteLater()
 
+    def test_standby_edits_autosave_after_inflight_save(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._config_source = 'saved'
+        backend.config = {**DEFAULT_CONFIG, 'devices': [], 'consider_input_devices': False}
+        backend._set_equipment({
+            'outputs': [{'path': DEFAULT_CONFIG['target_output'], 'label': 'TV'},
+                        {'path': 'DP-1', 'label': 'Monitor'}],
+            'adapters': [{'path': DEFAULT_CONFIG['cec_port'], 'label': 'Adapter'}],
+            'inputs': [], 'errors': [],
+        }, '')
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.findChild(QObject, 'autoSaveTimer').setProperty('interval', 250)
+        requests = []
+        interface = Mock(isValid=Mock(return_value=True))
+        with patch.object(backend, '_service_interface', return_value=interface), \
+                patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                             requests.append((method, callback, args))), \
+                patch.object(backend, 'refresh'):
+            QQmlExpression(engine.rootContext(), window, 'setMouseDisplay("DP-1", true)').evaluate()
+            QTest.qWait(160)
+            QQmlExpression(engine.rootContext(), window, 'setIdleApp("player.desktop", true)').evaluate()
+            QTest.qWait(130)
+            self.assertEqual(requests, [])
+            QMetaObject.invokeMethod(window.findChild(QObject, 'firefoxAudio'), 'click')
+            QTest.qWait(130)
+            self.assertEqual(requests, [])
+            QTest.qWait(160)
+            self.assertEqual(len(requests), 1)
+            method, callback, arguments = requests.pop()
+            self.assertEqual(method, 'ApplySettings')
+            first = json.loads(arguments[0])
+            self.assertIn('DP-1', first['mouse_outputs'])
+
+            QQmlExpression(engine.rootContext(), window, 'setMouseDisplay("DP-1", false)').evaluate()
+            QQmlExpression(engine.rootContext(), window, 'setIdleApp("player.desktop", false)').evaluate()
+            QMetaObject.invokeMethod(window.findChild(QObject, 'firefoxAudio'), 'click')
+            QTest.qWait(300)
+            self.assertEqual(requests, [])
+            callback(self.reply({'accepted': True, 'applied_live': True, 'config': first}))
+            QTest.qWait(300)
+            self.assertEqual(len(requests), 1)
+            method, callback, arguments = requests.pop()
+            latest = json.loads(arguments[0])
+            self.assertEqual(method, 'ApplySettings')
+            self.assertNotIn('DP-1', latest['mouse_outputs'])
+            self.assertEqual(latest['idle_inhibition_apps'], [])
+            self.assertTrue(latest['firefox_audio_blocks_standby'])
+            callback(self.reply({'accepted': True, 'applied_live': True, 'config': latest}))
+            self.assertFalse(window.property('settingsDirty'))
+        engine.deleteLater()
+
     def test_native_and_flatpak_live_apply_use_host_without_systemctl(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         for dbus_only in (False, True):
@@ -1787,11 +1844,13 @@ class GuiChecks(unittest.TestCase):
     def test_older_unversioned_save_reply_receives_new_defaults(self):
         backend = GuiBackend(dbus_only=True)
         old_config = {key: value for key, value in DEFAULT_CONFIG.items()
-                      if key not in ('consider_input_devices', 'mouse_output')}
+                      if key not in ('consider_input_devices', 'mouse_output', 'mouse_outputs',
+                                     'firefox_audio_blocks_standby', 'idle_inhibition_apps')}
         with patch.object(backend, 'refresh'):
             backend._settings_reply(0, self.reply({'accepted': True, 'config': old_config}))
         self.assertTrue(backend.config['consider_input_devices'])
         self.assertIsNone(backend.config['mouse_output'])
+        self.assertIsNone(backend.config['mouse_outputs'])
         self.assertIn('saved', backend.actionMessage.lower())
 
     def test_standby_input_toggle_and_mouse_display_selection(self):
@@ -1815,25 +1874,45 @@ class GuiChecks(unittest.TestCase):
         window.setProperty('currentSection', 2)
         app.processEvents()
         checkbox = window.findChild(QObject, 'considerInputDevices')
-        selector = window.findChild(QObject, 'mouseOutput')
+        firefox_audio = window.findChild(QObject, 'firefoxAudio')
+        selector = window.findChild(QObject, 'mouseDisplayChoices')
         self.assertTrue(checkbox.property('checked'))
-        self.assertEqual(selector.property('currentIndex'), 0)
+        self.assertTrue(firefox_audio.property('checked'))
+        QMetaObject.invokeMethod(firefox_audio, 'click')
+        self.assertEqual(selector.property('count'), 2)
+        legacy_values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertIsNone(legacy_values['mouseOutputs'])
+        legacy_config = config_from_settings(
+            backend.config, {**legacy_values, 'targetOutput': 'DP-1'})
+        self.assertIsNone(legacy_config['mouse_outputs'])
+        self.assertEqual(legacy_config['target_output'], 'DP-1')
         self.assertFalse(window.property('equipmentReady'))
         QMetaObject.invokeMethod(checkbox, 'click')
         self.assertTrue(window.property('settingsDirty'))
         self.assertTrue(window.property('equipmentReady'))
         engine.rootContext().setContextProperty('mouseSelector', selector)
-        expression = QQmlExpression(engine.rootContext(), window, 'mouseSelector.activated(1)')
-        expression.evaluate()
-        self.assertFalse(expression.hasError(), expression.error().toString())
+        def display(index):
+            return QQmlExpression(engine.rootContext(), window,
+                                  f'mouseSelector.itemAt({index})').evaluate()[0]
+        self.assertFalse(display(0).property('checked'))
+        self.assertTrue(display(1).property('checked'))
+        QMetaObject.invokeMethod(display(0), 'click')
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
         config = config_from_settings(backend.config, values)
         self.assertFalse(config['consider_input_devices'])
-        self.assertEqual(config['mouse_output'], 'DP-1')
+        self.assertFalse(config['firefox_audio_blocks_standby'])
+        self.assertEqual(config['mouse_outputs'], ['HDMI-A-2', 'DP-1'])
         backend._set_equipment({'outputs': [], 'adapters': [], 'inputs': [], 'errors': []}, '')
-        self.assertEqual(selector.property('selectedOutput'), 'DP-1')
-        self.assertIn('not detected', selector.property('currentText'))
+        app.processEvents()
+        self.assertEqual(selector.property('count'), 2)
+        self.assertIn('not detected', display(0).property('text'))
+        QMetaObject.invokeMethod(display(0), 'click')
+        QMetaObject.invokeMethod(display(0), 'click')
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertEqual(config_from_settings(backend.config, values)['mouse_outputs'], [])
         engine.deleteLater()
 
     def test_kde_and_disabled_timeout_modes(self):
@@ -1844,6 +1923,49 @@ class GuiChecks(unittest.TestCase):
             self.config, {**self.values, 'timeoutMode': 'never'})
         self.assertIsNone(disabled['timeout_seconds'])
         self.assertFalse(disabled['kde_timeout'])
+
+    def test_installed_apps_can_be_searched_selected_and_retained(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._config_source = 'saved'
+        backend.config = {**DEFAULT_CONFIG, 'devices': [],
+                          'idle_inhibition_apps': ['removed.desktop']}
+        backend._service_data = {
+            'installed_apps': [{'id': 'player.desktop', 'name': 'Video Player'},
+                               {'id': 'editor.desktop', 'name': 'Editor'}],
+            'installed_apps_error': None,
+            'inhibitions_error': None,
+            'blocking_apps': [{'app': 'Player', 'reason': 'Playing',
+                               'locationUnknown': True}],
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        repeater = window.findChild(QObject, 'installedAppsScroll')
+        self.assertEqual(repeater.property('count'), 3)
+        engine.rootContext().setContextProperty('appChoicesRepeater', repeater)
+        def item(index):
+            return QQmlExpression(engine.rootContext(), window,
+                                  f'appChoicesRepeater.itemAtIndex({index})').evaluate()[0]
+        player = item(0)
+        self.assertEqual(item(2).objectName(), 'idleApp:removed.desktop')
+        QMetaObject.invokeMethod(player, 'click')
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertEqual(values['idleInhibitionApps'], ['removed.desktop', 'player.desktop'])
+        self.assertEqual(config_from_settings(backend.config, values)['idle_inhibition_apps'],
+                         values['idleInhibitionApps'])
+        window.findChild(QObject, 'appSearch').setProperty('text', 'editor')
+        app.processEvents()
+        self.assertEqual(repeater.property('count'), 1)
+        self.assertEqual(item(0).objectName(), 'idleApp:editor.desktop')
+        engine.deleteLater()
 
     def test_invalid_settings_are_rejected(self):
         with self.assertRaises(ValueError):

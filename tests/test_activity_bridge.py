@@ -1,6 +1,7 @@
 """Hardware-free KWin JavaScript tests; requires PySide6 (QtQml)."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 from pathlib import Path
+import json
 import unittest
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtQml import QJSEngine
@@ -88,6 +89,35 @@ class ActivityBridgeTests(unittest.TestCase):
         self.evaluate("messages=[];now+=1000;workspace.cursorPos={x:3000,y:100};"
                       "workspace.cursorPosChanged.emit()")
         self.assertEqual(self.evaluate('messages'), ['Mus: unknown'])
+
+
+class AppWindowBridgeTests(unittest.TestCase):
+    def test_desktop_snapshot_includes_app_identity_and_display(self):
+        engine = QJSEngine()
+        setup = engine.evaluate('''
+            var messages = [];
+            function signal() { return {connect: function() {}}; }
+            function QTimer() { this.timeout = signal(); this.start = function() {}; }
+            function print() {}
+            function callDBus(a,b,c,d,message) { messages.push(message); }
+            var workspace = {
+                windowList: function() { return [{
+                    pid: 123, caption: "Player", desktopFileName: "player",
+                    resourceClass: "Player", output: {name: "DP-1"}
+                }]; },
+                activeWindow: null, windowActivated: signal()
+            };
+        ''')
+        self.assertFalse(setup.isError(), setup.toString())
+        source = SOURCE.with_name('firefox.js').read_text()
+        result = engine.evaluate(source)
+        self.assertFalse(result.isError(), result.toString())
+        messages = engine.evaluate('messages').toVariant()
+        snapshot = json.loads(messages[0].removeprefix('Desktop-snapshot: '))
+        self.assertEqual(snapshot, [{
+            'pid': 123, 'title': 'Player', 'desktop': 'player',
+            'class': 'Player', 'output': 'DP-1',
+        }])
 
 
 if __name__ == '__main__':

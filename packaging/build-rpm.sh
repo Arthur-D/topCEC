@@ -21,7 +21,7 @@ mkdir -p "$ARCHIVE_ROOT/cec-tv" "$ARCHIVE_ROOT/packaging" \
     "$ARCHIVE_ROOT/firefox-extension"
 for file in \
     activity.js activity_policy.py cec-kde-settings.py cec-power-command.py \
-    cec_power_state.py configuration.py equipment.py firefox_media.py firefox-native-host.py \
+    cec_power_state.py configuration.py equipment.py firefox_media.py standby_apps.py firefox-native-host.py \
     native_messaging.py firefox.js monitor.py providers.py \
     start.py topcec_gui.py topcec.qml net.local.topcec.svg; do
     install -m 0644 "$SOURCE_DIR/cec-tv/$file" "$ARCHIVE_ROOT/cec-tv/$file"

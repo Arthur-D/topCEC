@@ -13,7 +13,9 @@ function reportFirefox() {
         for (let i = 0; i < windows.length; i++) {
             const w = windows[i];
             snapshot.push({pid: Number(w.pid), title: String(w.caption || ''),
-                           output: w.output ? String(w.output.name) : 'ingen'});
+                           output: w.output ? String(w.output.name) : 'ingen',
+                           desktop: String(w.desktopFileName || ''),
+                           class: String(w.resourceClass || '')});
         }
         // One atomic message also removes closed windows and old titles.
         send('Desktop-snapshot: ' + JSON.stringify(snapshot));

@@ -79,7 +79,7 @@ class TestPower(monitor.CecPower):
 
 class LiveSettingsChecks(unittest.TestCase):
     def run_service(self, path, scenario, *, initial=None, fail_inputs=(), fail_adapter=None,
-                    plasma_timeout_seconds='unread'):
+                    plasma_timeout_seconds='unread', inventory=None):
         config = {**DEFAULT_CONFIG, 'devices': ['/mock/keyboard'], 'cec_port': '/mock/cec',
                   **(initial or {})}
         context = SimpleNamespace(receiver=None, callbacks={}, inputs=[], selectors=[],
@@ -130,6 +130,9 @@ class LiveSettingsChecks(unittest.TestCase):
             return interval
 
         def make_worker(*args, **kwargs):
+            if inventory is not None and args[0][-1].endswith('equipment.py'):
+                kwargs['stdout'].write(json.dumps(inventory))
+                kwargs['stdout'].flush()
             worker = Mock(returncode=0)
             worker.poll.return_value = None
             worker.communicate.return_value = ('', '')
@@ -159,6 +162,9 @@ class LiveSettingsChecks(unittest.TestCase):
             require_snapshot=config['require_snapshot'],
             consider_input_devices=config['consider_input_devices'],
             mouse_output=config['mouse_output'],
+            mouse_outputs=config['mouse_outputs'],
+            firefox_audio_blocks_standby=config['firefox_audio_blocks_standby'],
+            idle_inhibition_apps=config['idle_inhibition_apps'],
             axis_deadzone_percent=config['axis_deadzone_percent'],
             rz_deadzone_percent=config['rz_deadzone_percent'],
             device_axis_deadzones=config['device_axis_deadzones'], config=str(path))
@@ -253,6 +259,145 @@ class LiveSettingsChecks(unittest.TestCase):
             save_config(path, {'schema_version': 1, **saved})
             self.run_service(path, lambda context: self.assertEqual(context.inputs, []),
                              initial=load_config(path), fail_inputs=['/mock/keyboard'])
+
+    def test_firefox_audio_toggle_applies_live_and_uses_mouse_display(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                receiver = context.receiver
+                self.apply(receiver, mouse_outputs=['DP-2', 'DP-9'])
+                receiver.Report('Firefox-snapshot: ' + json.dumps([
+                    {'title': 'Video — Mozilla Firefox', 'output': 'DP-9'}]))
+                receiver.Report('Firefox-media-snapshot: ' + json.dumps({
+                    'version': 1, 'windows': [{
+                        'window_id': 1, 'active_title': 'Video',
+                        'tabs': [{'audible': True, 'muted': False}],
+                    }]}))
+                receiver.Report('Fokus: DP-9')
+                self.assertTrue(context.callbacks[100]())
+                self.assertTrue(json.loads(receiver.GetStatus())['playback_active'])
+                self.apply(receiver, mouse_outputs=['DP-2'])
+                self.assertTrue(context.callbacks[100]())
+                self.assertFalse(json.loads(receiver.GetStatus())['playback_active'])
+                self.apply(receiver, mouse_outputs=[])
+                self.assertTrue(context.callbacks[100]())
+                self.assertFalse(json.loads(receiver.GetStatus())['playback_active'])
+                self.apply(receiver, mouse_outputs=['DP-2', 'DP-9'])
+                self.apply(receiver, firefox_audio_blocks_standby=False)
+                self.assertTrue(context.callbacks[100]())
+                self.assertFalse(json.loads(receiver.GetStatus())['playback_active'])
+                self.assertIsNone(json.loads(receiver.GetStatus())['fail_safe_reason'])
+                self.assertFalse(load_config(path)['firefox_audio_blocks_standby'])
+                self.apply(receiver, firefox_audio_blocks_standby=True)
+                self.assertTrue(context.callbacks[100]())
+                self.assertTrue(json.loads(receiver.GetStatus())['playback_active'])
+
+            self.run_service(path, scenario)
+
+    def test_multiple_mouse_displays_and_empty_selection_apply_live(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                receiver = context.receiver
+                self.apply(receiver, mouse_outputs=['DP-1', 'DP-2'])
+                for now, output in ((10, 'DP-1'), (20, 'DP-2')):
+                    context.now = now
+                    receiver.Report('Mouse-activity: ' + output)
+                    self.assertEqual(context.timer.last, now)
+                context.now = 30
+                receiver.Report('Mouse-activity: HDMI-A-2')
+                self.assertEqual(context.timer.last, 20)
+                self.apply(receiver, mouse_outputs=[])
+                context.now = 40
+                receiver.Report('Mouse-activity: DP-1')
+                receiver.Report('TV-aktivitet: mus')
+                self.assertEqual(context.timer.last, 30)
+                self.assertEqual(load_config(path)['mouse_outputs'], [])
+
+            self.run_service(path, scenario)
+            self.run_service(path, lambda context: self.assertEqual(
+                self.config(context.receiver)['mouse_outputs'], []),
+                initial=load_config(path))
+
+    def test_atspi_audio_uses_all_selected_displays(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                receiver = context.receiver
+                self.apply(receiver, mouse_outputs=['DP-1', 'DP-2'])
+                receiver.Report('Firefox-snapshot: ' + json.dumps([
+                    {'title': 'Video — Mozilla Firefox', 'output': 'DP-2'}]))
+                receiver.Report('Fokus: DP-1')
+                self.assertTrue(context.callbacks[100]())
+                worker = context.workers[-1]
+                worker.poll.return_value = 0
+                worker.communicate.return_value = (json.dumps({
+                    'ok': True, 'frames': [{
+                        'title': 'Video — Mozilla Firefox', 'audio': True,
+                    }]}), '')
+                self.assertTrue(context.callbacks[100]())
+                self.assertTrue(json.loads(receiver.GetStatus())['playback_active'])
+                self.apply(receiver, mouse_outputs=['DP-1'])
+                self.assertTrue(context.callbacks[100]())
+                self.assertFalse(json.loads(receiver.GetStatus())['playback_active'])
+
+            self.run_service(path, scenario)
+
+    def test_idle_inhibition_selection_changes_standby_and_reports_reason(self):
+        inventory = {'outputs': [], 'adapters': [], 'inputs': [], 'errors': [],
+                     'apps': [{'id': 'player.desktop', 'name': 'Player'}],
+                     'apps_error': None}
+        plasma = Mock(requests=[{'kind': 'idle', 'app': 'player',
+                                 'reason': 'Playing', 'mode': 'block'}])
+        plasma.health.return_value = None
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(monitor, 'PlasmaInhibitions', return_value=plasma), \
+                patch.object(monitor, 'firefox_window_snapshot', return_value='[]'):
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                receiver = context.receiver
+                context.callbacks[500]()
+                context.workers[-1].poll.return_value = 0
+                context.callbacks[500]()
+                receiver.Report('Desktop-snapshot: ' + json.dumps([
+                    {'pid': 123, 'title': 'Player', 'desktop': 'player',
+                     'class': 'player', 'output': 'DP-9'}]))
+                receiver.Report('Fokus: DP-9')
+                self.apply(receiver, mouse_outputs=['DP-2', 'DP-9'],
+                           firefox_audio_blocks_standby=False,
+                           idle_inhibition_apps=['player.desktop'])
+                self.assertTrue(context.callbacks[100]())
+                status = json.loads(receiver.GetStatus())
+                self.assertIn('Playing', status['fail_safe_reason'])
+                self.assertEqual(status['blocking_apps'][0]['reason'], 'Playing')
+                with self.assertRaisesRegex(RuntimeError, 'Standby blocked'):
+                    receiver.RequestPower('off')
+                self.apply(receiver, mouse_outputs=['DP-2'])
+                self.assertTrue(context.callbacks[100]())
+                self.assertEqual(json.loads(receiver.GetStatus())['blocking_apps'], [])
+                self.apply(receiver, mouse_outputs=[])
+                plasma.health.return_value = 'Plasma unavailable'
+                self.assertTrue(context.callbacks[100]())
+                self.assertIsNone(json.loads(receiver.GetStatus())['fail_safe_reason'])
+                plasma.health.return_value = None
+                self.apply(receiver, mouse_outputs=['DP-2', 'DP-9'])
+                self.apply(receiver, idle_inhibition_apps=[])
+                self.assertTrue(context.callbacks[100]())
+                status = json.loads(receiver.GetStatus())
+                self.assertIsNone(status['fail_safe_reason'])
+                self.assertEqual(status['blocking_apps'], [])
+                self.apply(receiver, idle_inhibition_apps=['player.desktop'])
+                plasma.health.return_value = 'Plasma unavailable'
+                self.assertTrue(context.callbacks[100]())
+                self.assertEqual(json.loads(receiver.GetStatus())['fail_safe_reason'],
+                                 'Plasma unavailable')
+
+            self.run_service(path, scenario, inventory=inventory,
+                             initial={'cec_enabled': True})
 
     def test_input_and_disk_failure_roll_back_without_losing_monitoring(self):
         with tempfile.TemporaryDirectory() as directory:
