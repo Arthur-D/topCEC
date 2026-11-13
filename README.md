@@ -64,9 +64,10 @@ configuration, external research repositories and credentials are excluded.
   locked-screen timeouts. A disabled timeout prevents automatic OFF.
 - Firefox audio detection uses the WebExtension signal when it is installed and
   reports fresh data; otherwise it falls back to AT-SPI's English `Mute tab`
-  label. The Standby page can disable this detection; it uses the display selected
-  for mouse activity. Other apps' media
-  types cannot currently be detected. Ambiguous/stale window matching blocks OFF.
+  label. The Firefox row's “Block TV standby while playing audio” option
+  controls this detection; it uses the displays selected for mouse activity.
+  Other apps' media types cannot currently be detected. Ambiguous/stale window
+  matching blocks OFF.
   The Standby page reports when Firefox audio detection is unavailable instead
   of treating it as inactive. Snapshot interval 2 seconds; mapping TTL 15 seconds.
   The AT-SPI fallback identifies Firefox by its process executable before
@@ -78,8 +79,8 @@ configuration, external research repositories and credentials are excluded.
   topCEC, not Plasma's power policy. Unknown app identity or display, stale
   Plasma status, and failed installed-app discovery block standby when an app
   is selected to block. Existing selections remain unchanged, including for
-  uninstalled apps. The default list shows current and previously observed
-  idle-inhibiting apps and selected apps. Its search filters to apps currently
+  uninstalled apps. The default list shows Firefox, current and previously observed
+  idle-inhibiting apps, and selected apps. Its search filters to apps currently
   requesting screen inhibition; “Show all installed apps” searches all apps.
   Observed app names are stored in `observed-inhibitors.json` beside the host
   configuration.

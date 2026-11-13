@@ -27,6 +27,7 @@ Kirigami.ApplicationWindow {
     property var idleAppsDraft: []
     property var forceAppsDraft: []
     property var retainedAppIds: []
+    property bool firefoxAudioEnabled: true
     property real defaultAxisDeadzone: 2
     property real defaultRzDeadzone: 5
     onSettingsDirtyChanged: {
@@ -149,7 +150,7 @@ Kirigami.ApplicationWindow {
             considerInputDevices: considerInputDevices.checked,
             mouseOutputs: mouseOutputsLegacy ? null : mouseOutputsDraft,
             muteLabels: labelsField.text,
-            firefoxAudioBlocksStandby: firefoxAudio.checked,
+            firefoxAudioBlocksStandby: firefoxAudioEnabled,
             idleInhibitionApps: idleAppsDraft,
             forceInhibitionApps: forceAppsDraft,
             axisDeadzone: defaultAxisDeadzone,
@@ -644,7 +645,7 @@ Kirigami.ApplicationWindow {
             : Array.from(outputs)
         devicesField.text = topcec.deviceList()
         labelsField.text = topcec.muteLabelList()
-        firefoxAudio.checked = topcec.setting("firefox_audio_blocks_standby")
+        firefoxAudioEnabled = topcec.setting("firefox_audio_blocks_standby")
         idleAppsDraft = Array.from(topcec.setting("idle_inhibition_apps") || [])
         forceAppsDraft = Array.from(topcec.setting("force_inhibition_apps") || [])
         retainedAppIds = [...new Set([...idleAppsDraft, ...forceAppsDraft])]
@@ -653,8 +654,25 @@ Kirigami.ApplicationWindow {
         axisDraft = JSON.parse(JSON.stringify(topcec.setting("device_axis_deadzones") || {}))
     }
 
+    function isFirefoxApp(id) {
+        let key = id.toLowerCase().replace(/\.desktop$/, "")
+        return ["firefox", "firefox-esr", "firefox_firefox", "org.mozilla.firefox",
+                "org.mozilla.firefoxdeveloperedition", "org.mozilla.firefox-beta"].includes(key)
+    }
+
+    function firefoxApp() {
+        let retained = retainedAppIds.find(id => isFirefoxApp(id))
+        return topcec.installedApps.find(app => isFirefoxApp(app.id))
+            || topcec.observedApps.find(app => isFirefoxApp(app.id))
+            || (retained ? {id: retained, name: retained + " (not installed)"} : null)
+            || {id: "__firefox_audio__", name: "Mozilla Firefox", audioOnly: true}
+    }
+
     function appChoices() {
         let apps = topcec.observedApps.slice()
+        let firefox = firefoxApp()
+        if (!apps.some(app => app.id === firefox.id))
+            apps.push(firefox)
         if (showAllApps.checked) {
             for (let app of topcec.installedApps)
                 if (!apps.some(item => item.id === app.id))
@@ -1514,12 +1532,6 @@ Kirigami.ApplicationWindow {
                         visible: root.currentSection === 2
                         ColumnLayout {
                             width: parent.width
-                            CopyableCheckBox {
-                                id: firefoxAudio
-                                objectName: "firefoxAudio"
-                                text: "Firefox · Audio"
-                                onClicked: root.markSettingsDirty()
-                            }
                             SelectableLabel {
                                 Layout.fillWidth: true
                                 text: "Turn off Allow screen standby to follow an app's Plasma request. Force block screen standby blocks TV standby while the app has a window on a selected display. Neither option prevents computer sleep."
@@ -1572,12 +1584,30 @@ Kirigami.ApplicationWindow {
                                     required property var modelData
                                     objectName: "appRow:" + modelData.id
                                     width: ListView.view.width
-                                    SelectableLabel {
+                                    Flow {
                                         Layout.fillWidth: true
-                                        text: modelData.name
+                                        spacing: Kirigami.Units.smallSpacing
+                                        SelectableLabel {
+                                            objectName: "appName:" + modelData.id
+                                            width: Math.min(implicitWidth, parent.width)
+                                            text: modelData.name
+                                            topPadding: Kirigami.Units.smallSpacing
+                                        }
+                                        CopyableCheckBox {
+                                            objectName: modelData.id === root.firefoxApp().id ? "firefoxAudio" : ""
+                                            visible: modelData.id === root.firefoxApp().id
+                                            text: "Block TV standby while playing audio"
+                                            Accessible.name: modelData.name + " block TV standby while playing audio"
+                                            checked: root.firefoxAudioEnabled
+                                            onClicked: {
+                                                root.firefoxAudioEnabled = checked
+                                                root.markSettingsDirty()
+                                            }
+                                        }
                                     }
                                     Flow {
                                         Layout.fillWidth: true
+                                        visible: !modelData.audioOnly
                                         spacing: Kirigami.Units.smallSpacing
                                         CopyableCheckBox {
                                             objectName: "idleApp:" + modelData.id
@@ -1642,7 +1672,7 @@ Kirigami.ApplicationWindow {
                     SelectableLabel {
                         objectName: "firefoxAudioStatus"
                         Layout.fillWidth: true
-                        visible: root.currentSection === 2 && firefoxAudio.checked
+                        visible: root.currentSection === 2 && root.firefoxAudioEnabled
                             && topcec.firefoxAudioStatusMessage.length > 0
                         text: topcec.firefoxAudioStatusMessage
                     }
@@ -1655,7 +1685,7 @@ Kirigami.ApplicationWindow {
                         objectName: "noBlockingApps"
                         Layout.fillWidth: true
                         visible: root.currentSection === 2 && !topcec.firefoxPlaybackActive
-                            && (!firefoxAudio.checked || topcec.firefoxAudioStatusMessage.length === 0)
+                            && (!root.firefoxAudioEnabled || topcec.firefoxAudioStatusMessage.length === 0)
                             && topcec.blockingApps.length === 0 && topcec.inhibitionsMessage.length === 0
                         text: "No apps are currently blocking standby."
                     }
