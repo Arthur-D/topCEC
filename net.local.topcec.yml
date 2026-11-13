@@ -17,6 +17,7 @@ modules:
   - name: topcec-gui
     buildsystem: simple
     build-commands:
+      - install -D -m 0644 cec-tv/activity_policy.py /app/lib/topcec/activity_policy.py
       - install -D -m 0644 cec-tv/configuration.py /app/lib/topcec/configuration.py
       - install -D -m 0644 cec-tv/topcec_gui.py /app/lib/topcec/topcec_gui.py
       - install -D -m 0644 cec-tv/topcec.qml /app/lib/topcec/topcec.qml

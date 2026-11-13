@@ -2891,6 +2891,7 @@ class GuiChecks(unittest.TestCase):
                       manifest)
         self.assertIn("os.environ['TOPCEC_DBUS_ONLY'] = '1'", launcher)
         self.assertIn('org.kde.Platform', manifest)
+        self.assertIn('cec-tv/activity_policy.py', manifest)
         self.assertIn('cec-tv/configuration.py', manifest)
         self.assertIn('cec-tv/topcec_gui.py', manifest)
         self.assertIn('cec-tv/topcec.qml', manifest)
