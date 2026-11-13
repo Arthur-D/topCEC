@@ -28,8 +28,8 @@ Kirigami.ApplicationWindow {
     property var forceAppsDraft: []
     property var retainedAppIds: []
     property bool firefoxAudioEnabled: true
-    property real defaultAxisDeadzone: 2
-    property real defaultRzDeadzone: 5
+    property real defaultAxisDeadzone: 0
+    property real defaultRzDeadzone: 0
     onSettingsDirtyChanged: {
         if (settingsDirty)
             autoSaveTimer.restart()
@@ -1504,7 +1504,7 @@ Kirigami.ApplicationWindow {
                                         objectName: "axisDeadzone:" + modelData.device.path + ":" + modelData.axis.code
                                         Layout.fillWidth: true
                                         label: modelData.device.label + " · " + modelData.axis.name + " (%)"
-                                        from: 1
+                                        from: 0
                                         to: 25
                                         value: Math.round(root.axisValue(modelData.device, modelData.axis))
                                         onValueModified: root.setAxisValue(modelData.device, modelData.axis, value)

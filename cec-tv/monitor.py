@@ -2120,9 +2120,9 @@ def main():
     parser.add_argument('--timeout-seconds', type=int,
                         help='Seconds of inactivity before standby; null in configuration disables it')
     parser.add_argument('--rz-deadzone-percent', type=float, default=None,
-                        help='ABS_RZ deadzone percentage (default: 5)')
+                        help='ABS_RZ deadzone percentage (default: 0)')
     parser.add_argument('--axis-deadzone-percent', type=float, default=None,
-                        help='Minimum axis movement as a percentage of its range (default: 2)')
+                        help='Minimum axis movement as a percentage of its range (default: 0)')
     parser.add_argument('--kde-timeout', action=argparse.BooleanOptionalAction, default=None,
                         help='Follow KDE display timeout for AC power')
     parser.add_argument('--cec', action=argparse.BooleanOptionalAction, default=None,
@@ -2164,10 +2164,10 @@ def main():
     args.device_axis_deadzones = config['device_axis_deadzones']
     if args.cec:
         args.require_snapshot = True
-    if not math.isfinite(args.rz_deadzone_percent) or not 0 < args.rz_deadzone_percent <= 25:
-        parser.error('--rz-deadzone-percent must be greater than 0 and at most 25')
-    if not math.isfinite(args.axis_deadzone_percent) or not 0 < args.axis_deadzone_percent <= 25:
-        parser.error('--axis-deadzone-percent must be greater than 0 and at most 25')
+    if not math.isfinite(args.rz_deadzone_percent) or not 0 <= args.rz_deadzone_percent <= 25:
+        parser.error('--rz-deadzone-percent must be from 0 to 25')
+    if not math.isfinite(args.axis_deadzone_percent) or not 0 <= args.axis_deadzone_percent <= 25:
+        parser.error('--axis-deadzone-percent must be from 0 to 25')
     if not math.isfinite(args.mapping_ttl) or args.mapping_ttl <= 0:
         parser.error('--mapping-ttl must be positive and finite')
     if args.self_test:

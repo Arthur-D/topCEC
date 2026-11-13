@@ -91,7 +91,19 @@ class ConfigurationChecks(unittest.TestCase):
         self.assertTrue(config['firefox_audio_blocks_standby'])
         self.assertIsNone(config['mouse_output'])
         self.assertIsNone(config['mouse_outputs'])
+        self.assertEqual(config['axis_deadzone_percent'], 0.0)
+        self.assertEqual(config['rz_deadzone_percent'], 0.0)
         self.assertEqual(mouse_outputs(config), ['DP-1'])
+
+    def test_deadzone_percentages_accept_zero(self):
+        config = validate_config({
+            'schema_version': SCHEMA_VERSION,
+            'axis_deadzone_percent': 0,
+            'rz_deadzone_percent': 0.0,
+            'device_axis_deadzones': {'/dev/input/a': {'5': 0}},
+        })
+        self.assertEqual(config['axis_deadzone_percent'], 0.0)
+        self.assertEqual(config['rz_deadzone_percent'], 0.0)
 
     def test_mouse_display_list_preserves_legacy_and_empty_selections(self):
         legacy = validate_config({'schema_version': SCHEMA_VERSION, 'target_output': 'TV',
@@ -146,7 +158,6 @@ class ConfigurationChecks(unittest.TestCase):
             {'schema_version': SCHEMA_VERSION, 'mouse_outputs': ['DP-1', 'DP-1']},
             {'schema_version': SCHEMA_VERSION, 'mouse_outputs': ['']},
             {'schema_version': SCHEMA_VERSION, 'axis_deadzone_percent': 26},
-            {'schema_version': SCHEMA_VERSION, 'device_axis_deadzones': {'/dev/input/a': {'5': 0}}},
             {'schema_version': SCHEMA_VERSION, 'device_axis_deadzones': {'/dev/input/a': {'47': 2}}},
             {'schema_version': SCHEMA_VERSION, 'device_axis_deadzones': {'/dev/input/a': {'05': 2}}},
         )

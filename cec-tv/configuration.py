@@ -23,8 +23,8 @@ DEFAULT_CONFIG = {
     'cec_port': '/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00',
     'kde_timeout': False,
     'require_snapshot': False,
-    'axis_deadzone_percent': 2.0,
-    'rz_deadzone_percent': 5.0,
+    'axis_deadzone_percent': 0.0,
+    'rz_deadzone_percent': 0.0,
     'device_axis_deadzones': {},
 }
 
@@ -86,8 +86,8 @@ def validate_config(value):
     for key in ('axis_deadzone_percent', 'rz_deadzone_percent'):
         number = config[key]
         if (type(number) not in (int, float) or not math.isfinite(number)
-                or not 0 < number <= 25):
-            raise ValueError(f'{key} must be a finite number greater than 0 and at most 25')
+                or not 0 <= number <= 25):
+            raise ValueError(f'{key} must be a finite number from 0 to 25')
         config[key] = float(number)
     overrides = config['device_axis_deadzones']
     if not isinstance(overrides, dict):
@@ -99,7 +99,7 @@ def validate_config(value):
             if (not isinstance(code, str) or not code.isascii() or not code.isdecimal()
                     or str(int(code)) != code or not 0 <= int(code) < 47
                     or type(number) not in (int, float) or not math.isfinite(number)
-                    or not 0 < number <= 25):
+                    or not 0 <= number <= 25):
                 raise ValueError('Invalid device axis deadzone')
     return config
 
