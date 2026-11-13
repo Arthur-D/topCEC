@@ -708,7 +708,8 @@ Kirigami.ApplicationWindow {
         }
         if (path.startsWith("/") && path.endsWith("/chrome")) {
             if (path.includes("/chromium/")) return chromiumBrowsers[0]
-            if (path.includes("/google/chrome/")) return chromiumBrowsers[1]
+            if (path === "/app/extra/chrome" || path.includes("/google/chrome/"))
+                return chromiumBrowsers[1]
         }
         return null
     }

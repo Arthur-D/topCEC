@@ -42,6 +42,8 @@ def executable_browser(path):
     if name in ('chrome', 'google-chrome', 'google-chrome-stable'):
         if 'org.chromium.chromium' in full or '/chromium/' in full:
             return 'chromium'
+        if full == '/app/extra/chrome':
+            return 'chrome'
         if 'com.google.chrome' in full or '/google/chrome/' in full or name != 'chrome':
             return 'chrome'
         return 'unknown'

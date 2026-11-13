@@ -112,16 +112,21 @@ class StandbyAppsChecks(unittest.TestCase):
         self.assertEqual(matching_inhibitions(requests, [], [], [], True, 'TV'), [])
 
     def test_browser_executable_request_matches_installed_browser_window(self):
-        requests = [{'kind': 'idle', 'app': '/app/chromium/chrome', 'reason': 'Video'}]
-        apps = [{'id': 'org.chromium.Chromium.desktop', 'name': 'Chromium',
-                 'window_class': 'chromium'}]
-        windows = [{'desktop': 'org.chromium.Chromium', 'class': 'chromium', 'output': 'other'}]
-        for enabled in (['/app/chromium/chrome'], ['org.chromium.Chromium.desktop'],
-                        ['/app/chromium/chrome', 'org.chromium.Chromium.desktop']):
-            self.assertEqual(matching_inhibitions(requests, enabled, apps, windows, True, 'TV'), [])
-            result = matching_inhibitions(requests, enabled, apps, windows, True, 'other')
-            self.assertEqual(len(result), 1)
-            self.assertFalse(result[0]['locationUnknown'])
+        for path, desktop, name, window_class in (
+            ('/app/chromium/chrome', 'org.chromium.Chromium', 'Chromium', 'chromium'),
+            ('/app/extra/chrome', 'com.google.Chrome', 'Google Chrome', 'google-chrome'),
+        ):
+            app_id = desktop + '.desktop'
+            requests = [{'kind': 'idle', 'app': path, 'reason': 'Video'}]
+            apps = [{'id': app_id, 'name': name, 'window_class': window_class}]
+            windows = [{'desktop': desktop, 'class': window_class, 'output': 'other'}]
+            for enabled in ([path], [app_id], [path, app_id]):
+                with self.subTest(path=path, enabled=enabled):
+                    self.assertEqual(
+                        matching_inhibitions(requests, enabled, apps, windows, True, 'TV'), [])
+                    result = matching_inhibitions(requests, enabled, apps, windows, True, 'other')
+                    self.assertEqual(len(result), 1)
+                    self.assertFalse(result[0]['locationUnknown'])
 
     def test_ambiguous_names_and_unknown_window_outputs_block_safely(self):
         requests = [{'kind': 'idle', 'app': 'Player', 'reason': 'Playing'}]
