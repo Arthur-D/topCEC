@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'cec-tv'))
 from configuration import (
     DEFAULT_CONFIG, SCHEMA_VERSION, default_config_path, load_config, merge_cli,
-    save_config, validate_config,
+    save_config, validate_config, mouse_outputs,
 )
 import monitor
 import start
@@ -88,7 +88,20 @@ class ConfigurationChecks(unittest.TestCase):
         self.assertEqual(config['devices'], ['/dev/input/event42'])
         self.assertEqual(config['mute_labels'], DEFAULT_CONFIG['mute_labels'])
         self.assertTrue(config['consider_input_devices'])
+        self.assertTrue(config['firefox_audio_blocks_standby'])
         self.assertIsNone(config['mouse_output'])
+        self.assertIsNone(config['mouse_outputs'])
+        self.assertEqual(mouse_outputs(config), ['DP-1'])
+
+    def test_mouse_display_list_preserves_legacy_and_empty_selections(self):
+        legacy = validate_config({'schema_version': SCHEMA_VERSION, 'target_output': 'TV',
+                                  'mouse_output': 'DP-1'})
+        self.assertEqual(mouse_outputs(legacy), ['DP-1'])
+        self.assertEqual(mouse_outputs(validate_config({
+            'schema_version': SCHEMA_VERSION, 'mouse_outputs': []})), [])
+        self.assertEqual(mouse_outputs(validate_config({
+            'schema_version': SCHEMA_VERSION, 'mouse_outputs': ['DP-1', 'TV']})),
+            ['DP-1', 'TV'])
 
     def test_cli_values_override_config_only_when_explicit(self):
         config = validate_config({
@@ -125,7 +138,11 @@ class ConfigurationChecks(unittest.TestCase):
             {'schema_version': SCHEMA_VERSION, 'devices': ['/dev/input/event0', '']},
             {'schema_version': SCHEMA_VERSION, 'cec_enabled': 1},
             {'schema_version': SCHEMA_VERSION, 'consider_input_devices': 1},
+            {'schema_version': SCHEMA_VERSION, 'firefox_audio_blocks_standby': 1},
+            {'schema_version': SCHEMA_VERSION, 'idle_inhibition_apps': ['a', 'a']},
             {'schema_version': SCHEMA_VERSION, 'mouse_output': ''},
+            {'schema_version': SCHEMA_VERSION, 'mouse_outputs': ['DP-1', 'DP-1']},
+            {'schema_version': SCHEMA_VERSION, 'mouse_outputs': ['']},
             {'schema_version': SCHEMA_VERSION, 'axis_deadzone_percent': 26},
             {'schema_version': SCHEMA_VERSION, 'device_axis_deadzones': {'/dev/input/a': {'5': 0}}},
             {'schema_version': SCHEMA_VERSION, 'device_axis_deadzones': {'/dev/input/a': {'47': 2}}},
@@ -168,6 +185,7 @@ class ConfigurationChecks(unittest.TestCase):
                 'timeout_seconds': None,
                 'consider_input_devices': False,
                 'mouse_output': 'DP-2',
+                'idle_inhibition_apps': ['org.example.Player.desktop'],
             }), encoding='utf-8')
             with patch('sys.argv', ['monitor.py', '--config', str(path),
                                     '--target', 'HDMI-A-1']), \
@@ -177,6 +195,8 @@ class ConfigurationChecks(unittest.TestCase):
                         self.assertFalse(args.cec),
                         self.assertFalse(args.consider_input_devices),
                         self.assertEqual(args.mouse_output, 'DP-2'),
+                        self.assertEqual(args.idle_inhibition_apps,
+                                         ['org.example.Player.desktop']),
                         0)[-1]):
                 self.assertEqual(monitor.main(), 0)
 

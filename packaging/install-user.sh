@@ -11,7 +11,7 @@ DATA_DIR="${XDG_DATA_HOME:-$HOME_DIR/.local/share}"
 
 install -d "$APP_DIR/cec-tv" "$BIN_DIR" "$UNIT_DIR"
 for file in \
-    activity_policy.py cec_power_state.py configuration.py equipment.py firefox_media.py \
+    activity_policy.py cec_power_state.py configuration.py equipment.py firefox_media.py standby_apps.py \
     native_messaging.py providers.py \
     monitor.py start.py cec-kde-settings.py cec-power-command.py \
     firefox-native-host.py topcec_gui.py activity.js firefox.js topcec.qml; do

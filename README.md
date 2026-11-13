@@ -45,7 +45,7 @@ configuration, external research repositories and credentials are excluded.
 - Target display is `HDMI-A-2`. The mouse bridge maps cursor position using KWin's
   current output geometries; gaps and overlapping geometry are treated as unknown.
   The bridge reports activity with its actual output name; the monitor filters
-  it using `mouse_output`, or `target_output` when unset. No separate KWin
+  it using the configured `mouse_outputs` list. No separate KWin
   target configuration is required. Legacy TV-only mouse reports are accepted
   only for the original default display.
 - CEC adapter: `/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00`;
@@ -64,8 +64,17 @@ configuration, external research repositories and credentials are excluded.
   locked-screen timeouts. A disabled timeout prevents automatic OFF.
 - Firefox audio detection uses the WebExtension signal when it is installed and
   reports fresh data; otherwise it falls back to AT-SPI's English `Mute tab`
-  label. Other browsers/apps are not covered. Ambiguous/stale window matching
-  blocks OFF. Snapshot interval 2 seconds; mapping TTL 15 seconds.
+  label. The Standby page can disable this detection; it uses the display selected
+  for mouse activity. Other apps' media
+  types cannot currently be detected. Ambiguous/stale window matching blocks OFF.
+  Snapshot interval 2 seconds; mapping TTL 15 seconds.
+- The Standby page lists installed desktop apps and lets each app's Plasma idle
+  inhibition block topCEC standby independently of its media settings. Sleep-only
+  inhibitions are ignored. Matching requests and their reasons appear under
+  “Currently blocking standby”; deselecting an app affects topCEC, not Plasma's
+  own power policy. Unknown app identity or display, stale Plasma status, and
+  failed installed-app discovery block standby when an app is selected. Selected
+  app IDs remain saved if an app is uninstalled.
 - Axis deadzones: ABS_RZ 5%, other axes 2%. Missing input devices stop the monitor;
   systemd retries after 15 seconds. Failed ON can retry upon activity after 10 seconds.
 - CEC operations are bounded by a 130-second monitor deadline. An unconfirmed OFF
@@ -153,6 +162,7 @@ python3 -B tests/run.py cec-power-state
 python3 -B tests/run.py activity-policy
 python3 -B tests/run.py providers
 python3 -B tests/run.py firefox-media
+python3 -B tests/run.py standby-apps
 python3 -B tests/run.py configuration
 python3 -B tests/run.py equipment
 python3 -B tests/run.py gui
@@ -192,6 +202,7 @@ keys, malformed values, or unreadable files stop startup with an error.
   "devices": ["/dev/input/event10", "/dev/input/event14"],
   "consider_input_devices": true,
   "mouse_output": null,
+  "mouse_outputs": null,
   "mute_labels": ["Mute tab"],
   "cec_enabled": false,
   "cec_port": "/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00",
@@ -206,9 +217,10 @@ keys, malformed values, or unreadable files stop startup with an error.
 Set `timeout_seconds` to `null` to disable inactivity standby. CEC remains
 disabled by default; enabling it retains the live Firefox snapshot requirement.
 Set `consider_input_devices` to `false` to ignore the selected input devices
-without removing their paths. `mouse_output` selects the display whose mouse
-movement prevents standby; `null` follows `target_output`. Mouse movement is
-independent of the input-device setting.
+without removing their paths. `mouse_outputs` lists displays whose mouse movement
+or selected app activity prevents standby; an empty list selects none. A `null`
+value preserves the legacy `mouse_output` setting, which follows `target_output`
+when also null. Mouse movement is independent of the input-device setting.
 The installed live launcher can load the same file with
 `cec-tv/start.py --config ~/.config/topcec/config.json`; it continues to force
 live CEC and the fresh-snapshot safety requirement. If no `--config` is passed,

@@ -15,6 +15,17 @@ import equipment
 
 
 class EquipmentChecks(unittest.TestCase):
+    def test_installed_apps_include_hidden_entries_and_deduplicate_ids(self):
+        def entry(identity, name):
+            return SimpleNamespace(get_id=lambda: identity, get_display_name=lambda: name)
+        gio = SimpleNamespace(AppInfo=SimpleNamespace(get_all=lambda: [
+            entry('one.desktop', 'One'), entry('one.desktop', 'Duplicate'),
+            entry('hidden.desktop', 'Hidden'), entry(None, 'No ID')]))
+        with patch.dict(sys.modules, {'gi.repository': SimpleNamespace(Gio=gio)}):
+            self.assertEqual(equipment.discover_apps(), [
+                {'id': 'hidden.desktop', 'name': 'Hidden'},
+                {'id': 'one.desktop', 'name': 'One'}])
+
     def test_inventory_uses_stable_paths_names_and_connected_displays(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

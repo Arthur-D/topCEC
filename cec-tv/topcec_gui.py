@@ -93,8 +93,14 @@ def config_from_settings(current, values):
         'consider_input_devices': values.get(
             'considerInputDevices', current['consider_input_devices']),
         'mouse_output': values.get('mouseOutput', current['mouse_output']),
+        'mouse_outputs': values.get(
+            'mouseOutputs', None if 'mouseOutput' in values else current['mouse_outputs']),
         'mute_labels': [item.strip() for item in str(values['muteLabels']).splitlines()
                         if item.strip()],
+        'firefox_audio_blocks_standby': values.get(
+            'firefoxAudioBlocksStandby', current['firefox_audio_blocks_standby']),
+        'idle_inhibition_apps': values.get(
+            'idleInhibitionApps', current['idle_inhibition_apps']),
         'cec_enabled': True,
         'cec_port': str(values['adapter']).strip(),
         'kde_timeout': timeout_mode == 'kde',
@@ -109,6 +115,7 @@ def config_from_settings(current, values):
 
 class GuiBackend(QObject):
     changed = Signal()
+    appsChanged = Signal()
     equipmentChanged = Signal()
     configurationChanged = Signal()
     settingsSaved = Signal()
@@ -374,6 +381,56 @@ class GuiBackend(QObject):
         unit = 'minute' if minutes == 1 else 'minutes'
         return f'{label} ({minutes:g} {unit})'
 
+    @Property(bool, notify=changed)
+    def firefoxPlaybackActive(self):
+        return self._service_data.get('playback_active') is True
+
+    @Property('QVariantList', notify=appsChanged)
+    def installedApps(self):
+        apps = self._service_data.get('installed_apps')
+        if not isinstance(apps, list):
+            return []
+        return [app for app in apps if isinstance(app, dict)
+                and isinstance(app.get('id'), str) and isinstance(app.get('name'), str)]
+
+    @Property(str, notify=changed)
+    def appDiscoveryMessage(self):
+        if not self.backendAvailable:
+            return 'Installed apps are unavailable while the host service is disconnected.'
+        error = self._service_data.get('installed_apps_error')
+        if error:
+            return str(error)
+        if not isinstance(self._service_data.get('installed_apps'), list):
+            return 'The host has not reported installed apps. Update the host service.'
+        return '' if self.installedApps else 'No installed apps detected.'
+
+    @Property('QVariantList', notify=changed)
+    def blockingApps(self):
+        apps = self._service_data.get('blocking_apps')
+        if not isinstance(apps, list):
+            return []
+        return [app for app in apps if isinstance(app, dict)
+                and isinstance(app.get('app'), str)
+                and isinstance(app.get('reason'), str)
+                and isinstance(app.get('locationUnknown'), bool)]
+
+    @Property(str, notify=changed)
+    def inhibitionsMessage(self):
+        if not self.backendAvailable:
+            return 'Plasma idle-inhibition status is unavailable.'
+        error = self._service_data.get('inhibitions_error')
+        if error:
+            return str(error)
+        if 'blocking_apps' not in self._service_data:
+            return 'The host has not reported Plasma idle-inhibition status.'
+        return ''
+
+    def _set_service_data(self, data):
+        previous = self._service_data.get('installed_apps')
+        self._service_data = data
+        if previous != data.get('installed_apps'):
+            self.appsChanged.emit()
+
     @Slot(result=str)
     def deviceList(self):
         pending = self._input_preferences.value('pending')
@@ -424,7 +481,7 @@ class GuiBackend(QObject):
 
     @Slot()
     def _poll_service_status(self):
-        if (not self.backendAvailable or not self.config['kde_timeout']
+        if (not self.backendAvailable
                 or self._refresh_in_flight
                 or self._settings_in_flight or self._status_poll_in_flight):
             return
@@ -461,7 +518,14 @@ class GuiBackend(QObject):
             self._connection_failed(
                 generation, 'Invalid monitor status response: ' + str(error))
             return
-        self._service_data = {**self._service_data, **data}
+        self._set_service_data({**self._service_data, **data})
+        self._service_status = self._service_data.get('service', self._service_status)
+        self._power_state = self._service_data.get('power_state', self._power_state)
+        reason = self._service_data.get('fail_safe_reason')
+        self._standby_reason = (
+            'Automatic standby allowed' if not reason
+            else 'Automatic standby blocked: ' + str(reason))
+        self._update_diagnostics()
         self.changed.emit()
 
     def _ensure_owner_watch(self):
@@ -482,7 +546,7 @@ class GuiBackend(QObject):
         self._status_poll_in_flight = False
         self._failed_input_draft = None
         self._refresh_in_flight = False
-        self._service_data = {}
+        self._set_service_data({})
         self._missing_capabilities.clear()
         self._set_equipment(None, 'Host equipment inventory will refresh after reconnection.')
         self._power_state = 'unavailable'
@@ -580,7 +644,7 @@ class GuiBackend(QObject):
 
     def _set_unavailable(self):
         self._set_equipment(None, 'Host equipment discovery is unavailable while disconnected.')
-        self._service_data = {}
+        self._set_service_data({})
         self._power_state = 'unavailable'
         if self.dbus_only:
             self._service_status = 'unavailable'
@@ -601,7 +665,7 @@ class GuiBackend(QObject):
 
     def _set_connection_error(self, message):
         self._set_equipment(None, 'Host equipment discovery is unavailable: ' + message)
-        self._service_data = {}
+        self._set_service_data({})
         self._service_status = 'connection error'
         self._power_state = 'unavailable'
         self._connection_state = 'error'
@@ -626,8 +690,11 @@ class GuiBackend(QObject):
             self._connection_failed(generation, error)
             return
         try:
-            self._service_data = json.loads(str(reply.arguments()[0]))
-        except (IndexError, TypeError, json.JSONDecodeError) as error:
+            data = json.loads(str(reply.arguments()[0]))
+            if not isinstance(data, dict):
+                raise ValueError('Status response must be an object')
+            self._set_service_data(data)
+        except (IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
             self._connection_failed(
                 generation, 'Invalid monitor status response: ' + str(error))
             return
@@ -842,9 +909,10 @@ class GuiBackend(QObject):
                 raise ValueError('Host did not confirm that settings were saved')
             config = result['config']
             # Older hosts returned the complete configuration without its version.
-            if isinstance(config, dict) and set(config) in (
-                    set(DEFAULT_CONFIG),
-                    set(DEFAULT_CONFIG) - {'consider_input_devices', 'mouse_output'}):
+            optional = {'consider_input_devices', 'mouse_output', 'mouse_outputs',
+                        'firefox_audio_blocks_standby', 'idle_inhibition_apps'}
+            if (isinstance(config, dict) and set(DEFAULT_CONFIG) - optional <= set(config)
+                    and set(config) <= set(DEFAULT_CONFIG)):
                 config = {'schema_version': SCHEMA_VERSION, **config}
             saved = validate_config(config)
         except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:

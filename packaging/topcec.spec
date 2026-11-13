@@ -52,6 +52,7 @@ install -m 0644 cec-tv/activity.js \
     cec-tv/configuration.py \
     cec-tv/equipment.py \
     cec-tv/firefox_media.py \
+    cec-tv/standby_apps.py \
     cec-tv/firefox.js \
     cec-tv/monitor.py \
     cec-tv/native_messaging.py \
@@ -103,6 +104,7 @@ install -D -m 0644 cec-tv/net.local.topcec.svg \
 %{_topcec_appdir}/cec-tv/configuration.py
 %{_topcec_appdir}/cec-tv/equipment.py
 %{_topcec_appdir}/cec-tv/firefox_media.py
+%{_topcec_appdir}/cec-tv/standby_apps.py
 %{_topcec_appdir}/cec-tv/native_messaging.py
 %{_topcec_appdir}/cec-tv/firefox-native-host.py
 %{_topcec_appdir}/cec-tv/firefox.js

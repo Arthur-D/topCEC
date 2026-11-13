@@ -97,5 +97,24 @@ def discover_equipment():
     return result
 
 
+def discover_apps():
+    from gi.repository import Gio
+
+    apps = {}
+    for app in Gio.AppInfo.get_all():
+        identity = app.get_id()
+        name = app.get_display_name()
+        if identity and name:
+            apps.setdefault(identity, {'id': identity, 'name': name})
+    return sorted(apps.values(), key=lambda app: (app['name'].casefold(), app['id']))
+
+
 if __name__ == '__main__':
-    print(json.dumps(discover_equipment(), sort_keys=True))
+    inventory = discover_equipment()
+    try:
+        inventory['apps'] = discover_apps()
+        inventory['apps_error'] = None
+    except (ImportError, OSError, RuntimeError) as error:
+        inventory['apps'] = []
+        inventory['apps_error'] = 'Installed app discovery failed: ' + str(error)
+    print(json.dumps(inventory, sort_keys=True))

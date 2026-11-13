@@ -25,9 +25,10 @@ from activity_policy import ActivityPolicy, DEFAULT_TIMEOUT
 from cec_power_state import CecPowerStateMachine
 from configuration import (
     DEFAULT_CONFIG, SCHEMA_VERSION, default_config_path, load_config, merge_cli, save_config,
-    validate_config,
+    validate_config, mouse_outputs,
 )
 from firefox_media import FirefoxWebExtensionProvider
+from standby_apps import PlasmaInhibitions, decode_windows, matching_inhibitions
 from providers import ActivityProvider as ActivityProviderContract
 from providers import CecBackend, MediaProvider as MediaProviderContract
 
@@ -697,7 +698,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'devices': DEFAULT_CONFIG['devices'] if args.device is None else args.device,
         'consider_input_devices': getattr(args, 'consider_input_devices', True),
         'mouse_output': getattr(args, 'mouse_output', None),
+        'mouse_outputs': getattr(args, 'mouse_outputs', None),
         'mute_labels': DEFAULT_CONFIG['mute_labels'] if args.mute_label is None else args.mute_label,
+        'firefox_audio_blocks_standby': getattr(
+            args, 'firefox_audio_blocks_standby', True),
+        'idle_inhibition_apps': getattr(args, 'idle_inhibition_apps', []),
         'cec_enabled': bool(args.cec),
         'cec_port': args.cec_port,
         'kde_timeout': bool(args.kde_timeout),
@@ -714,6 +719,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     equipment_worker = None
     equipment_output = None
     equipment_started = equipment_next = 0.0
+    app_windows = []
+    app_windows_stamp = None
 
     def poll_equipment():
         nonlocal equipment_worker, equipment_output, equipment_started, equipment_next, equipment_snapshot
@@ -912,7 +919,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     class Receiver(dbus.service.Object):
         @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='')
         def Report(self, message):
-            nonlocal focus
+            nonlocal focus, app_windows, app_windows_stamp
             message = str(message)
             if message.startswith('Fokus: '):
                 new_focus = message[len('Fokus: '):].strip()
@@ -924,17 +931,23 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                             axis.reset()
             elif message.startswith('Mouse-activity: '):
                 output = message[len('Mouse-activity: '):].strip()
-                mouse_output = runtime_config['mouse_output'] or target_output
-                if output == mouse_output and output not in ('unknown', 'ingen', ''):
+                if output in mouse_outputs(runtime_config) and output not in ('unknown', 'ingen', ''):
                     activity('mouse (TV activity report from KWin)')
             elif (message == 'TV-aktivitet: mus'
-                  and (runtime_config['mouse_output'] or target_output) == TARGET):
+                  and TARGET in mouse_outputs(runtime_config)):
                 # Older bridges identify only the original default TV output.
                 activity('mouse (TV activity report from KWin)')
             elif message.startswith("Desktop-snapshot: "):
                 first = mapping.snapshot_stamp is None
+                raw_snapshot = message[len("Desktop-snapshot: "):]
                 try:
-                    payload = firefox_window_snapshot(message[len("Desktop-snapshot: "):])
+                    app_windows = decode_windows(raw_snapshot)
+                    app_windows_stamp = time.monotonic()
+                except (ValueError, TypeError) as error:
+                    app_windows_stamp = None
+                    log('App window snapshot unavailable: ' + str(error))
+                try:
+                    payload = firefox_window_snapshot(raw_snapshot)
                 except (ValueError, TypeError, OSError) as error:
                     mapping.snapshot_error = "Window processes could not be verified: " + str(error)
                 else:
@@ -961,6 +974,9 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             return json.dumps({
                 **status_snapshot, 'configuration_saved': config_path.is_file(),
                 'settings_apply': 'live', 'process_id': os.getpid(),
+                'installed_apps': equipment_snapshot.get('apps'),
+                'installed_apps_error': equipment_snapshot.get(
+                    'apps_error', 'Installed app discovery has not completed'),
             }, sort_keys=True)
 
         @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
@@ -1004,6 +1020,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             return json.dumps({'accepted': True, 'action': str(action)})
 
     bus = dbus.SessionBus()
+    plasma_inhibitions = PlasmaInhibitions(bus, dbus)
     try:
         name = dbus.service.BusName('net.local.CecActivity', bus=bus,
                                    do_not_queue=True)
@@ -1051,6 +1068,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         nonlocal worker_labels
         nonlocal scan_error, previous_status, warning_reported, previous_playback
         nonlocal startup_error, selector
+        plasma_inhibitions.poll(time.monotonic())
         if startup_error:
             try:
                 if power is not None and (power.process is not None or power.pending == 'on'):
@@ -1143,15 +1161,19 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 worker_labels = list(args.mute_label)
             reason = None
             audible = False
-            native_audio_state = webextension_media.audio_state(
-                mapping, now, target_output, mapping.ttl)
-            if native_audio_state is not None:
-                audible, uncertain_audio = native_audio_state
+            media_outputs = mouse_outputs(runtime_config)
+            native_audio_states = [
+                webextension_media.audio_state(mapping, now, output, mapping.ttl)
+                for output in media_outputs
+            ] if runtime_config['firefox_audio_blocks_standby'] else []
+            if native_audio_states and all(state is not None for state in native_audio_states):
+                audible = any(state[0] for state in native_audio_states)
+                uncertain_audio = any(state[1] for state in native_audio_states)
                 if uncertain_audio:
                     reason = (
                         'Firefox WebExtension reports audio, but its active window '
                         'cannot be uniquely matched to a KWin display')
-            else:
+            elif runtime_config['firefox_audio_blocks_standby'] and media_outputs:
                 reason = scan_error
                 if scan_stamp is None or now - scan_stamp > SCAN_MAX_AGE:
                     reason = reason or 'AT-SPI result is missing or stale'
@@ -1160,8 +1182,12 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                         for message in match_diagnostics.update(
                                 frames, mapping, now, scan_stamp):
                             log(message)
-                    audible, uncertain_audio = media_provider.audio_state(
-                        frames, mapping, now, target_output)
+                    audio_states = [
+                        media_provider.audio_state(frames, mapping, now, output)
+                        for output in media_outputs
+                    ]
+                    audible = any(state[0] for state in audio_states)
+                    uncertain_audio = any(state[1] for state in audio_states)
                     if uncertain_audio:
                         reason = (
                             'Firefox audio is active, but window mapping is '
@@ -1175,6 +1201,25 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     if not frames and mapping.reports:
                         reason = 'KWin reported Firefox, but AT-SPI found no frames'
             reason = reason or mapping.health(now, args.require_snapshot)
+            inhibition_error = plasma_inhibitions.health(now)
+            apps_error = equipment_snapshot.get('apps_error')
+            if equipment_snapshot.get('apps') is None:
+                apps_error = apps_error or 'Waiting for installed app discovery'
+            blocking_apps = matching_inhibitions(
+                plasma_inhibitions.requests if inhibition_error is None else [],
+                runtime_config['idle_inhibition_apps'],
+                equipment_snapshot.get('apps') or [], app_windows,
+                app_windows_stamp is not None
+                and now - app_windows_stamp <= mapping.ttl,
+                media_outputs)
+            if media_outputs and runtime_config['idle_inhibition_apps'] and inhibition_error:
+                reason = reason or inhibition_error
+            if media_outputs and runtime_config['idle_inhibition_apps'] and apps_error:
+                reason = reason or str(apps_error)
+            if blocking_apps:
+                reason = reason or ('Plasma idle inhibition: '
+                                    + blocking_apps[0]['app'] + ' — '
+                                    + blocking_apps[0]['reason'])
             if kde_settings:
                 settings_error = kde_settings.poll(timer, now)
                 reason = reason or settings_error
@@ -1194,11 +1239,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             if any(state['dropped'] for state in devices.values()):
                 reason = reason or 'Waiting for input resynchronization'
             if audible:
-                activity('Firefox audio in a window on ' + target_output)
+                activity('Firefox audio on a selected display')
             # Logging state is separate from activity and fail-safe decisions.
             # Unknown monitoring state must not be reported as playback stopping.
             if reason is None and audible != previous_playback:
-                log('Firefox playback on TV ' + ('started' if audible else 'stopped'))
+                log('Firefox playback on a selected display ' + ('started' if audible else 'stopped'))
                 previous_playback = audible
             if reason != previous_status:
                 log('FAIL-SAFE: ' + reason + '; standby blocked' if reason else
@@ -1220,6 +1265,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     if kde_settings and type(kde_settings.value) is int else None),
                 'fail_safe_reason': reason,
                 'playback_active': audible,
+                'blocking_apps': blocking_apps,
+                'inhibitions_error': inhibition_error,
                 'scan_status': scan_error,
             })
         except Exception as error:
@@ -2049,6 +2096,9 @@ def main():
     args.device = config['devices']
     args.consider_input_devices = config['consider_input_devices']
     args.mouse_output = config['mouse_output']
+    args.mouse_outputs = config['mouse_outputs']
+    args.firefox_audio_blocks_standby = config['firefox_audio_blocks_standby']
+    args.idle_inhibition_apps = config['idle_inhibition_apps']
     args.mute_label = config['mute_labels']
     args.cec = config['cec_enabled']
     args.cec_port = config['cec_port']

@@ -21,6 +21,11 @@ Kirigami.ApplicationWindow {
     property bool settingsDirty: false
     property string submittedSettings: ""
     property var axisDraft: ({})
+    property var mouseOutputsDraft: []
+    property bool mouseOutputsLegacy: false
+    property bool mouseOutputsFollowTarget: false
+    property var idleAppsDraft: []
+    property var retainedAppIds: []
     property real defaultAxisDeadzone: 2
     property real defaultRzDeadzone: 5
 
@@ -130,8 +135,10 @@ Kirigami.ApplicationWindow {
             timeoutMinutes: timeoutMinutes.value,
             devices: devicesField.text,
             considerInputDevices: considerInputDevices.checked,
-            mouseOutput: mouseOutput.selectedOutput.length ? mouseOutput.selectedOutput : null,
+            mouseOutputs: mouseOutputsLegacy ? null : mouseOutputsDraft,
             muteLabels: labelsField.text,
+            firefoxAudioBlocksStandby: firefoxAudio.checked,
+            idleInhibitionApps: idleAppsDraft,
             axisDeadzone: defaultAxisDeadzone,
             rzDeadzone: defaultRzDeadzone,
             deviceAxisDeadzones: axisDraft
@@ -596,17 +603,67 @@ Kirigami.ApplicationWindow {
             : (topcec.setting("timeout_seconds") === null ? 2 : 1)
         timeoutMinutes.value = topcec.timeoutMinutes()
         considerInputDevices.checked = topcec.setting("consider_input_devices")
-        mouseOutput.selectedOutput = topcec.setting("mouse_output") || ""
+        let outputs = topcec.setting("mouse_outputs")
+        mouseOutputsLegacy = outputs === null || outputs === undefined
+        mouseOutputsFollowTarget = mouseOutputsLegacy && !topcec.setting("mouse_output")
+        mouseOutputsDraft = mouseOutputsLegacy
+            ? [topcec.setting("mouse_output") || topcec.setting("target_output")]
+            : Array.from(outputs)
         devicesField.text = topcec.deviceList()
         labelsField.text = topcec.muteLabelList()
+        firefoxAudio.checked = topcec.setting("firefox_audio_blocks_standby")
+        idleAppsDraft = Array.from(topcec.setting("idle_inhibition_apps") || [])
+        retainedAppIds = idleAppsDraft.slice()
         defaultAxisDeadzone = topcec.setting("axis_deadzone_percent")
         defaultRzDeadzone = topcec.setting("rz_deadzone_percent")
         axisDraft = JSON.parse(JSON.stringify(topcec.setting("device_axis_deadzones") || {}))
     }
 
+    function appChoices() {
+        let apps = topcec.installedApps.slice()
+        for (let id of retainedAppIds) {
+            if (!apps.some(app => app.id === id))
+                apps.push({id: id, name: id + " (not installed)"})
+        }
+        let query = appSearch.text.trim().toLowerCase()
+        return apps.filter(app => !query || (app.name + " " + app.id).toLowerCase().includes(query))
+    }
+
+    function selectedMouseDisplays() {
+        return mouseOutputsFollowTarget
+            ? [outputField.valueToSave || topcec.setting("target_output")] : mouseOutputsDraft
+    }
+
+    function mouseDisplayChoices() {
+        let choices = topcec.detectedOutputs.slice()
+        for (let path of selectedMouseDisplays()) {
+            if (!choices.some(item => item.path === path))
+                choices.push({path: path, label: root.retainedValue(path)})
+        }
+        return choices
+    }
+
+    function setMouseDisplay(path, enabled) {
+        let selected = selectedMouseDisplays()
+        mouseOutputsLegacy = false
+        mouseOutputsFollowTarget = false
+        mouseOutputsDraft = enabled ? [...selected.filter(item => item !== path), path]
+            : selected.filter(item => item !== path)
+        settingsDirty = true
+    }
+
+    function setIdleApp(id, enabled) {
+        idleAppsDraft = enabled ? [...idleAppsDraft.filter(item => item !== id), id]
+            : idleAppsDraft.filter(item => item !== id)
+        settingsDirty = true
+    }
+
     Component.onCompleted: loadSettings()
     Connections {
         target: topcec
+        function onAppsChanged() {
+            root.retainedAppIds = [...new Set([...root.retainedAppIds, ...root.idleAppsDraft])]
+        }
         function onConfigurationChanged() { root.loadSettings() }
         function onSettingsSaved() {
             if (root.submittedSettings && JSON.stringify(root.settingsValues()) !== root.submittedSettings)
@@ -1197,36 +1254,30 @@ Kirigami.ApplicationWindow {
                                     }
                                     SelectableLabel {
                                         Layout.fillWidth: true
-                                        text: "Display where mouse movement prevents standby"
+                                        text: "Displays where mouse movement prevents standby"
                                     }
-                                    CopyableComboBox {
-                                        id: mouseOutput
-                                        objectName: "mouseOutput"
-                                        Layout.fillWidth: true
-                                        Accessible.name: "Display where mouse movement prevents standby"
-                                        property string selectedOutput: ""
-                                        readonly property var choices: {
-                                            let items = [{path: "", label: "TV display (default)"}]
-                                            for (let output of topcec.detectedOutputs)
-                                                items.push({path: output.path, label: output.label})
-                                            if (selectedOutput.length && !items.some(item => item.path === selectedOutput))
-                                                items.push({path: selectedOutput, label: selectedOutput + " (not detected)"})
-                                            return items
-                                        }
-                                        model: choices
-                                        textRole: "label"
-                                        currentIndex: choices.findIndex(item => item.path === selectedOutput)
-                                        onActivated: function(index) {
-                                            selectedOutput = choices[index].path
-                                            root.settingsDirty = true
+                                    Repeater {
+                                        objectName: "mouseDisplayChoices"
+                                        model: root.mouseDisplayChoices()
+                                        delegate: CopyableCheckBox {
+                                            required property var modelData
+                                            objectName: "mouseDisplay:" + modelData.path
+                                            Layout.fillWidth: true
+                                            text: modelData.label
+                                            checked: root.selectedMouseDisplays().includes(modelData.path)
+                                            onClicked: root.setMouseDisplay(modelData.path, checked)
                                         }
                                     }
                                     SelectableLabel {
                                         Layout.fillWidth: true
                                         visible: !topcec.detectedOutputs.length
                                         text: topcec.equipmentAvailabilityKnown
-                                            ? "No displays detected; the TV display remains available."
-                                            : "Display detection unavailable; the TV display remains available."
+                                            ? "No displays detected. Saved selections are retained."
+                                            : "Display detection unavailable. Saved selections are retained."
+                                    }
+                                    SelectableLabel {
+                                        Layout.fillWidth: true
+                                        text: "App activity can also prevent standby on selected displays."
                                     }
                                 }
                             }
@@ -1407,11 +1458,72 @@ Kirigami.ApplicationWindow {
                         }
                     }
 
+                    SelectableHeading {
+                        visible: root.currentSection === 2
+                        level: 3
+                        text: "Apps"
+                    }
+                    SelectableHeading {
+                        visible: root.currentSection === 2
+                        level: 4
+                        text: "Can block standby"
+                    }
+                    SurfaceFrame {
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2
+                        ColumnLayout {
+                            width: parent.width
+                            CopyableCheckBox {
+                                id: firefoxAudio
+                                objectName: "firefoxAudio"
+                                text: "Firefox · Audio"
+                                onToggled: root.settingsDirty = true
+                            }
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                text: "Only supported media controls are shown. Select apps whose Plasma idle-inhibition requests may also block standby."
+                            }
+                            Controls.TextField {
+                                id: appSearch
+                                objectName: "appSearch"
+                                Layout.fillWidth: true
+                                placeholderText: "Search installed apps"
+                                Accessible.name: placeholderText
+                            }
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                visible: topcec.appDiscoveryMessage.length > 0
+                                text: topcec.appDiscoveryMessage
+                            }
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                visible: appSearch.text.length > 0 && root.appChoices().length === 0
+                                text: "No apps match this search."
+                            }
+                            ListView {
+                                objectName: "installedAppsScroll"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: Math.min(300, Math.max(40, contentHeight))
+                                visible: count > 0
+                                clip: true
+                                model: root.appChoices()
+                                Controls.ScrollBar.vertical: Controls.ScrollBar {}
+                                delegate: CopyableCheckBox {
+                                    required property var modelData
+                                    objectName: "idleApp:" + modelData.id
+                                    width: ListView.view.width
+                                    text: modelData.name + " · Idle inhibition"
+                                    checked: root.idleAppsDraft.includes(modelData.id)
+                                    onClicked: root.setIdleApp(modelData.id, checked)
+                                }
+                            }
+                        }
+                    }
                     DisclosureButton {
                         id: firefoxToggle
                         objectName: "firefoxToggle"
                         visible: root.currentSection === 2
-                        text: "Firefox mute-tab labels"
+                        text: "Mute tab labels"
                     }
                     SurfaceFrame {
                         Layout.fillWidth: true
@@ -1434,6 +1546,39 @@ Kirigami.ApplicationWindow {
                                     if (activeFocus) root.settingsDirty = true
                                 }
                             }
+                        }
+                    }
+
+                    SelectableHeading {
+                        visible: root.currentSection === 2
+                        level: 4
+                        text: "Currently blocking standby"
+                    }
+                    SelectableLabel {
+                        objectName: "appBlockingStatus"
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2 && topcec.firefoxPlaybackActive
+                        text: "Firefox · Audio"
+                    }
+                    SelectableLabel {
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2 && topcec.inhibitionsMessage.length > 0
+                        text: topcec.inhibitionsMessage
+                    }
+                    SelectableLabel {
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2 && !topcec.firefoxPlaybackActive
+                            && topcec.blockingApps.length === 0 && topcec.inhibitionsMessage.length === 0
+                        text: "No apps are currently blocking standby."
+                    }
+                    Repeater {
+                        model: root.currentSection === 2 ? topcec.blockingApps : []
+                        delegate: SelectableLabel {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            text: modelData.app + " · " + (modelData.reason || "Idle inhibition")
+                                + (modelData.identityUnknown ? " (app identity unknown)"
+                                    : (modelData.locationUnknown ? " (display unknown)" : ""))
                         }
                     }
 
