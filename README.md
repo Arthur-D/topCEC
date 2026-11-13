@@ -68,6 +68,10 @@ configuration, external research repositories and credentials are excluded.
   matching blocks OFF.
   The Standby page reports when Firefox audio detection is unavailable instead
   of treating it as inactive. Snapshot interval 2 seconds; mapping TTL 15 seconds.
+  Detailed monitoring warnings appear on Diagnostics. Standby remains
+  blocked when Firefox audio status is uncertain. AT-SPI updates are
+  event-driven, with no documented fixed update interval
+  ([AT-SPI cache protocol](https://gnome.pages.gitlab.gnome.org/at-spi2-core/devel-docs/doc-org.a11y.atspi.Cache.html)).
   The AT-SPI fallback reads the shared accessibility bus. It verifies Firefox's
   process executable before querying the accessibility tree. For Flatpak Firefox,
   it verifies that the D-Bus proxy shares a per-instance cgroup with the browser.
