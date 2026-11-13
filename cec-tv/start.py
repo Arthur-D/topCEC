@@ -43,8 +43,7 @@ def main():
         if not ident.isdigit():
             raise RuntimeError('KWin could not load ' + name + ': ' + ident)
     qdbus('org.kde.KWin', '/Scripting', 'org.kde.kwin.Scripting.start')
-    command = ['/usr/bin/python3', str(BASE / 'monitor.py'),
-               '--cec', '--require-snapshot']
+    command = ['/usr/bin/python3', str(BASE / 'monitor.py'), '--require-snapshot']
     if config_path:
         command += ['--config', str(config_path)]
     else:

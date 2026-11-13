@@ -251,7 +251,7 @@ class ConfigurationChecks(unittest.TestCase):
             command = execv.call_args.args[1]
             self.assertIn('--config', command)
             self.assertIn(str(path), command)
-            self.assertIn('--cec', command)
+            self.assertNotIn('--cec', command)
             self.assertIn('--require-snapshot', command)
             self.assertNotIn('--kde-timeout', command)
             self.assertNotIn('--device', command)
@@ -284,6 +284,7 @@ class ConfigurationChecks(unittest.TestCase):
             command = execv.call_args.args[1]
             self.assertIn('--config', command)
             self.assertIn(str(path), command)
+            self.assertNotIn('--cec', command)
 
     def test_service_launcher_uses_portable_monitor_device_defaults(self):
         def qdbus(*args, **kwargs):
@@ -302,6 +303,7 @@ class ConfigurationChecks(unittest.TestCase):
             start.main()
         command = execv.call_args.args[1]
         self.assertIn('--kde-timeout', command)
+        self.assertNotIn('--cec', command)
         self.assertNotIn('--device', command)
         self.assertFalse(any('/dev/input/by-id/' in value for value in command))
 
