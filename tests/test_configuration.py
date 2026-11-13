@@ -80,6 +80,7 @@ class ConfigurationChecks(unittest.TestCase):
             'target_output': 'DP-1',
             'timeout_seconds': None,
             'cec_enabled': True,
+            'cec_port': '/dev/cec',
             'devices': ['/dev/input/event42'],
         })
         self.assertEqual(config['target_output'], 'DP-1')
@@ -105,6 +106,24 @@ class ConfigurationChecks(unittest.TestCase):
         self.assertEqual(config['axis_deadzone_percent'], 0.0)
         self.assertEqual(config['rz_deadzone_percent'], 0.0)
 
+    def test_hardware_defaults_are_unselected_and_cec_requires_explicit_hardware(self):
+        config = validate_config({'schema_version': SCHEMA_VERSION})
+        self.assertEqual(config['target_output'], '')
+        self.assertEqual(config['cec_port'], '')
+        self.assertEqual(config['devices'], [])
+        self.assertEqual(config['timeout_seconds'], 300)
+        self.assertTrue(config['kde_timeout'])
+        self.assertFalse(config['cec_enabled'])
+        self.assertEqual(mouse_outputs(config), [])
+        for value in (
+                {'schema_version': SCHEMA_VERSION, 'cec_enabled': True,
+                 'target_output': 'DP-1'},
+                {'schema_version': SCHEMA_VERSION, 'cec_enabled': True,
+                 'cec_port': '/dev/cec'},
+        ):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate_config(value)
+
     def test_mouse_display_list_preserves_legacy_and_empty_selections(self):
         legacy = validate_config({'schema_version': SCHEMA_VERSION, 'target_output': 'TV',
                                   'mouse_output': 'DP-1'})
@@ -120,6 +139,7 @@ class ConfigurationChecks(unittest.TestCase):
             'schema_version': SCHEMA_VERSION,
             'target_output': 'DP-1',
             'cec_enabled': True,
+            'cec_port': '/dev/cec',
         })
         args = SimpleNamespace(
             target=None, timeout_seconds=None, mapping_ttl=None, device=None,

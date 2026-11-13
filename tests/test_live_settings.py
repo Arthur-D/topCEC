@@ -78,9 +78,50 @@ class TestPower(monitor.CecPower):
 
 
 class LiveSettingsChecks(unittest.TestCase):
+    def test_kde_timeout_uses_fallback_on_read_error_and_recovers(self):
+        timer = Mock()
+        settings = monitor.KdeTimeout()
+        failed_read = Mock()
+        failed_read.poll.return_value = 1
+        failed_read.returncode = 1
+        failed_read.communicate.return_value = (
+            json.dumps({'ok': False, 'error': 'Plasma unavailable'}), '')
+        settings.process = failed_read
+
+        with patch.object(monitor, 'log'):
+            error = settings.poll(timer, 10)
+            self.assertIn('Plasma unavailable', error)
+            self.assertTrue(settings.fallback_active)
+            timer.set_timeout.assert_called_once_with(300.0, 10)
+
+            recovered_read = Mock()
+            recovered_read.poll.return_value = 0
+            recovered_read.returncode = 0
+            recovered_read.communicate.return_value = (
+                json.dumps({'ok': True, 'timeout': 600}), '')
+            settings.process = recovered_read
+            self.assertIsNone(settings.poll(timer, 16))
+            self.assertFalse(settings.fallback_active)
+            self.assertEqual(timer.set_timeout.call_args_list, [
+                unittest.mock.call(300.0, 10),
+                unittest.mock.call(600, 16),
+            ])
+
+            disabled_read = Mock()
+            disabled_read.poll.return_value = 0
+            disabled_read.returncode = 0
+            disabled_read.communicate.return_value = (
+                json.dumps({'ok': True, 'timeout': None}), '')
+            settings.process = disabled_read
+            self.assertIsNone(settings.poll(timer, 22))
+            self.assertFalse(settings.fallback_active)
+            self.assertEqual(timer.set_timeout.call_args,
+                             unittest.mock.call(None, 22))
+
     def run_service(self, path, scenario, *, initial=None, fail_inputs=(), fail_adapter=None,
                     plasma_timeout_seconds='unread', inventory=None):
-        config = {**DEFAULT_CONFIG, 'devices': ['/mock/keyboard'], 'cec_port': '/mock/cec',
+        config = {**DEFAULT_CONFIG, 'target_output': '/mock/output',
+                  'devices': ['/mock/keyboard'], 'cec_port': '/mock/cec',
                   **(initial or {})}
         context = SimpleNamespace(receiver=None, callbacks={}, inputs=[], selectors=[],
                                   powers=[], workers=[], providers=[], now=0,

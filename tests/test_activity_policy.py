@@ -13,9 +13,9 @@ class ActivityPolicyChecks(unittest.TestCase):
     def test_default_timeout_and_single_standby_transition(self):
         policy = ActivityPolicy(0)
         self.assertEqual(policy.timeout, DEFAULT_TIMEOUT)
-        self.assertIsNone(policy.tick(59.9))
-        self.assertIn('TV in standby', policy.tick(60))
-        self.assertIsNone(policy.tick(61))
+        self.assertIsNone(policy.tick(DEFAULT_TIMEOUT - 0.1))
+        self.assertIn('TV in standby', policy.tick(DEFAULT_TIMEOUT))
+        self.assertIsNone(policy.tick(DEFAULT_TIMEOUT + 1))
         self.assertTrue(policy.expired)
 
     def test_activity_after_standby_requests_wake_once(self):

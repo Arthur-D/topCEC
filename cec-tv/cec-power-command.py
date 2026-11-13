@@ -12,8 +12,6 @@ import subprocess
 import sys
 import time
 
-from configuration import DEFAULT_CONFIG
-
 
 def cec(port, command):
     result = subprocess.run(['/usr/bin/cec-client', '-s', '-d', '1', port],
@@ -28,7 +26,7 @@ def cec(port, command):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=['on', 'off', 'status'])
-    parser.add_argument('--port', default=DEFAULT_CONFIG['cec_port'])
+    parser.add_argument('--port', required=True)
     args = parser.parse_args()
     # Shared lock with the controller prevents overlapping adapter clients.
     lock_path = os.path.join(os.environ['XDG_RUNTIME_DIR'], 'cec-activity-command.lock')

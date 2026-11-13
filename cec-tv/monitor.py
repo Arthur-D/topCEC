@@ -275,12 +275,23 @@ def request_manual_power(power, action, fail_safe_reason):
 
 
 class KdeTimeout:
-    def __init__(self):
+    def __init__(self, fallback_timeout=DEFAULT_TIMEOUT):
         self.process = None
         self.next_read = 0
         self.started = 0
         self.error = 'Waiting for KDE display timeout'
         self.value = 'unread'
+        self.fallback_timeout = fallback_timeout
+        self.fallback_active = False
+
+    def use_fallback(self, timer, now):
+        if self.fallback_active:
+            return
+        self.fallback_active = True
+        timer.set_timeout(self.fallback_timeout, now)
+        timeout = ('disabled' if self.fallback_timeout is None else
+                   f'{self.fallback_timeout:g} seconds')
+        log(f'{self.error}; using fallback timeout of {timeout}')
 
     def poll(self, timer, now):
         if self.process is not None:
@@ -293,15 +304,17 @@ class KdeTimeout:
                         raise ValueError(result.get('error', errors))
                     if value is not None and (type(value) is not int or value <= 0):
                         raise ValueError('Invalid display timeout')
-                    if value != self.value:
+                    if value != self.value or self.fallback_active:
                         self.value = value
                         timer.set_timeout(value, now)
                         log('KDE display timeout (AC power): ' +
                             ('never; automatic standby disabled' if value is None
                              else f'{value} seconds ({value / 60:g} minutes)'))
                     self.error = None
+                    self.fallback_active = False
                 except Exception as error:
                     self.error = 'Cannot read KDE display timeout: ' + str(error)
+                    self.use_fallback(timer, now)
                 self.process = None
                 self.next_read = now + 5
             elif now - self.started > 5:
@@ -310,11 +323,17 @@ class KdeTimeout:
                 self.process = None
                 self.next_read = now + 5
                 self.error = 'KDE settings did not respond'
+                self.use_fallback(timer, now)
         if self.process is None and now >= self.next_read:
-            self.process = subprocess.Popen(
-                [sys.executable, str(Path(__file__).with_name('cec-kde-settings.py'))],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            self.started = now
+            try:
+                self.process = subprocess.Popen(
+                    [sys.executable, str(Path(__file__).with_name('cec-kde-settings.py'))],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                self.started = now
+            except (OSError, subprocess.SubprocessError) as error:
+                self.error = 'Cannot read KDE display timeout: ' + str(error)
+                self.next_read = now + 5
+                self.use_fallback(timer, now)
         return self.error
 
     def close(self):
@@ -663,6 +682,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     target_output = getattr(args, 'target', TARGET)
     timer = Timer(time.monotonic(), timeout=getattr(args, 'timeout_seconds', DEFAULT_TIMEOUT))
     kde_settings = KdeTimeout() if args.kde_timeout else None
+    if kde_settings is not None:
+        kde_settings.fallback_timeout = getattr(args, 'timeout_seconds', DEFAULT_TIMEOUT)
     if cec_backend_factory is None:
         cec_backend_factory = CecPower
     power: CecBackend | None = (
@@ -694,6 +715,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'cec_fault': None,
         'plasma_timeout_read': False,
         'plasma_timeout_seconds': None,
+        'plasma_timeout_fallback': False,
         'fail_safe_reason': 'monitor poll has not completed',
         'playback_active': False,
         'scan_status': scan_error,
@@ -864,6 +886,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     staged_power.validate_port()
             if config['kde_timeout'] and kde_settings is None:
                 staged_kde = KdeTimeout()
+                staged_kde.fallback_timeout = config['timeout_seconds']
             elif not config['kde_timeout']:
                 staged_kde = None
             config = {**config, 'devices': selected_paths}
@@ -1108,6 +1131,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                         'plasma_timeout_seconds': (
                             kde_settings.value
                             if type(kde_settings.value) is int else None),
+                        'plasma_timeout_fallback': (
+                            getattr(kde_settings, 'fallback_active', False) is True),
                     })
                 status_snapshot.update(power_status())
             except (OSError, subprocess.SubprocessError) as error:
@@ -1253,7 +1278,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                                     + blocking_apps[0]['reason'])
             if kde_settings:
                 settings_error = kde_settings.poll(timer, now)
-                reason = reason or settings_error
+                if settings_error and getattr(kde_settings, 'fallback_active', False) is not True:
+                    reason = reason or settings_error
                 if timer.timeout is None and power and power.pending == 'off':
                     power.pending = None
                     timer.cancel_standby(now)
@@ -1294,6 +1320,9 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 'plasma_timeout_seconds': (
                     kde_settings.value
                     if kde_settings and type(kde_settings.value) is int else None),
+                'plasma_timeout_fallback': bool(
+                    kde_settings and
+                    getattr(kde_settings, 'fallback_active', False) is True),
                 'fail_safe_reason': reason,
                 'playback_active': audible,
                 'firefox_audio_error': firefox_audio_error,

@@ -218,7 +218,8 @@ Kirigami.ApplicationWindow {
         return selector.availabilityKnown ? emptyMessage : unknownMessage
     }
 
-    readonly property bool equipmentReady: outputField.acceptable && adapterField.acceptable
+    readonly property bool equipmentReady: !adapterField.valueToSave.trim().length
+        || (outputField.acceptable && adapterField.acceptable)
 
     function inputPaths() {
         return devicesField.text.split("\n").map(path => path.trim()).filter(path => path.length)
@@ -461,7 +462,7 @@ Kirigami.ApplicationWindow {
     function saveStatusText() {
         if (!topcec.settingsEnabled)
             return "Connect to the host service to save settings."
-        if (!outputField.acceptable || !adapterField.acceptable)
+        if (!root.equipmentReady)
             return "Choose a display and CEC adapter."
         if (root.settingsDirty)
             return "Saving changes..."
@@ -699,7 +700,8 @@ Kirigami.ApplicationWindow {
 
     function selectedMouseDisplays() {
         return mouseOutputsFollowTarget
-            ? [outputField.valueToSave || topcec.setting("target_output")] : mouseOutputsDraft
+            ? [outputField.valueToSave || topcec.setting("target_output")].filter(path => path.length)
+            : mouseOutputsDraft
     }
 
     function mouseDisplayChoices() {

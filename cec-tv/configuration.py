@@ -8,10 +8,10 @@ import tempfile
 
 SCHEMA_VERSION = 1
 DEFAULT_CONFIG = {
-    'target_output': 'HDMI-A-2',
-    'timeout_seconds': 60,
+    'target_output': '',
+    'timeout_seconds': 300,
     'mapping_ttl_seconds': 15.0,
-    'devices': ['/dev/input/event10', '/dev/input/event14'],
+    'devices': [],
     'consider_input_devices': True,
     'mouse_output': None,
     'mouse_outputs': None,
@@ -20,8 +20,8 @@ DEFAULT_CONFIG = {
     'idle_inhibition_apps': [],
     'force_inhibition_apps': [],
     'cec_enabled': False,
-    'cec_port': '/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00',
-    'kde_timeout': False,
+    'cec_port': '',
+    'kde_timeout': True,
     'require_snapshot': False,
     'axis_deadzone_percent': 0.0,
     'rz_deadzone_percent': 0.0,
@@ -46,8 +46,9 @@ def validate_config(value):
 
     config = DEFAULT_CONFIG.copy()
     config.update({key: item for key, item in value.items() if key != 'schema_version'})
-    if not isinstance(config['target_output'], str) or not config['target_output'].strip():
-        raise ValueError('target_output must be a non-empty string')
+    if (not isinstance(config['target_output'], str)
+            or (config['target_output'] and not config['target_output'].strip())):
+        raise ValueError('target_output must be a valid display name or empty')
     if config['timeout_seconds'] is not None and (
         type(config['timeout_seconds']) is not int or config['timeout_seconds'] <= 0
     ):
@@ -71,6 +72,8 @@ def validate_config(value):
                 'firefox_audio_blocks_standby'):
         if type(config[key]) is not bool:
             raise ValueError(f'{key} must be a boolean')
+    if config['cec_enabled'] and not config['target_output'].strip():
+        raise ValueError('target_output must be selected when CEC is enabled')
     if config['mouse_output'] is not None and (
             not isinstance(config['mouse_output'], str) or not config['mouse_output'].strip()):
         raise ValueError('mouse_output must be a non-empty string or null')
@@ -80,9 +83,10 @@ def validate_config(value):
             or any(not isinstance(item, str) or not item.strip() for item in outputs)
             or len(set(outputs)) != len(outputs)):
         raise ValueError('mouse_outputs must be null or an array of unique display names')
-    for key in ('cec_port',):
-        if not isinstance(config[key], str) or not config[key].strip():
-            raise ValueError(f'{key} must be a non-empty string')
+    if (not isinstance(config['cec_port'], str)
+            or (config['cec_port'] and not config['cec_port'].strip())
+            or (config['cec_enabled'] and not config['cec_port'].strip())):
+        raise ValueError('cec_port must be selected when CEC is enabled')
     for key in ('axis_deadzone_percent', 'rz_deadzone_percent'):
         number = config[key]
         if (type(number) not in (int, float) or not math.isfinite(number)
@@ -107,7 +111,8 @@ def validate_config(value):
 def mouse_outputs(config):
     if config['mouse_outputs'] is not None:
         return config['mouse_outputs']
-    return [config['mouse_output'] or config['target_output']]
+    output = config['mouse_output'] or config['target_output']
+    return [output] if output else []
 
 
 def load_config(path):
