@@ -122,6 +122,65 @@ class ChromiumMediaChecks(unittest.TestCase):
         subprocess.run(['dbus-run-session', '--', sys.executable, __file__,
                         '--service-isolation'], check=True, timeout=20)
 
+    def test_browser_setup_through_host_service(self):
+        if not shutil.which('dbus-run-session'):
+            self.skipTest('D-Bus test tools unavailable')
+        subprocess.run(['dbus-run-session', '--', sys.executable, __file__,
+                        '--service-setup'], check=True, timeout=30)
+
+
+def service_setup():
+    import dbus
+    import time
+
+    with tempfile.TemporaryDirectory() as directory:
+        home = Path(directory)
+        fake_flatpak = home / 'flatpak'
+        fake_flatpak.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$TEST_OVERRIDE_LOG"\n')
+        fake_flatpak.chmod(0o755)
+        env = {**os.environ, 'HOME': directory, 'XDG_CONFIG_HOME': directory,
+               'XDG_DATA_HOME': directory, 'PATH': directory + os.pathsep + os.environ['PATH'],
+               'TEST_OVERRIDE_LOG': str(home / 'override.log')}
+        monitor = subprocess.Popen(
+            [sys.executable, str(ROOT / 'cec-tv/monitor.py'), '--no-kde-timeout'],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            bus = dbus.SessionBus()
+            for _ in range(50):
+                if bus.name_has_owner('net.local.CecActivity'):
+                    break
+                if monitor.poll() is not None:
+                    raise AssertionError('Monitor exited: ' + monitor.communicate()[1])
+                time.sleep(0.1)
+            else:
+                raise AssertionError('Monitor D-Bus service did not start')
+            service = dbus.Interface(bus.get_object('net.local.CecActivity', '/net/local/CecActivity'),
+                                     'net.local.CecActivity')
+            request = {'browser': 'chromium', 'flatpak': True,
+                       'extension_id': '', 'grant_access': False}
+            result = json.loads(service.SetupBrowser(json.dumps(request), timeout=10))
+            assert not result['registered']
+            assert Path(result['extension'], 'manifest.json').is_file()
+            assert not (home / 'override.log').exists()
+            request.update(extension_id='a' * 32, grant_access=True)
+            result = json.loads(service.SetupBrowser(json.dumps(request), timeout=10))
+            assert result['registered'] and result['access_granted']
+            manifest = json.loads(Path(result['manifest']).read_text())
+            assert manifest['allowed_origins'] == ['chrome-extension://' + 'a' * 32 + '/']
+            assert (home / 'override.log').read_text().splitlines() == [
+                'override', '--user', '--talk-name=net.local.topcec.BrowserMedia',
+                'org.chromium.Chromium']
+            request['extension_id'] = 'bad;id'
+            try:
+                service.SetupBrowser(json.dumps(request), timeout=10)
+            except dbus.DBusException as error:
+                assert 'Invalid browser setup' in str(error)
+            else:
+                raise AssertionError('Invalid extension ID accepted')
+        finally:
+            monitor.terminate()
+            monitor.communicate(timeout=5)
+
 
 def service_isolation():
     import time
@@ -202,5 +261,7 @@ if __name__ == '__main__':
         native_integration()
     elif sys.argv[1:] == ['--service-isolation']:
         service_isolation()
+    elif sys.argv[1:] == ['--service-setup']:
+        service_setup()
     else:
         unittest.main(verbosity=2)

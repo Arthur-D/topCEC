@@ -11,13 +11,14 @@ import json
 import math
 import os
 import pwd
+import re
 import selectors
 import shlex
 import stat
 import subprocess
-import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -43,6 +44,49 @@ SCAN_MAX_AGE = 8.0
 
 def log(message):
     print(time.strftime('[%H:%M:%S]'), message, flush=True)
+
+
+def browser_setup(request):
+    if not isinstance(request, dict) or set(request) != {
+            'browser', 'flatpak', 'extension_id', 'grant_access'}:
+        raise ValueError('Invalid browser setup request')
+    browser, flatpak = request['browser'], request['flatpak']
+    extension_id, grant_access = request['extension_id'], request['grant_access']
+    if (not isinstance(browser, str) or browser not in BROWSERS
+            or type(flatpak) is not bool or type(grant_access) is not bool
+            or not isinstance(extension_id, str)
+            or (extension_id and not re.fullmatch('[a-p]{32}', extension_id))
+            or (grant_access and (not flatpak or not extension_id))):
+        raise ValueError('Invalid browser setup options or extension ID')
+    script = Path(__file__).resolve().parent.parent / 'packaging/setup-chromium-extension.py'
+    if not script.is_file():
+        script = Path('/usr/share/topcec/packaging/setup-chromium-extension.py')
+    if not script.is_file():
+        raise RuntimeError('Browser setup is not installed; update the host installation.')
+    command = [sys.executable, str(script), browser, '--json']
+    if flatpak:
+        command.append('--flatpak')
+    if extension_id:
+        command += ['--extension-id', extension_id]
+    if grant_access:
+        command.append('--grant-flatpak-access')
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError('Browser setup failed: ' + str(error)) from error
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or 'Browser setup failed without details')
+    try:
+        response = json.loads(result.stdout)
+    except (ValueError, TypeError) as error:
+        raise RuntimeError('Invalid browser setup response') from error
+    if (not isinstance(response, dict) or response.get('browser') != browser
+            or response.get('flatpak') is not flatpak
+            or not isinstance(response.get('extension'), str)
+            or type(response.get('registered')) is not bool
+            or type(response.get('access_granted')) is not bool):
+        raise RuntimeError('Invalid browser setup response')
+    return response
 
 
 def input_group_command(username, gid, local_path='/etc/group',
@@ -964,6 +1008,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         log('Settings saved and applied live; service not restarted.')
         return saved
 
+    browser_setup_lock = threading.Lock()
+
     class Receiver(dbus.service.Object):
         @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='')
         def Report(self, message):
@@ -1044,6 +1090,30 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
         def GetEquipment(self):
             return json.dumps(equipment_snapshot, sort_keys=True)
+
+        @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='s',
+                             async_callbacks=('reply', 'fail'))
+        def SetupBrowser(self, payload, reply, fail):
+            if not browser_setup_lock.acquire(blocking=False):
+                fail(dbus.DBusException('Another browser setup is already in progress.'))
+                return
+            payload = str(payload)
+            def work():
+                try:
+                    result = json.dumps(browser_setup(json.loads(payload)))
+                except (ValueError, TypeError, RuntimeError) as error:
+                    message = str(error)
+                    log('Browser setup failed: ' + message)
+                    GLib.idle_add(lambda: (fail(dbus.DBusException(message)), False)[1])
+                else:
+                    GLib.idle_add(lambda: (reply(result), False)[1])
+                finally:
+                    browser_setup_lock.release()
+            try:
+                threading.Thread(target=work, daemon=True).start()
+            except RuntimeError as error:
+                browser_setup_lock.release()
+                fail(dbus.DBusException('Could not start browser setup: ' + str(error)))
 
         @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='s')
         def ApplySettings(self, serialized_config):

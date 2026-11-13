@@ -180,6 +180,17 @@ unrecognized browser variants are not supported.
 
 After running `install-user.sh`, prepare the extension for each browser:
 
+In the Standby page, open **Set up a browser extension**, choose the browser and
+whether it is a Flatpak or native installation, and select **Prepare extension**.
+Load the displayed folder as an unpacked extension in the browser, paste the
+extension ID, and select **Register native host**. For a Flatpak browser,
+select the permission checkbox to grant access to the browser-media-only D-Bus
+service, then fully quit and restart the browser. The GUI uses the host service
+for setup, including when the topCEC GUI itself is a Flatpak; update and restart
+the host service if it does not yet support browser setup.
+
+Alternatively, use the command line:
+
 ```sh
 python3 ~/.local/share/topcec/packaging/setup-chromium-extension.py chromium --flatpak
 ```

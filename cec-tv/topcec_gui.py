@@ -134,6 +134,10 @@ class GuiBackend(QObject):
         self.config_path = Path(config_path) if config_path else default_config_path()
         self.config = {'schema_version': 1, **DEFAULT_CONFIG}
         self._chromium_audio_supported = None
+        self._browser_setup = {}
+        self._browser_setup_message = ''
+        self._browser_setup_pending = False
+        self._browser_setup_generation = 0
         self._service_status = 'Checking service'
         self._power_state = 'unknown'
         self._simulated_action = None
@@ -430,6 +434,84 @@ class GuiBackend(QObject):
             return ('Browser audio status is unknown. TV standby is blocked. '
                     'See Diagnostics for details.')
         return ''
+
+    @Property(str, notify=changed)
+    def browserSetupMessage(self):
+        return self._browser_setup_message
+
+    @Property(str, notify=changed)
+    def browserSetupPath(self):
+        return self._browser_setup.get('extension', '')
+
+    @Property(bool, notify=changed)
+    def browserSetupPending(self):
+        return self._browser_setup_pending
+
+    @Slot()
+    def resetBrowserSetup(self):
+        self._browser_setup_generation += 1
+        self._browser_setup = {}
+        self._browser_setup_message = ''
+        self._browser_setup_pending = False
+        self.changed.emit()
+
+    @Slot(str, bool, str, bool)
+    def setupBrowser(self, browser, flatpak, extension_id, grant_access):
+        if self._browser_setup_pending:
+            return
+        if not self.backendAvailable:
+            self._browser_setup_message = 'Connect to the host service before setting up a browser.'
+            self.changed.emit()
+            return
+        interface = self._service_interface()
+        if not interface.isValid():
+            self._browser_setup_message = 'The topCEC host service is not available.'
+            self.changed.emit()
+            return
+        self._browser_setup_generation += 1
+        generation = self._browser_setup_generation
+        self._browser_setup_pending = True
+        self._browser_setup_message = 'Preparing browser setup...'
+        self.changed.emit()
+        request = json.dumps({'browser': browser, 'flatpak': flatpak,
+                              'extension_id': extension_id.strip(),
+                              'grant_access': grant_access})
+        self._async_call(interface, 'SetupBrowser',
+                         lambda reply: self._browser_setup_reply(generation, reply), request)
+
+    def _browser_setup_reply(self, generation, reply):
+        if generation != self._browser_setup_generation:
+            return
+        self._browser_setup_pending = False
+        error = self._reply_error(reply)
+        if error:
+            if reply.errorName() == 'org.freedesktop.DBus.Error.UnknownMethod':
+                error = 'Update the host backend and restart topcec.service to use browser setup.'
+            self._browser_setup_message = 'Browser setup failed: ' + error
+        else:
+            try:
+                result = json.loads(str(reply.arguments()[0]))
+                if (not isinstance(result, dict) or not isinstance(result.get('extension'), str)
+                        or type(result.get('registered')) is not bool
+                        or type(result.get('flatpak')) is not bool
+                        or type(result.get('access_granted')) is not bool):
+                    raise ValueError('Invalid host response')
+            except (IndexError, TypeError, ValueError) as error:
+                self._browser_setup_message = 'Browser setup failed: ' + str(error)
+            else:
+                self._browser_setup = result
+                if not result['registered']:
+                    self._browser_setup_message = (
+                        'Load the extension from the folder below, then paste its extension ID.')
+                elif result['flatpak'] and not result['access_granted']:
+                    self._browser_setup_message = (
+                        'Native host registered. Flatpak access still needs to be granted; '
+                        'select the permission below and register again, then restart the browser.')
+                else:
+                    self._browser_setup_message = (
+                        'Native host registered. Fully quit and restart the browser, '
+                        'then enable its audio option above.')
+        self.changed.emit()
 
     @Property('QVariantList', notify=appsChanged)
     def installedApps(self):
@@ -846,9 +928,10 @@ class GuiBackend(QObject):
                 diagnostic_items.append(f'{browser} audio: {error}')
             if errors:
                 diagnostic_items.append(
-                    'Check that the topCEC extension and native host are installed for '
-                    'each selected browser. For Flatpak, grant the documented '
-                    'browser-media D-Bus permission and restart the browser.')
+                    'Run the browser extension setup script described in the README, '
+                    'load the unpacked extension, and rerun setup with its extension ID. '
+                    'For Flatpak, run the printed browser-media D-Bus override and '
+                    'fully quit and restart the browser.')
         self._diagnostics = '\n'.join(diagnostic_items)
 
     def _equipment_reply(self, generation, reply):

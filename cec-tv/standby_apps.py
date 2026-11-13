@@ -6,6 +6,8 @@ from pathlib import Path
 import tempfile
 import time
 
+from chromium_media import BROWSERS, executable_browser
+
 SERVICE = 'org.kde.Solid.PowerManagement.PolicyAgent'
 PATH = '/org/kde/Solid/PowerManagement/PolicyAgent'
 PROPERTIES = 'org.freedesktop.DBus.Properties'
@@ -151,6 +153,15 @@ def matching_inhibitions(inhibitions, enabled, apps, windows, windows_fresh, out
         identity = app_key(request['app'])
         candidates = ({identity} if identity in identities or identity in enabled
                       else aliases.get(identity, set()))
+        resolved = None
+        if identity.startswith('/'):
+            browser = executable_browser(identity)
+            if browser in BROWSERS:
+                browser_apps = [app_key(app['id']) for app in apps
+                                if app_key(app['id']) in BROWSERS[browser][1]]
+                if len(browser_apps) == 1:
+                    resolved = browser_apps[0]
+                    candidates = {identity, resolved}
         matches = candidates & enabled.keys()
         if not matches:
             if not candidates and enabled:
@@ -162,8 +173,8 @@ def matching_inhibitions(inhibitions, enabled, apps, windows, windows_fresh, out
                 })
             continue
         # A non-unique app name cannot be safely assigned to a specific window.
-        ambiguous = len(candidates) != 1
-        identity = next(iter(matches))
+        ambiguous = resolved is None and len(candidates) != 1
+        identity = resolved or next(iter(matches))
         window_ids = window_aliases(identity, installed.get(identity, {}))
         app_windows = [
             row for row in windows
