@@ -703,8 +703,11 @@ build/install the user Flatpak, and launch it, run:
 ./packaging/update-user.sh
 ```
 
-The updater requires a clean checkout and pulls the current branch's upstream
-with `git pull --ff-only`. Commit or stash local changes first. It uses native
+The updater requires a clean checkout. Commit or stash local changes first.
+It pulls the current branch's upstream and merges diverging histories, keeping
+existing commits. If Git stops for a conflict, the updater aborts its merge
+before installation. Merge the upstream branch manually and rerun the updater.
+It uses native
 `flatpak-builder` when available, otherwise `flathub-build` from the
 `org.flatpak.Builder` Flatpak, and downloads missing build dependencies from
 the host user's Flathub remote. It installs the built app through the host's
