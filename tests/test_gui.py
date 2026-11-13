@@ -2269,12 +2269,15 @@ class GuiChecks(unittest.TestCase):
         backend._connection_state = 'connected'
         backend._service_status = 'running'
         path = '/app/chromium/chrome'
+        chrome_path = '/app/extra/chrome'
         backend.config = {**DEFAULT_CONFIG,
                           'idle_inhibition_apps': ['org.chromium.Chromium.desktop']}
         backend._service_data = {
             'installed_apps': [{'id': 'org.chromium.Chromium.desktop', 'name': 'Chromium'},
+                               {'id': 'com.google.Chrome.desktop', 'name': 'Google Chrome'},
                                {'id': 'org.mozilla.firefox.desktop', 'name': 'Mozilla Firefox'}],
             'observed_apps': [{'id': path, 'name': path},
+                              {'id': chrome_path, 'name': chrome_path},
                               {'id': 'firefox.desktop', 'name': 'Mozilla Firefox'}],
             'active_inhibitor_apps': [{'id': path, 'name': path}],
         }
@@ -2302,6 +2305,10 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(len(chromium_rows), 1)
         self.assertEqual(set(chromium_rows[0]['groupIds']),
                          {path, 'org.chromium.Chromium.desktop'})
+        chrome_rows = [item for item in choices if item['name'] == 'Google Chrome']
+        self.assertEqual(len(chrome_rows), 1)
+        self.assertEqual(set(chrome_rows[0]['groupIds']),
+                         {chrome_path, 'com.google.Chrome.desktop'})
         firefox_rows = [item for item in choices if item['isFirefox']]
         self.assertEqual(len(firefox_rows), 1)
         self.assertEqual(set(firefox_rows[0]['groupIds']),
