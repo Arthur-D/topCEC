@@ -754,12 +754,7 @@ class GuiChecks(unittest.TestCase):
         backend._service_status = 'configuration-only'
         backend.changed.emit()
         app.processEvents()
-        warning = window.findChild(QObject, 'warningBanner')
-        self.assertTrue(warning.property('visible'))
-        self.assertIn(
-            'Automatic standby is blocked: Cannot read input: Permission denied',
-            warning.property('text'))
-        self.assertIn('Monitoring is inactive.', warning.property('text'))
+        self.assertFalse(window.findChild(QObject, 'diagnosticsWarningBanner').property('visible'))
         self.assertFalse(window.findChild(QObject, 'applyFooter').property('visible'))
         self.assertIsNone(window.findChild(QObject, 'saveSettingsButton'))
         self.assertEqual(window.findChild(QObject, 'settingsSaveStatus').property('text'),
@@ -846,12 +841,15 @@ class GuiChecks(unittest.TestCase):
         self.assertLessEqual(editor.x() + editor.width(), editor.parentItem().width() + 1)
         QMetaObject.invokeMethod(window.findChild(QObject, 'overviewNavigation'), 'trigger')
         app.processEvents()
-        recovery = window.findChild(QObject, 'viewRecoverySteps')
-        QMetaObject.invokeMethod(recovery, 'clicked')
+        QMetaObject.invokeMethod(window.findChild(QObject, 'diagnosticsNavigation'), 'trigger')
         app.processEvents()
         QTest.qWait(80)
         self.assertEqual(window.property('currentSection'), 4)
         self.assertTrue(window.findChild(QObject, 'diagnosticsPanel').property('visible'))
+        warning = window.findChild(QObject, 'diagnosticsWarningBanner')
+        self.assertTrue(warning.property('visible'))
+        self.assertIn('Cannot read input: Permission denied', warning.property('text'))
+        self.assertIn('Monitoring is inactive.', warning.property('text'))
         simulate_on = window.findChild(QObject, 'simulateOnButton')
         simulate_off = window.findChild(QObject, 'simulateOffButton')
         self.assertTrue(simulate_on.property('visible'))
@@ -2178,13 +2176,48 @@ class GuiChecks(unittest.TestCase):
         message = window.findChild(QObject, 'firefoxAudioStatus')
         empty = window.findChild(QObject, 'noBlockingApps')
         self.assertTrue(message.property('visible'))
-        self.assertIn('AT-SPI did not respond', message.property('text'))
-        self.assertIn('blocked as a precaution', message.property('text'))
+        self.assertNotIn('AT-SPI', message.property('text'))
+        self.assertIn('standby is blocked', message.property('text'))
         self.assertFalse(empty.property('visible'))
         backend._service_data['firefox_audio_error'] = None
         backend.changed.emit()
         self.assertFalse(message.property('visible'))
         self.assertTrue(empty.property('visible'))
+        engine.deleteLater()
+
+    def test_firefox_mismatch_warning_is_only_shown_in_diagnostics(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._standby_reason = (
+            'Automatic standby blocked: KWin windows are missing from AT-SPI; waiting for a match')
+        backend._service_data = {
+            'firefox_audio_error': 'KWin windows are missing from AT-SPI; waiting for a match',
+            'blocking_apps': [], 'inhibitions_error': None,
+        }
+        backend._update_diagnostics()
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        banner = window.findChild(QObject, 'diagnosticsWarningBanner')
+        self.assertFalse(banner.property('visible'))
+        self.assertFalse(window.findChild(QObject, 'tvStandbyButton').property('enabled'))
+        self.assertIn('standby is blocked',
+                      window.findChild(QObject, 'firefoxAudioStatus').property('text'))
+        window.setProperty('currentSection', 0)
+        app.processEvents()
+        self.assertFalse(banner.property('visible'))
+        window.setProperty('currentSection', 4)
+        app.processEvents()
+        self.assertTrue(banner.property('visible'))
+        self.assertIn('Automatic standby is blocked', banner.property('text'))
+        self.assertIn('missing from AT-SPI', banner.property('text'))
+        self.assertIn('missing from AT-SPI', backend.diagnostics)
         engine.deleteLater()
 
     def test_firefox_audio_row_uses_discovered_identity_or_audio_only_fallback(self):

@@ -2003,6 +2003,25 @@ def self_test():
             self.assertEqual([message for message in result.all_messages
                               if not message.startswith('MATCH-DIAG:')], baseline.all_messages)
 
+        def test_mismatch_keeps_standby_blocked_until_matching_recovers(self):
+            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            mismatch = (json.dumps({'ok': True, 'frames': [
+                {'title': 'Old title', 'audio': False}]}), '', 0)
+            steps = [(0, snapshot, None, None, TARGET)]
+            for now in range(1, 12):
+                steps.append((now, snapshot, mismatch if now % 3 == 1 else None))
+            pending = self.run_monitor_steps(steps, timeout=1)
+            self.assertIn('missing from AT-SPI', pending.status['fail_safe_reason'])
+            self.assertIn('missing from AT-SPI', pending.status['firefox_audio_error'])
+            self.assertFalse(any(call.args == ('off',) for call in pending.power_calls))
+            with self.assertRaisesRegex(RuntimeError, 'Standby blocked'):
+                pending.receiver.RequestPower('off')
+            match = (json.dumps({'ok': True, 'frames': [
+                {'title': 'New title', 'audio': False}]}), '', 0)
+            recovered = self.run_monitor_steps(steps + [
+                (12, snapshot, None), (13, snapshot, match)])
+            self.assertIsNone(recovered.status['fail_safe_reason'])
+
         def test_runtime_invalid_scans_preserve_match_diagnostics(self):
             snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
             mismatch = (json.dumps({'ok': True, 'frames': []}), '', 0)

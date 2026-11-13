@@ -1065,29 +1065,6 @@ Kirigami.ApplicationWindow {
                         }
                     }
 
-                    FullWidthFrame {
-                        Layout.fillWidth: true
-                        visible: (root.currentSection === 0 || root.currentSection === 2)
-                            && root.monitoringWarning
-                        ColumnLayout {
-                            width: parent.width
-                            Kirigami.InlineMessage {
-                                objectName: "warningBanner"
-                                Layout.fillWidth: true
-                                visible: true
-                                type: Kirigami.MessageType.Warning
-                                text: root.monitoringWarningText
-                            }
-                            CopyableButton {
-                                objectName: "viewRecoverySteps"
-                                Layout.alignment: Qt.AlignRight
-                                text: "View recovery steps"
-                                icon.name: "help-hint"
-                                onClicked: root.openDiagnostics()
-                            }
-                        }
-                    }
-
                     ColumnLayout {
                         objectName: "overviewSummary"
                         Layout.fillWidth: true
