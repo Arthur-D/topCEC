@@ -25,6 +25,10 @@ class StandbyAppsChecks(unittest.TestCase):
             self.assertEqual(observed_apps(history.names, [
                 {'id': 'player.desktop', 'name': 'Player'}]),
                 [{'id': 'player.desktop', 'name': 'Player'}])
+            self.assertEqual(observed_apps(history.names, [
+                {'id': 'player.desktop', 'name': 'Player', 'launcher_group': 'player.desktop'},
+                {'id': 'player-copy.desktop', 'name': 'Player', 'launcher_group': 'player.desktop'},
+            ]), [{'id': 'Player', 'name': 'Player', 'launcher_group': 'player.desktop'}])
             path.write_text('broken', encoding='utf-8')
             history = InhibitionHistory(path)
             history.observe([{'kind': 'idle', 'app': 'Other'}])

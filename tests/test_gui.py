@@ -2122,7 +2122,10 @@ class GuiChecks(unittest.TestCase):
                           'idle_inhibition_apps': ['removed.desktop']}
         backend._service_data = {
             'installed_apps': [{'id': 'player.desktop', 'name': 'Video Player'},
-                               {'id': 'editor.desktop', 'name': 'Editor'}],
+                               {'id': 'editor.desktop', 'name': 'Editor',
+                                'launcher_group': 'editor.desktop'},
+                               {'id': 'editor-menu.desktop', 'name': 'Editor',
+                                'launcher_group': 'editor.desktop'}],
             'observed_apps': [{'id': 'player.desktop', 'name': 'Video Player'},
                               {'id': 'archived.desktop', 'name': 'Archived'}],
             'active_inhibitor_apps': [{'id': 'player.desktop', 'name': 'Video Player'}],
@@ -2190,7 +2193,7 @@ class GuiChecks(unittest.TestCase):
         backend.changed.emit()
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         self.assertIn('all installed', search.property('placeholderText'))
-        search.setProperty('text', 'editor')
+        search.setProperty('text', 'editor-menu.desktop')
         app.processEvents()
         self.assertEqual(repeater.property('count'), 1)
         editor = item(0)
@@ -2202,7 +2205,16 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(repeater.property('count'), 5)
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
-        self.assertEqual(values['forceInhibitionApps'], ['player.desktop', 'editor.desktop'])
+        self.assertEqual(set(values['forceInhibitionApps']),
+                         {'player.desktop', 'editor.desktop', 'editor-menu.desktop'})
+        search.setProperty('text', '')
+        editor = next(item(index) for index in range(repeater.property('count'))
+                      if item(index).objectName().startswith('appRow:editor'))
+        QMetaObject.invokeMethod(editor.findChild(QObject, 'forceApp:editor.desktop'), 'click')
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertEqual(values['forceInhibitionApps'], ['player.desktop'])
+        window.findChild(QObject, 'autoSaveTimer').stop()
         engine.deleteLater()
 
     def test_firefox_detection_failure_is_not_reported_as_no_blockers(self):
