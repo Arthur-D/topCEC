@@ -18,6 +18,11 @@ def app_key(value):
     return value[:-8] if value.endswith('.desktop') else value
 
 
+def is_screen_inhibition(request):
+    # PowerDevil uses logind-style types, including combinations like sleep:idle.
+    return 'idle' in request['kind'].split(':')
+
+
 def observed_apps(names, apps):
     result = {}
     for name in names:
@@ -54,7 +59,7 @@ class InhibitionHistory:
     def observe(self, requests, now=None):
         now = time.monotonic() if now is None else now
         names = {request['app'].strip() for request in requests
-                 if request['kind'] == 'idle' and request['app'].strip()}
+                 if is_screen_inhibition(request) and request['app'].strip()}
         if not names.issubset(self.names):
             self.names.update(names)
             self.dirty = True
@@ -123,41 +128,36 @@ def decode_windows(payload):
     return result
 
 
-def matching_inhibitions(inhibitions, enabled, apps, windows, windows_fresh, outputs):
-    """Return selected idle requests on selected outputs or with unknown location."""
+def matching_inhibitions(inhibitions, exceptions, apps, windows, windows_fresh, outputs):
+    """Return screen-idle requests that can affect a selected display."""
     outputs = {outputs} if isinstance(outputs, str) else set(outputs)
     if not outputs:
         return []
-    enabled = {app_key(item): item for item in enabled}
+    exceptions = {app_key(item) for item in exceptions}
     aliases = {}
-    identities = set()
+    identities = {}
     for app in apps:
         identity = app_key(app['id'])
-        identities.add(identity)
+        identities[identity] = app
         aliases.setdefault(app_key(app['name']), set()).add(identity)
     selected = []
     for request in inhibitions:
-        if request['kind'] != 'idle':
+        if not is_screen_inhibition(request):
             continue
         identity = app_key(request['app'])
-        candidates = ({identity} if identity in identities or identity in enabled
-                      else aliases.get(identity, set()))
-        matches = candidates & enabled.keys()
-        if not matches:
-            if not candidates and enabled:
-                selected.append({
-                    'app': request['app'],
-                    'reason': request['reason'],
-                    'locationUnknown': True,
-                    'identityUnknown': True,
-                })
+        candidates = ({identity} if identity in identities
+                      else aliases.get(identity, {identity}))
+        if candidates <= exceptions:
             continue
-        # A non-unique app name cannot be safely assigned to a specific window.
         ambiguous = len(candidates) != 1
-        identity = next(iter(matches))
+        window_keys = set(candidates)
+        for candidate in candidates:
+            window_class = identities.get(candidate, {}).get('window_class')
+            if window_class:
+                window_keys.add(app_key(window_class))
         app_windows = [
             row for row in windows
-            if identity in (app_key(row['desktop']), app_key(row['class']))
+            if window_keys & {app_key(row['desktop']), app_key(row['class'])}
         ]
         unknown = (ambiguous or not windows_fresh or not app_windows
                    or any(row['output'] in ('', 'ingen', 'unknown') for row in app_windows))
@@ -167,7 +167,8 @@ def matching_inhibitions(inhibitions, enabled, apps, windows, windows_fresh, out
             'app': request['app'],
             'reason': request['reason'],
             'locationUnknown': unknown,
-            'identityUnknown': False,
+            'identityUnknown': ambiguous or (identity not in identities
+                                             and identity not in aliases and not app_windows),
         })
     return selected
 

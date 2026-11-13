@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
     'mute_labels': ['Mute tab'],
     'firefox_audio_blocks_standby': True,
     'idle_inhibition_apps': [],
+    'idle_inhibition_exceptions': [],
     'force_inhibition_apps': [],
     'cec_enabled': False,
     'cec_port': '',
@@ -62,7 +63,7 @@ def validate_config(value):
         if (not isinstance(values, list) or (key == 'mute_labels' and not values)
                 or any(not isinstance(item, str) or not item.strip() for item in values)):
             raise ValueError(f'{key} must be a non-empty array of non-empty strings')
-    for key in ('idle_inhibition_apps', 'force_inhibition_apps'):
+    for key in ('idle_inhibition_apps', 'idle_inhibition_exceptions', 'force_inhibition_apps'):
         apps = config[key]
         if (not isinstance(apps, list)
                 or any(not isinstance(item, str) or not item.strip() for item in apps)

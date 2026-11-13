@@ -68,16 +68,20 @@ configuration, external research repositories and credentials are excluded.
   matching blocks OFF.
   The Standby page reports when Firefox audio detection is unavailable instead
   of treating it as inactive. Snapshot interval 2 seconds; mapping TTL 15 seconds.
-  The AT-SPI fallback identifies Firefox by its process executable before
-  querying application accessibility data, avoiding unrelated unresponsive apps.
-- “Allow standby” is on by default. Turn it off to let an app's Plasma
-  idle-inhibition requests block topCEC standby independently of its media
-  settings. Sleep-only inhibitions are ignored; matching requests and their
-  reasons appear under “Currently blocking standby”. This setting affects
-  topCEC, not Plasma's power policy. Unknown app identity or display, stale
-  Plasma status, and failed installed-app discovery block standby when an app
-  is selected to block. Existing selections remain unchanged, including for
-  uninstalled apps. The default list shows Firefox, current and previously observed
+  The AT-SPI fallback reads the shared accessibility bus. It verifies Firefox's
+  process executable before querying the accessibility tree. For Flatpak Firefox,
+  it verifies that the D-Bus proxy shares a per-instance cgroup with the browser.
+- An active Plasma screen-idle request blocks TV standby by default when the
+  app is on a selected display. “Allow standby” unchecks automatically while
+  the request is active. Check it to save a TV standby exception for that app.
+  Plasma can describe an idle request as blocking screen locking and can report
+  it as `idle` or `sleep:idle`. Screen locking, TV standby, and computer sleep
+  are separate actions. Sleep-only inhibitions are ignored. Matching requests
+  and their reasons appear under “Currently blocking standby”. The exception
+  affects topCEC only. Plasma retains control of screen locking and sleep.
+  Unknown display location for an active request and stale Plasma status block
+  standby when displays are selected. Previous unchecked selections are
+  retained. The default list shows Firefox, current and previously observed
   idle-inhibiting apps, and selected apps. Its search filters to apps currently
   requesting screen inhibition; “Show all installed apps” searches all apps.
   Observed app names are stored in `observed-inhibitors.json` beside the host

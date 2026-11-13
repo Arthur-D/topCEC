@@ -19,12 +19,13 @@ class StandbyAppsChecks(unittest.TestCase):
             path = Path(directory) / 'history.json'
             history = InhibitionHistory(path)
             history.observe([{'kind': 'idle', 'app': 'Player'},
+                             {'kind': 'sleep:idle', 'app': 'Steam'},
                              {'kind': 'sleep', 'app': 'Downloader'},
                              {'kind': 'idle', 'app': ''}])
-            self.assertEqual(InhibitionHistory(path).names, {'Player'})
-            self.assertEqual(observed_apps(history.names, [
+            self.assertEqual(InhibitionHistory(path).names, {'Player', 'Steam'})
+            self.assertCountEqual(observed_apps(history.names, [
                 {'id': 'player.desktop', 'name': 'Player'}]),
-                [{'id': 'player.desktop', 'name': 'Player'}])
+                [{'id': 'player.desktop', 'name': 'Player'}, {'id': 'Steam', 'name': 'Steam'}])
             path.write_text('broken', encoding='utf-8')
             history = InhibitionHistory(path)
             history.observe([{'kind': 'idle', 'app': 'Other'}])
@@ -65,7 +66,7 @@ class StandbyAppsChecks(unittest.TestCase):
 
     def test_selected_idle_request_is_scoped_to_display_and_preserves_reason(self):
         requests = [
-            {'kind': 'idle', 'app': 'org.example.Player', 'reason': 'Playing video'},
+            {'kind': 'sleep:idle', 'app': 'org.example.Player', 'reason': 'Playing video'},
             {'kind': 'sleep', 'app': 'org.example.Player', 'reason': 'Download'},
             {'kind': 'idle', 'app': 'other', 'reason': 'Ignored'},
         ]
@@ -73,24 +74,25 @@ class StandbyAppsChecks(unittest.TestCase):
                 {'id': 'other.desktop', 'name': 'Other'}]
         windows = decode_windows(json.dumps([
             {'desktop': 'org.example.Player', 'class': 'player', 'output': 'DP-1'}]))
-        match = lambda selected, display, fresh=True: matching_inhibitions(
-            requests, selected, apps, windows, fresh, display)
+        match = lambda exceptions, display, fresh=True: matching_inhibitions(
+            requests, ['other.desktop', *exceptions], apps, windows, fresh, display)
         expected = [{'app': 'org.example.Player', 'reason': 'Playing video',
                      'locationUnknown': False, 'identityUnknown': False}]
-        self.assertEqual(match(['org.example.Player.desktop'], 'DP-1'), expected)
-        self.assertEqual(match(['org.example.Player.desktop'], 'HDMI-1'), [])
-        self.assertEqual(match(['org.example.Player.desktop'], ['HDMI-1', 'DP-1']), expected)
-        self.assertEqual(match(['org.example.Player.desktop'], []), [])
-        self.assertEqual(match([], 'DP-1'), [])
-        self.assertTrue(match(['org.example.Player.desktop'], 'HDMI-1', False)[0]['locationUnknown'])
+        self.assertEqual(match([], 'DP-1'), expected)
+        self.assertEqual(match([], 'HDMI-1'), [])
+        self.assertEqual(match([], ['HDMI-1', 'DP-1']), expected)
+        self.assertEqual(match([], []), [])
+        self.assertEqual(match(['org.example.Player.desktop'], 'DP-1'), [])
+        self.assertTrue(match([], 'HDMI-1', False)[0]['locationUnknown'])
         self.assertTrue(matching_inhibitions(
-            requests, ['org.example.Player.desktop'], apps, [], True, 'DP-1')[0]['locationUnknown'])
+            requests, ['other.desktop'], apps, [], True, 'DP-1')[0]['locationUnknown'])
 
-    def test_unidentified_request_blocks_only_when_some_app_is_selected(self):
+    def test_unidentified_request_blocks_until_its_name_is_excepted(self):
         requests = [{'kind': 'idle', 'app': 'unrecognized', 'reason': 'Playing'}]
         self.assertTrue(matching_inhibitions(
-            requests, ['player.desktop'], [], [], True, 'TV')[0]['identityUnknown'])
-        self.assertEqual(matching_inhibitions(requests, [], [], [], True, 'TV'), [])
+            requests, [], [], [], True, 'TV')[0]['identityUnknown'])
+        self.assertEqual(matching_inhibitions(
+            requests, ['Unrecognized'], [], [], True, 'TV'), [])
 
     def test_ambiguous_names_and_unknown_window_outputs_block_safely(self):
         requests = [{'kind': 'idle', 'app': 'Player', 'reason': 'Playing'}]
@@ -102,7 +104,7 @@ class StandbyAppsChecks(unittest.TestCase):
         apps.pop()
         windows[0]['output'] = 'unknown'
         self.assertTrue(matching_inhibitions(
-            requests, ['one.desktop'], apps, windows, True, 'TV')[0]['locationUnknown'])
+            requests, [], apps, windows, True, 'TV')[0]['locationUnknown'])
 
     def test_bad_window_snapshot_is_rejected(self):
         with self.assertRaises(ValueError):

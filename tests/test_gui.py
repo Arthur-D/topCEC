@@ -2077,9 +2077,8 @@ class GuiChecks(unittest.TestCase):
         backend._service_data = {
             'installed_apps': [{'id': 'player.desktop', 'name': 'Video Player'},
                                {'id': 'editor.desktop', 'name': 'Editor'}],
-            'observed_apps': [{'id': 'player.desktop', 'name': 'Video Player'},
-                              {'id': 'archived.desktop', 'name': 'Archived'}],
-            'active_inhibitor_apps': [{'id': 'player.desktop', 'name': 'Video Player'}],
+            'observed_apps': [{'id': 'archived.desktop', 'name': 'Archived'}],
+            'active_inhibitor_apps': [],
             'installed_apps_error': None,
             'inhibitions_error': None,
             'blocking_apps': [{'app': 'Player', 'reason': 'Playing',
@@ -2095,7 +2094,13 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(window.findChild(QObject, 'canBlockStandbyHeading').property('text'),
                          'Can block screen standby')
         repeater = window.findChild(QObject, 'installedAppsScroll')
+        self.assertEqual(repeater.property('count'), 3)
+        backend._service_data['active_inhibitor_apps'] = [
+            {'id': 'player.desktop', 'name': 'Video Player'}]
+        backend.changed.emit()
+        app.processEvents()
         self.assertEqual(repeater.property('count'), 4)
+        self.assertFalse(window.property('settingsDirty'))
         engine.rootContext().setContextProperty('appChoicesRepeater', repeater)
         def item(index):
             return QQmlExpression(engine.rootContext(), window,
@@ -2106,7 +2111,7 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(removed.objectName(), 'appRow:removed.desktop')
         allow = player.findChild(QObject, 'idleApp:player.desktop')
         self.assertEqual(allow.property('text'), 'Allow standby')
-        self.assertTrue(allow.property('checked'))
+        self.assertFalse(allow.property('checked'))
         removed_allow = removed.findChild(QObject, 'idleApp:removed.desktop')
         self.assertFalse(removed_allow.property('checked'))
         QMetaObject.invokeMethod(removed_allow, 'click')
@@ -2117,6 +2122,11 @@ class GuiChecks(unittest.TestCase):
         QMetaObject.invokeMethod(removed_allow, 'click')
         self.assertEqual(player.findChild(QObject, 'forceApp:player.desktop').property('text'),
                          'Force block standby')
+        QMetaObject.invokeMethod(allow, 'click')
+        self.assertTrue(allow.property('checked'))
+        self.assertEqual(json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+            ['idleInhibitionExceptions'], ['player.desktop'])
         QMetaObject.invokeMethod(allow, 'click')
         self.assertFalse(allow.property('checked'))
         QMetaObject.invokeMethod(player.findChild(QObject, 'forceApp:player.desktop'), 'click')
@@ -2350,14 +2360,25 @@ class GuiChecks(unittest.TestCase):
         firefox_row = self.app_row(engine, window, 0)
         player_row = self.app_row(engine, window, 1)
         firefox_controls = [firefox_row.findChild(QQuickItem, name) for name in (
-            'appName:firefox.desktop', 'firefoxAudio',
-            'idleApp:firefox.desktop', 'forceApp:firefox.desktop')]
+            'appName:firefox.desktop', 'idleApp:firefox.desktop',
+            'forceApp:firefox.desktop', 'firefoxAudio')]
         player_controls = [player_row.findChild(QQuickItem, name) for name in (
             'appName:player.desktop', 'idleApp:player.desktop', 'forceApp:player.desktop')]
-        for controls in (firefox_controls, player_controls):
-            self.assertTrue(all(control.y() == controls[0].y() for control in controls))
-            for left, right in zip(controls, controls[1:]):
-                self.assertLessEqual(left.x() + left.width(), right.x())
+        for width in (1300, 775):
+            window.resize(width, 900)
+            QTest.qWait(50)
+            self.assertEqual(window.findChild(QObject, 'idleTimeoutLabel').property('lineCount'), 1)
+            for controls in (firefox_controls[:3], player_controls):
+                self.assertEqual(controls[0].property('lineCount'), 1)
+                self.assertTrue(all(control.y() == controls[0].y() for control in controls))
+                for left, right in zip(controls, controls[1:]):
+                    self.assertLessEqual(left.x() + left.width(), right.x())
+            for firefox_control, player_control in zip(firefox_controls, player_controls):
+                self.assertEqual(firefox_control.x(), player_control.x())
+            if width == 1300:
+                self.assertEqual(firefox_controls[-1].y(), firefox_controls[0].y())
+                self.assertLessEqual(firefox_controls[-2].x() + firefox_controls[-2].width(),
+                                     firefox_controls[-1].x())
 
         window.resize(380, 760)
         QTest.qWait(50)

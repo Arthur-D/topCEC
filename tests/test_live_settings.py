@@ -183,7 +183,9 @@ class LiveSettingsChecks(unittest.TestCase):
 
         service = SimpleNamespace(Object=ReceiverObject, BusName=Mock(),
                                   method=lambda *args, **kwargs: lambda method: method)
-        dbus = SimpleNamespace(service=service, SessionBus=Mock(), DBusException=RuntimeError)
+        plasma_interface = SimpleNamespace(Get=lambda *args, reply_handler, **kwargs: reply_handler([]))
+        dbus = SimpleNamespace(service=service, SessionBus=Mock(), DBusException=RuntimeError,
+                               Interface=lambda *args: plasma_interface)
         loop = Mock()
         loop.run.side_effect = lambda: scenario(context)
         glib = SimpleNamespace(MainLoop=lambda: loop, timeout_add=timeout_add)
@@ -206,6 +208,7 @@ class LiveSettingsChecks(unittest.TestCase):
             mouse_outputs=config['mouse_outputs'],
             firefox_audio_blocks_standby=config['firefox_audio_blocks_standby'],
             idle_inhibition_apps=config['idle_inhibition_apps'],
+            idle_inhibition_exceptions=config['idle_inhibition_exceptions'],
             force_inhibition_apps=config['force_inhibition_apps'],
             axis_deadzone_percent=config['axis_deadzone_percent'],
             rz_deadzone_percent=config['rz_deadzone_percent'],
@@ -388,11 +391,11 @@ class LiveSettingsChecks(unittest.TestCase):
 
             self.run_service(path, scenario)
 
-    def test_idle_inhibition_selection_changes_standby_and_reports_reason(self):
+    def test_idle_inhibition_blocks_by_default_and_allows_a_tv_exception(self):
         inventory = {'outputs': [], 'adapters': [], 'inputs': [], 'errors': [],
                      'apps': [{'id': 'player.desktop', 'name': 'Player'}],
                      'apps_error': None}
-        plasma = Mock(requests=[{'kind': 'idle', 'app': 'player',
+        plasma = Mock(requests=[{'kind': 'sleep:idle', 'app': 'player',
                                  'reason': 'Playing', 'mode': 'block'}])
         plasma.health.return_value = None
         with tempfile.TemporaryDirectory() as directory, \
@@ -410,12 +413,12 @@ class LiveSettingsChecks(unittest.TestCase):
                      'class': 'player', 'output': 'DP-9'}]))
                 receiver.Report('Fokus: DP-9')
                 self.apply(receiver, mouse_outputs=['DP-2', 'DP-9'],
-                           firefox_audio_blocks_standby=False,
-                           idle_inhibition_apps=['player.desktop'])
+                           firefox_audio_blocks_standby=False)
                 self.assertTrue(context.callbacks[100]())
                 status = json.loads(receiver.GetStatus())
                 self.assertIn('Playing', status['fail_safe_reason'])
                 self.assertEqual(status['blocking_apps'][0]['reason'], 'Playing')
+                self.assertEqual(status['active_inhibitor_apps'], inventory['apps'])
                 with self.assertRaisesRegex(RuntimeError, 'Standby blocked'):
                     receiver.RequestPower('off')
                 self.apply(receiver, mouse_outputs=['DP-2'])
@@ -427,12 +430,24 @@ class LiveSettingsChecks(unittest.TestCase):
                 self.assertIsNone(json.loads(receiver.GetStatus())['fail_safe_reason'])
                 plasma.health.return_value = None
                 self.apply(receiver, mouse_outputs=['DP-2', 'DP-9'])
-                self.apply(receiver, idle_inhibition_apps=[])
+                self.apply(receiver, idle_inhibition_exceptions=['player.desktop'])
                 self.assertTrue(context.callbacks[100]())
                 status = json.loads(receiver.GetStatus())
                 self.assertIsNone(status['fail_safe_reason'])
                 self.assertEqual(status['blocking_apps'], [])
-                self.apply(receiver, idle_inhibition_apps=['player.desktop'])
+                self.assertEqual(status['active_inhibitor_apps'], inventory['apps'])
+                self.assertEqual(load_config(path)['idle_inhibition_exceptions'],
+                                 ['player.desktop'])
+                legacy_settings = self.config(receiver)
+                del legacy_settings['idle_inhibition_exceptions']
+                receiver.ApplySettings(json.dumps(legacy_settings))
+                self.assertEqual(self.config(receiver)['idle_inhibition_exceptions'],
+                                 ['player.desktop'])
+                self.apply(receiver, idle_inhibition_exceptions=[])
+                requests, plasma.requests = plasma.requests, []
+                self.assertTrue(context.callbacks[100]())
+                self.assertEqual(json.loads(receiver.GetStatus())['blocking_apps'], [])
+                plasma.requests = requests
                 plasma.health.return_value = 'Plasma unavailable'
                 self.assertTrue(context.callbacks[100]())
                 self.assertEqual(json.loads(receiver.GetStatus())['fail_safe_reason'],
@@ -462,6 +477,7 @@ class LiveSettingsChecks(unittest.TestCase):
                    {'pid': 123, 'title': 'Player', 'desktop': 'player',
                     'class': 'player', 'output': 'DP-9'}]))
                self.apply(receiver, mouse_outputs=['DP-9'], firefox_audio_blocks_standby=False,
+                          idle_inhibition_exceptions=['player.desktop'],
                           force_inhibition_apps=['player.desktop'])
                context.callbacks[100]()
                status = json.loads(receiver.GetStatus())
