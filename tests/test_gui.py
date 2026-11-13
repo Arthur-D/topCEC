@@ -1961,6 +1961,8 @@ class GuiChecks(unittest.TestCase):
         window.show()
         window.setProperty('currentSection', 2)
         app.processEvents()
+        self.assertEqual(window.findChild(QObject, 'canBlockStandbyHeading').property('text'),
+                         'Can block screen standby')
         repeater = window.findChild(QObject, 'installedAppsScroll')
         self.assertEqual(repeater.property('count'), 4)
         engine.rootContext().setContextProperty('appChoicesRepeater', repeater)
@@ -1972,7 +1974,7 @@ class GuiChecks(unittest.TestCase):
         removed = item(3)
         self.assertEqual(removed.objectName(), 'appRow:removed.desktop')
         allow = player.findChild(QObject, 'idleApp:player.desktop')
-        self.assertEqual(allow.property('text'), 'Allow screen standby')
+        self.assertEqual(allow.property('text'), 'Allow standby')
         self.assertTrue(allow.property('checked'))
         removed_allow = removed.findChild(QObject, 'idleApp:removed.desktop')
         self.assertFalse(removed_allow.property('checked'))
@@ -1983,7 +1985,7 @@ class GuiChecks(unittest.TestCase):
             ['idleInhibitionApps'], [])
         QMetaObject.invokeMethod(removed_allow, 'click')
         self.assertEqual(player.findChild(QObject, 'forceApp:player.desktop').property('text'),
-                         'Force block screen standby')
+                         'Force block standby')
         QMetaObject.invokeMethod(allow, 'click')
         self.assertFalse(allow.property('checked'))
         QMetaObject.invokeMethod(player.findChild(QObject, 'forceApp:player.desktop'), 'click')
@@ -2086,7 +2088,7 @@ class GuiChecks(unittest.TestCase):
                 self.assertEqual(row.objectName(), 'appRow:' + row_id)
                 audio = row.findChild(QObject, 'firefoxAudio')
                 name = row.findChild(QObject, 'appName:' + row_id)
-                self.assertEqual(audio.property('text'), 'Block TV standby while playing audio')
+                self.assertEqual(audio.property('text'), 'Block standby while playing audio')
                 self.assertEqual(audio.parent(), name.parent())
                 self.assertTrue(audio.property('checked'))
                 self.assertEqual(row.findChild(QObject, 'idleApp:' + row_id).property('visible'),
