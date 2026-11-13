@@ -1521,8 +1521,9 @@ Kirigami.ApplicationWindow {
                     }
                     SelectableHeading {
                         visible: root.currentSection === 2
+                        objectName: "canBlockStandbyHeading"
                         level: 4
-                        text: "Can block standby"
+                        text: "Can block screen standby"
                     }
                     SurfaceFrame {
                         Layout.fillWidth: true
@@ -1531,7 +1532,7 @@ Kirigami.ApplicationWindow {
                             width: parent.width
                             SelectableLabel {
                                 Layout.fillWidth: true
-                                text: "Turn off Allow screen standby to follow an app's Plasma request. Force block screen standby blocks TV standby while the app has a window on a selected display. Neither option prevents computer sleep."
+                                text: "Turn off Allow standby to follow an app's Plasma request. Force block standby blocks TV standby while the app has a window on a selected display. Neither option prevents computer sleep."
                             }
                             CopyableCheckBox {
                                 id: showAllApps
@@ -1600,8 +1601,8 @@ Kirigami.ApplicationWindow {
                                         CopyableCheckBox {
                                             objectName: modelData.id === root.firefoxApp().id ? "firefoxAudio" : ""
                                             visible: modelData.id === root.firefoxApp().id
-                                            text: "Block TV standby while playing audio"
-                                            Accessible.name: modelData.name + " block TV standby while playing audio"
+                                            text: "Block standby while playing audio"
+                                            Accessible.name: modelData.name + " block standby while playing audio"
                                             checked: root.firefoxAudioEnabled
                                             onClicked: {
                                                 root.firefoxAudioEnabled = checked
@@ -1611,16 +1612,16 @@ Kirigami.ApplicationWindow {
                                         CopyableCheckBox {
                                             objectName: "idleApp:" + modelData.id
                                             visible: !modelData.audioOnly
-                                            text: "Allow screen standby"
-                                            Accessible.name: modelData.name + " allow screen standby"
+                                            text: "Allow standby"
+                                            Accessible.name: modelData.name + " allow standby"
                                             checked: !root.idleAppsDraft.includes(modelData.id)
                                             onClicked: root.setIdleApp(modelData.id, !checked)
                                         }
                                         CopyableCheckBox {
                                             objectName: "forceApp:" + modelData.id
                                             visible: !modelData.audioOnly
-                                            text: "Force block screen standby"
-                                            Accessible.name: modelData.name + " force block screen standby"
+                                            text: "Force block standby"
+                                            Accessible.name: modelData.name + " force block standby"
                                             checked: root.forceAppsDraft.includes(modelData.id)
                                             onClicked: root.setForceApp(modelData.id, checked)
                                         }

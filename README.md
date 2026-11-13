@@ -64,7 +64,7 @@ configuration, external research repositories and credentials are excluded.
   locked-screen timeouts. A disabled timeout prevents automatic OFF.
 - Firefox audio detection uses the WebExtension signal when it is installed and
   reports fresh data; otherwise it falls back to AT-SPI's English `Mute tab`
-  label. The Firefox row's “Block TV standby while playing audio” option
+  label. The Firefox row's “Block standby while playing audio” option
   controls this detection; it uses the displays selected for mouse activity.
   Other apps' media types cannot currently be detected. Ambiguous/stale window
   matching blocks OFF.
@@ -72,7 +72,7 @@ configuration, external research repositories and credentials are excluded.
   of treating it as inactive. Snapshot interval 2 seconds; mapping TTL 15 seconds.
   The AT-SPI fallback identifies Firefox by its process executable before
   querying application accessibility data, avoiding unrelated unresponsive apps.
-- “Allow screen standby” is on by default. Turn it off to let an app's Plasma
+- “Allow standby” is on by default. Turn it off to let an app's Plasma
   idle-inhibition requests block topCEC standby independently of its media
   settings. Sleep-only inhibitions are ignored; matching requests and their
   reasons appear under “Currently blocking standby”. This setting affects
@@ -84,7 +84,7 @@ configuration, external research repositories and credentials are excluded.
   requesting screen inhibition; “Show all installed apps” searches all apps.
   Observed app names are stored in `observed-inhibitors.json` beside the host
   configuration.
-- Each app also has a “Force block screen standby” option: an open window on a selected mouse
+- Each app also has a “Force block standby” option: an open window on a selected mouse
   display blocks TV standby even without an app inhibition request. A window on
   an unknown display, or a stale window snapshot, blocks conservatively. This
   matches KWin's desktop-file or window-class identity, including a desktop
