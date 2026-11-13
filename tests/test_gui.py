@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from PySide6.QtCore import QMetaObject, QObject, QPointF, Qt, QUrl, QStandardPaths, SIGNAL
-from PySide6.QtGui import QAccessible, QGuiApplication
+from PySide6.QtGui import QAccessible, QFontMetricsF, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine, QQmlExpression
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtQuick import QQuickItem
@@ -628,7 +628,6 @@ class GuiChecks(unittest.TestCase):
         for name in ('equipmentFormCard', 'standbyFormCard'):
             card = window.findChild(QObject, name)
             self.assertIsNotNone(card)
-            self.assertGreater(card.property('maximumWidth'), 0)
         self.assertEqual(window.findChild(QObject, 'serviceStatusLabel').property('text'),
                          'Configuration only,')
         self.assertEqual(window.findChild(QObject, 'powerStateLabel').property('text'), 'unknown')
@@ -2094,6 +2093,66 @@ class GuiChecks(unittest.TestCase):
                                  bool(app_id))
                 engine.deleteLater()
                 app.processEvents()
+
+    def test_app_cards_expand_and_firefox_label_stays_readable(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._status_poll_timer.stop()
+        firefox = {'id': 'firefox.desktop', 'name': 'Mozilla Firefox'}
+        backend._service_data = {
+            'installed_apps': [firefox], 'observed_apps': [],
+            'active_inhibitor_apps': [],
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.resize(1200, 900)
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        page = window.findChild(QQuickItem, 'pageContent')
+        app_list = window.findChild(QQuickItem, 'installedAppsScroll')
+        self.assertGreater(page.width(), 850)
+        self.assertGreater(app_list.width(), page.width() - 40)
+        for section, card_name in ((0, 'powerCard'), (1, 'equipmentFormCard'),
+                                   (2, 'standbyFormCard'), (3, 'inputFormCard')):
+            window.setProperty('currentSection', section)
+            QTest.qWait(30)
+            card = window.findChild(QObject, card_name)
+            self.assertTrue(card.property('visible'))
+            self.assertFalse(card.property('cardWidthRestricted'))
+            self.assertGreater(card.property('width'), 850)
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+
+        row = self.app_row(engine, window, 0)
+        name = row.findChild(QQuickItem, 'appName:firefox.desktop')
+        audio = row.findChild(QQuickItem, 'firefoxAudio')
+        font = name.property('font')
+        font.setPointSizeF(18)
+        name.setProperty('font', font)
+        app.processEvents()
+        self.assertGreaterEqual(name.width(), QFontMetricsF(font).horizontalAdvance(name.property('text')))
+        self.assertEqual(name.property('lineCount'), 1)
+        self.assertEqual(name.y(), audio.y())
+
+        window.resize(380, 760)
+        app.processEvents()
+        self.assertLessEqual(name.width(), name.parentItem().width())
+        self.assertEqual(name.property('lineCount'), 1)
+        self.assertLess(page.width(), 380)
+
+        firefox['name'] = 'A very long Firefox application name ' * 8
+        backend.appsChanged.emit()
+        app.processEvents()
+        row = self.app_row(engine, window, 0)
+        name = row.findChild(QQuickItem, 'appName:firefox.desktop')
+        self.assertLessEqual(name.width(), name.parentItem().width())
+        self.assertGreater(name.property('lineCount'), 1)
+        engine.deleteLater()
 
     def test_firefox_audio_draft_survives_search_and_recreated_row(self):
         app = QGuiApplication.instance() or QGuiApplication([])

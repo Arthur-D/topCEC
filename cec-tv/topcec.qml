@@ -763,6 +763,7 @@ Kirigami.ApplicationWindow {
 
     component SurfaceFrame: FormCard.FormCard {
         padding: Kirigami.Units.smallSpacing
+        maximumWidth: width
     }
 
     component FullWidthFrame: SurfaceFrame {
@@ -838,7 +839,7 @@ Kirigami.ApplicationWindow {
             id: pageContent
             objectName: "pageContent"
             Layout.fillWidth: true
-            Layout.maximumWidth: root.onDiagnosticsPage ? 860 : 760
+            Layout.maximumWidth: Kirigami.Units.gridUnit * 60
             Layout.alignment: Qt.AlignHCenter
             Layout.leftMargin: root.pageInset
             Layout.rightMargin: root.pageInset
@@ -1588,10 +1589,17 @@ Kirigami.ApplicationWindow {
                                         Layout.fillWidth: true
                                         spacing: Kirigami.Units.smallSpacing
                                         SelectableLabel {
+                                            id: appNameLabel
                                             objectName: "appName:" + modelData.id
-                                            width: Math.min(implicitWidth, parent.width)
+                                            width: Math.min(appNameMetrics.advanceWidth
+                                                + Kirigami.Units.smallSpacing * 2, parent.width)
                                             text: modelData.name
                                             topPadding: Kirigami.Units.smallSpacing
+                                            TextMetrics {
+                                                id: appNameMetrics
+                                                font: appNameLabel.font
+                                                text: appNameLabel.text
+                                            }
                                         }
                                         CopyableCheckBox {
                                             objectName: modelData.id === root.firefoxApp().id ? "firefoxAudio" : ""
