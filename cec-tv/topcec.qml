@@ -403,7 +403,7 @@ Kirigami.ApplicationWindow {
         ? topcec.standbyReason.slice("Automatic standby blocked:".length).trim() : ""
     readonly property bool serviceHealthy: topcec.backendAvailable
         && topcec.serviceStatus === "running"
-    readonly property bool cecAdapterSelected: adapterField.acceptable
+    readonly property bool cecAdapterSelected: adapterField.detected
     readonly property bool monitoringWarning: topcec.backendAvailable
         && (topcec.serviceStatus === "configuration-only" || root.standbyBlocked)
     readonly property string monitoringWarningText: root.standbyBlocked

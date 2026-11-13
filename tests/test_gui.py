@@ -722,16 +722,16 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(power_state.property('text'), 'turning on')
         turn_on = window.findChild(QObject, 'tvOnButton')
         self.assertTrue(turn_on.property('enabled'))
-        backend.config['cec_port'] = ''
+        adapter = window.findChild(QObject, 'adapterField')
         backend._set_equipment({
             'outputs': [], 'adapters': [], 'inputs': [], 'errors': [],
         }, 'Equipment refreshed')
-        backend.configurationChanged.emit()
         app.processEvents()
+        self.assertTrue(adapter.property('acceptable'))
+        self.assertFalse(adapter.property('detected'))
         self.assertFalse(turn_on.property('enabled'))
         self.assertEqual(service_status.property('text'),
                          'Monitoring, no CEC adapter selected')
-        backend.config['cec_port'] = config['cec_port']
         backend._set_equipment({
             'outputs': [{'path': config['target_output'], 'label': 'Detected display'}],
             'adapters': [{'path': config['cec_port'], 'label': 'Detected CEC adapter'}],
@@ -739,8 +739,8 @@ class GuiChecks(unittest.TestCase):
                        for path in config['devices']],
             'errors': [],
         }, 'Equipment refreshed')
-        backend.configurationChanged.emit()
         app.processEvents()
+        self.assertTrue(turn_on.property('enabled'))
         backend._power_state = 'unknown'
         backend._service_status = 'configuration-only'
         backend.changed.emit()
