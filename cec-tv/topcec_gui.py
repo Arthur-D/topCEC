@@ -387,6 +387,17 @@ class GuiBackend(QObject):
     def firefoxPlaybackActive(self):
         return self._service_data.get('playback_active') is True
 
+    @Property(str, notify=changed)
+    def firefoxAudioStatusMessage(self):
+        if not self.backendAvailable or self._service_status != 'running':
+            return 'Firefox audio status is unavailable while monitoring is stopped.'
+        if 'firefox_audio_error' not in self._service_data:
+            return 'Firefox audio status is unavailable. Update the host service.'
+        error = self._service_data['firefox_audio_error']
+        if error:
+            return f'Firefox audio status is unavailable: {error}. TV standby is blocked as a precaution.'
+        return ''
+
     @Property('QVariantList', notify=appsChanged)
     def installedApps(self):
         apps = self._service_data.get('installed_apps')

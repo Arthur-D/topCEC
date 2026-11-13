@@ -67,7 +67,10 @@ configuration, external research repositories and credentials are excluded.
   label. The Standby page can disable this detection; it uses the display selected
   for mouse activity. Other apps' media
   types cannot currently be detected. Ambiguous/stale window matching blocks OFF.
-  Snapshot interval 2 seconds; mapping TTL 15 seconds.
+  The Standby page reports when Firefox audio detection is unavailable instead
+  of treating it as inactive. Snapshot interval 2 seconds; mapping TTL 15 seconds.
+  The AT-SPI fallback identifies Firefox by its process executable before
+  querying application accessibility data, avoiding unrelated unresponsive apps.
 - The Standby page lists installed desktop apps and lets each app's Plasma idle
   inhibition block topCEC standby independently of its media settings. Sleep-only
   inhibitions are ignored. Matching requests and their reasons appear under
