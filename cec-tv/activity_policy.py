@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Hardware-independent inactivity and standby policy."""
 
-DEFAULT_TIMEOUT = 60.0
+DEFAULT_TIMEOUT = 300.0
 
 
 class ActivityPolicy:
@@ -19,7 +19,7 @@ class ActivityPolicy:
 
     def tick(self, now, uncertain=False):
         if uncertain:
-            # Require a full 60 seconds of known inactivity after recovery.
+            # Require a full inactivity interval of known state after recovery.
             self.last = now
         elif self.timeout is not None and not self.expired and now - self.last >= self.timeout:
             self.expired = True

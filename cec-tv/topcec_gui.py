@@ -17,6 +17,7 @@ from PySide6.QtDBus import (
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 
+from activity_policy import DEFAULT_TIMEOUT
 from configuration import (
     DEFAULT_CONFIG, SCHEMA_VERSION, default_config_path, load_config, save_config,
     validate_config,
@@ -78,9 +79,10 @@ def config_from_settings(current, values):
     timeout_mode = values.get('timeoutMode', 'kde')
     if timeout_mode not in ('kde', 'custom', 'never'):
         raise ValueError('Unknown inactivity timeout mode')
+    adapter = str(values['adapter']).strip()
     timeout_seconds = (
         None if timeout_mode == 'never'
-        else int(values.get('timeoutMinutes', 10)) * 60)
+        else int(values.get('timeoutMinutes', DEFAULT_TIMEOUT / 60)) * 60)
     if timeout_mode == 'kde':
         timeout_seconds = current['timeout_seconds']
     config = {
@@ -103,8 +105,8 @@ def config_from_settings(current, values):
             'idleInhibitionApps', current['idle_inhibition_apps']),
         'force_inhibition_apps': values.get(
             'forceInhibitionApps', current['force_inhibition_apps']),
-        'cec_enabled': True,
-        'cec_port': str(values['adapter']).strip(),
+        'cec_enabled': bool(adapter),
+        'cec_port': adapter,
         'kde_timeout': timeout_mode == 'kde',
         'require_snapshot': True,
         'axis_deadzone_percent': float(values['axisDeadzone']),
@@ -186,9 +188,9 @@ class GuiBackend(QObject):
                 self._config_source = 'saved'
             except ValueError as error:
                 self._action_message = 'Configuration error: ' + str(error)
-        if self.config['target_output'] not in self.outputs:
+        if self.config['target_output'] and self.config['target_output'] not in self.outputs:
             self.outputs.insert(0, self.config['target_output'])
-        if self.config['cec_port'] not in self.adapters:
+        if self.config['cec_port'] and self.config['cec_port'] not in self.adapters:
             self.adapters.insert(0, self.config['cec_port'])
 
     @Property(QIcon, constant=True)
@@ -363,7 +365,7 @@ class GuiBackend(QObject):
 
     @Slot(result=int)
     def timeoutMinutes(self):
-        return max(1, round((self.config['timeout_seconds'] or 600) / 60))
+        return max(1, round((self.config['timeout_seconds'] or DEFAULT_TIMEOUT) / 60))
 
     @Slot(result=bool)
     def usesKdeTimeout(self):
@@ -372,6 +374,13 @@ class GuiBackend(QObject):
     @Property(str, notify=changed)
     def plasmaTimeoutLabel(self):
         label = 'Follow Plasma power setting'
+        if self._service_data.get('plasma_timeout_fallback') is True:
+            seconds = self.config['timeout_seconds']
+            if seconds is None:
+                return label + ' (unavailable; standby disabled)'
+            minutes = seconds / 60
+            unit = 'minute' if minutes == 1 else 'minutes'
+            return f'{label} (unavailable; using {minutes:g} {unit})'
         if self._service_data.get('plasma_timeout_read') is not True:
             return label
         seconds = self._service_data.get('plasma_timeout_seconds')
@@ -542,7 +551,8 @@ class GuiBackend(QObject):
                 raise ValueError('Status response must be an object')
             read = data.get('plasma_timeout_read', False)
             seconds = data.get('plasma_timeout_seconds')
-            if (type(read) is not bool
+            fallback = data.get('plasma_timeout_fallback', False)
+            if (type(read) is not bool or type(fallback) is not bool
                     or (seconds is not None and
                         (type(seconds) is not int or seconds <= 0))
                     or (seconds is not None and not read)):
@@ -757,8 +767,10 @@ class GuiBackend(QObject):
                           or source != self._config_source)
         self._config_source = source
         self.config = config
-        self.outputs = list(dict.fromkeys([config['target_output'], *self.outputs]))
-        self.adapters = list(dict.fromkeys([config['cec_port'], *self.adapters]))
+        self.outputs = list(dict.fromkeys(
+            ([config['target_output']] if config['target_output'] else []) + self.outputs))
+        self.adapters = list(dict.fromkeys(
+            ([config['cec_port']] if config['cec_port'] else []) + self.adapters))
         self._service_status = self._service_data.get('service', 'running')
         self._power_state = self._service_data.get('power_state', 'unknown')
         reason = self._service_data.get('fail_safe_reason')

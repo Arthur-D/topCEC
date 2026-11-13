@@ -44,8 +44,8 @@ class GuiChecks(unittest.TestCase):
         window = engine.rootObjects()[0]
         self.assertIsNone(window.findChild(QObject, 'saveSettingsButton'))
         backend._equipment_reply(0, self.reply({
-            'outputs': [{'path': DEFAULT_CONFIG['target_output'], 'label': 'TV'}],
-            'adapters': [{'path': DEFAULT_CONFIG['cec_port'], 'label': 'CEC'}],
+            'outputs': [{'path': 'TV', 'label': 'TV'}],
+            'adapters': [{'path': '/dev/mock-cec', 'label': 'CEC'}],
             'inputs': [],
             'errors': [],
         }))
@@ -128,11 +128,13 @@ class GuiChecks(unittest.TestCase):
         backend._connection_state = 'connected'
         backend._service_status = 'running'
         backend._config_source = 'saved'
-        backend.config = {**DEFAULT_CONFIG, 'devices': [], 'consider_input_devices': False}
+        backend.config = {
+            **DEFAULT_CONFIG, 'target_output': 'HDMI-A-2', 'cec_port': '/dev/mock-cec',
+            'devices': [], 'consider_input_devices': False}
         backend._set_equipment({
-            'outputs': [{'path': DEFAULT_CONFIG['target_output'], 'label': 'TV'},
+            'outputs': [{'path': 'HDMI-A-2', 'label': 'TV'},
                         {'path': 'DP-1', 'label': 'Monitor'}],
-            'adapters': [{'path': DEFAULT_CONFIG['cec_port'], 'label': 'Adapter'}],
+            'adapters': [{'path': '/dev/mock-cec', 'label': 'Adapter'}],
             'inputs': [], 'errors': [],
         }, '')
         engine = QQmlApplicationEngine()
@@ -346,6 +348,7 @@ class GuiChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             host_path = Path(directory) / 'host' / 'config.json'
             initial = {'schema_version': 1, **DEFAULT_CONFIG,
+                       'target_output': 'OLD-DISPLAY',
                        'devices': ['/dev/input/event10']}
             save_config(host_path, initial)
             backend = GuiBackend(dbus_only=True)
@@ -483,13 +486,14 @@ class GuiChecks(unittest.TestCase):
         engine.rootContext().setContextProperty('topcec', backend)
         engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
         window = engine.rootObjects()[0]
+        audio_paths = ['/dev/input/audio1', '/dev/input/audio2']
         backend._equipment_reply(0, self.reply({
-            'outputs': [{'path': DEFAULT_CONFIG['target_output'], 'label': 'TV'}],
-            'adapters': [{'path': DEFAULT_CONFIG['cec_port'], 'label': 'CEC'}],
-            'inputs': [{'path': path, 'label': 'Audio'} for path in DEFAULT_CONFIG['devices']],
+            'outputs': [{'path': 'TV', 'label': 'TV'}],
+            'adapters': [{'path': '/dev/mock-cec', 'label': 'CEC'}],
+            'inputs': [{'path': path, 'label': 'Audio'} for path in audio_paths],
             'errors': []}))
         self.assertEqual(window.findChild(QObject, 'devicesField').property('text'), '')
-        for path in DEFAULT_CONFIG['devices']:
+        for path in audio_paths:
             self.assertFalse(self.input_choice(engine, window, path).property('checked'))
         self.assertEqual(window.findChild(QObject, 'outputField').property('currentIndex'), 0)
         self.assertEqual(window.findChild(QObject, 'adapterField').property('currentIndex'), 0)
@@ -525,8 +529,8 @@ class GuiChecks(unittest.TestCase):
             expression.evaluate()
             self.assertFalse(expression.hasError(), expression.error().toString())
         values = apply.call_args.args[0]
-        self.assertEqual(values['targetOutput'], DEFAULT_CONFIG['target_output'])
-        self.assertEqual(values['adapter'], DEFAULT_CONFIG['cec_port'])
+        self.assertEqual(values['targetOutput'], 'TV')
+        self.assertEqual(values['adapter'], '/dev/mock-cec')
         self.assertEqual(values['devices'], keyboard_path)
         engine.deleteLater()
 
@@ -534,7 +538,9 @@ class GuiChecks(unittest.TestCase):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
         backend._service_data = {'service': 'running', 'configuration_saved': True}
-        config = {'schema_version': 1, **DEFAULT_CONFIG}
+        config = {'schema_version': 1, **DEFAULT_CONFIG,
+                  'target_output': 'HDMI-A-1', 'cec_port': '/dev/mock-cec',
+                  'devices': ['/dev/input/event1', '/dev/input/event2']}
         engine = QQmlApplicationEngine()
         engine.rootContext().setContextProperty('topcec', backend)
         engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
@@ -642,7 +648,10 @@ class GuiChecks(unittest.TestCase):
                 'command': 'sudo usermod -aG input -- test-user',
             },
         }
-        config = {'schema_version': 1, **DEFAULT_CONFIG}
+        config = {'schema_version': 1, **DEFAULT_CONFIG,
+                  'kde_timeout': False,
+                  'target_output': 'HDMI-A-1', 'cec_port': '/dev/mock-cec',
+                  'devices': ['/dev/input/event1', '/dev/input/event2']}
         backend._config_reply(0, self.reply(config))
         engine = QQmlApplicationEngine()
         qml_warnings = []
@@ -807,6 +816,13 @@ class GuiChecks(unittest.TestCase):
         }))
         self.assertEqual(timeout.property('currentText'),
                          'Follow Plasma power setting (5 minutes)')
+        backend._status_poll_reply(0, self.reply({
+            'plasma_timeout_read': False,
+            'plasma_timeout_seconds': None,
+            'plasma_timeout_fallback': True,
+        }))
+        self.assertEqual(timeout.property('currentText'),
+                         'Follow Plasma power setting (unavailable; using 5 minutes)')
         self.assertFalse(minutes.property('visible'))
         timeout.setProperty('currentIndex', 1)
         self.assertTrue(minutes.property('visible'))
@@ -1087,6 +1103,10 @@ class GuiChecks(unittest.TestCase):
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
         backend._service_status = 'configuration-only'
+        backend._config_source = 'saved'
+        backend.config = {**backend.config, 'target_output': 'OLD-DISPLAY',
+                          'cec_port': '/dev/old-CEC',
+                          'devices': ['/dev/input/old']}
         original = dict(backend.config)
         engine = QQmlApplicationEngine()
         engine.rootContext().setContextProperty('topcec', backend)
@@ -1195,11 +1215,13 @@ class GuiChecks(unittest.TestCase):
         backend._connection_state = 'connected'
         backend._service_status = 'running'
         backend._config_source = 'saved'
-        backend.config = {**backend.config, 'devices': ['/dev/input/wheel'],
-                          'device_axis_deadzones': {'/dev/input/wheel': {'0': 12}}}
+        backend.config = {
+            **backend.config, 'target_output': 'DP-1', 'cec_port': '/dev/mock-cec',
+            'devices': ['/dev/input/wheel'],
+            'device_axis_deadzones': {'/dev/input/wheel': {'0': 12}}}
         backend._set_equipment({
-            'outputs': [{'path': backend.config['target_output'], 'label': 'Display'}],
-            'adapters': [{'path': backend.config['cec_port'], 'label': 'Adapter'}],
+            'outputs': [{'path': 'DP-1', 'label': 'Display'}],
+            'adapters': [{'path': '/dev/mock-cec', 'label': 'Adapter'}],
             'errors': [],
             'inputs': [
                 {'path': '/dev/input/wheel', 'label': 'Wheel',
@@ -1292,6 +1314,10 @@ class GuiChecks(unittest.TestCase):
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
         backend._service_status = 'running'
+        backend._config_source = 'saved'
+        backend.config = {**backend.config, 'target_output': 'OLD-DISPLAY',
+                          'cec_port': '/dev/old-CEC',
+                          'devices': ['/dev/input/old']}
         engine = QQmlApplicationEngine()
         engine.rootContext().setContextProperty('topcec', backend)
         engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
@@ -1392,6 +1418,10 @@ class GuiChecks(unittest.TestCase):
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
         backend._service_status = 'configuration-only'
+        backend._config_source = 'saved'
+        backend.config = {**backend.config, 'target_output': 'OLD-DISPLAY',
+                          'cec_port': '/dev/old-CEC',
+                          'devices': ['/dev/input/old']}
         original_config = dict(backend.config)
         backend._service_data = {'configuration_saved': True}
         backend._config_reply(0, self.reply({'schema_version': 1, **original_config}))
@@ -1505,7 +1535,11 @@ class GuiChecks(unittest.TestCase):
                              inventory):
                 backend.refresh()
                 complete({'service': 'running', 'cec_enabled': True})
-                complete({'schema_version': 1, **DEFAULT_CONFIG})
+                complete({
+                    'schema_version': 1, **DEFAULT_CONFIG,
+                    'target_output': 'DP-NEW', 'cec_port': '/dev/serial/by-id/real-CEC',
+                    'devices': ['/dev/input/event10'],
+                })
                 self.assertTrue(backend._refresh_in_flight)
                 complete(detected)
                 app.processEvents()
@@ -1526,7 +1560,7 @@ class GuiChecks(unittest.TestCase):
                     self.assertEqual(adapter.property('count'), 0)
                     self.assertEqual(repeater.property('count'), 0)
                     self.assertIn('unavailable', window.findChild(QObject, 'retainedInputs').property('text'))
-                self.assertEqual(devices.property('text'), '\n'.join(DEFAULT_CONFIG['devices']))
+                self.assertEqual(devices.property('text'), '/dev/input/event10')
                 self.assertFalse(window.property('settingsDirty'))
             self.assertGreaterEqual(interface.asyncCallWithArgumentList.call_count, 9)
             existing.setProperty('checked', False)
@@ -1964,11 +1998,13 @@ class GuiChecks(unittest.TestCase):
         backend._connection_state = 'connected'
         backend._service_status = 'running'
         backend._config_source = 'saved'
-        backend.config = {**DEFAULT_CONFIG, 'devices': []}
+        backend.config = {
+            **DEFAULT_CONFIG, 'target_output': 'HDMI-A-2', 'cec_port': '/dev/mock-cec',
+            'devices': []}
         backend._set_equipment({
             'outputs': [{'path': 'DP-1', 'label': 'Monitor'},
                         {'path': 'HDMI-A-2', 'label': 'TV'}],
-            'adapters': [{'path': backend.config['cec_port'], 'label': 'Adapter'}],
+            'adapters': [{'path': '/dev/mock-cec', 'label': 'Adapter'}],
             'inputs': [], 'errors': [],
         }, '')
         engine = QQmlApplicationEngine()

@@ -42,26 +42,24 @@ configuration, external research repositories and credentials are excluded.
 
 ## Machine-specific values and limitations
 
-- Target display is `HDMI-A-2`. The mouse bridge maps cursor position using KWin's
-  current output geometries; gaps and overlapping geometry are treated as unknown.
-  The bridge reports activity with its actual output name; the monitor filters
-  it using the configured `mouse_outputs` list. No separate KWin
-  target configuration is required. Legacy TV-only mouse reports are accepted
-  only for the original default display.
-- CEC adapter: `/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00`;
-  commands address TV logical address 0. This is one TV, not a general multi-TV manager.
-- Input defaults remain `/dev/input/event10` and `/dev/input/event14` for
-  compatibility. Configure `devices` for your keyboard/wheel using stable
-  `/dev/input/by-id/` paths; event numbers are not portable between systems.
+- The target display, CEC adapter, and input devices have no hardware-specific
+  defaults. Select detected hardware in the settings UI or configure its paths
+  explicitly. The mouse bridge maps cursor position using KWin's current output
+  geometries; gaps and overlapping geometry are treated as unknown. The bridge
+  reports activity with its actual output name; the monitor filters it using the
+  configured `mouse_outputs` list. No separate KWin target configuration is required.
+  This is one TV, not a general multi-TV manager.
 - The packaged user unit runs from `%h/.local/share/topcec/cec-tv/start.py`.
   Direct checkout operation remains possible; older legacy helpers use
-  `$HOME/.local/bin/`. The default CEC adapter path identifies a device model,
-  not a unique serial; set `cec_port` for your adapter. No devices are auto-selected.
+  `$HOME/.local/bin/`. A sole detected display or adapter may be selected
+  automatically; otherwise choose the intended hardware explicitly.
 - Requires KDE Plasma/KWin 6 on Wayland, session D-Bus, qdbus, kreadconfig6,
   cec-client/libCEC, Python with dbus-python, PyGObject/GLib, evdev and pyatspi.
   External dependencies are not vendored or version-pinned.
-- Uses Plasma AC/Display idle settings (default 600 seconds), not battery or
-  locked-screen timeouts. A disabled timeout prevents automatic OFF.
+- Follows Plasma's AC/Display idle setting (default 600 seconds), not battery
+  or locked-screen timeouts. If that setting cannot be read, it uses the
+  configured fallback (5 minutes by default). An explicitly disabled Plasma
+  timeout still prevents automatic OFF.
 - Firefox audio detection uses the WebExtension signal when it is installed and
   reports fresh data; otherwise it falls back to AT-SPI's English `Mute tab`
   label. The Firefox row's “Block standby while playing audio” option
@@ -212,17 +210,17 @@ keys, malformed values, or unreadable files stop startup with an error.
 ```json
 {
   "schema_version": 1,
-  "target_output": "HDMI-A-2",
-  "timeout_seconds": 60,
+  "target_output": "",
+  "timeout_seconds": 300,
   "mapping_ttl_seconds": 15,
-  "devices": ["/dev/input/event10", "/dev/input/event14"],
+  "devices": [],
   "consider_input_devices": true,
   "mouse_output": null,
   "mouse_outputs": null,
   "mute_labels": ["Mute tab"],
   "cec_enabled": false,
-  "cec_port": "/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00",
-  "kde_timeout": false,
+  "cec_port": "",
+  "kde_timeout": true,
   "require_snapshot": false,
   "axis_deadzone_percent": 0.0,
   "rz_deadzone_percent": 0.0,
@@ -230,8 +228,14 @@ keys, malformed values, or unreadable files stop startup with an error.
 }
 ```
 
-Set `timeout_seconds` to `null` to disable inactivity standby. CEC remains
-disabled by default; enabling it retains the live Firefox snapshot requirement.
+`timeout_seconds` is the fallback inactivity timeout when following Plasma, and
+the default is 300 seconds (5 minutes). Set it to `null` to disable standby if
+the Plasma setting cannot be read. Set `kde_timeout` to `false` to use this
+timeout directly. An explicitly disabled Plasma timeout also disables automatic
+standby. CEC remains disabled by default; enabling it requires explicit display
+and adapter selections and retains the live Firefox snapshot requirement.
+Display, adapter, and input paths are left unselected by default; choose
+hardware detected on the host or set the paths explicitly.
 Set `consider_input_devices` to `false` to ignore the selected input devices
 without removing their paths. `mouse_outputs` lists displays whose mouse movement
 or selected app activity prevents standby; an empty list selects none. A `null`
