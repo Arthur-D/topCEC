@@ -181,7 +181,7 @@ class GuiChecks(unittest.TestCase):
             self.assertEqual(method, 'ApplySettings')
             self.assertNotIn('DP-1', latest['mouse_outputs'])
             self.assertEqual(latest['idle_inhibition_apps'], [])
-            self.assertTrue(latest['firefox_audio_blocks_standby'])
+            self.assertFalse(latest['firefox_audio_blocks_standby'])
             callback(self.reply({'accepted': True, 'applied_live': True, 'config': latest}))
             self.assertFalse(window.property('settingsDirty'))
         engine.deleteLater()
@@ -232,6 +232,32 @@ class GuiChecks(unittest.TestCase):
                 self.assertFalse(backend.liveSettingsAvailable)
                 self.assertIn('remain pending', helper.property('text'))
                 engine.deleteLater()
+
+    def test_chromium_settings_require_a_compatible_host(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        old_config = {'schema_version': 1, **DEFAULT_CONFIG}
+        del old_config['chromium_audio_blocks_standby']
+        backend._config_reply(0, self.reply(old_config))
+        interface = Mock(isValid=Mock(return_value=True))
+        with patch.object(backend, 'refresh'), \
+                patch.object(backend, '_service_interface', return_value=interface), \
+                patch.object(backend, '_async_call') as call:
+            backend.applySettings({**self.values, 'chromiumAudioBlocksStandby': ['chrome']})
+            self.assertFalse(call.called)
+            self.assertIn('updated host backend', backend.actionMessage)
+            backend.applySettings(self.values)
+            payload = json.loads(call.call_args.args[3])
+            self.assertNotIn('chromium_audio_blocks_standby', payload)
+
+        backend._settings_in_flight = False
+        backend._config_reply(backend._refresh_generation, self.reply(
+            {'schema_version': 1, **DEFAULT_CONFIG, 'chromium_audio_blocks_standby': ['chrome']}))
+        with patch.object(backend, '_service_interface', return_value=interface), \
+                patch.object(backend, '_async_call') as call:
+            backend.applySettings({**self.values, 'chromiumAudioBlocksStandby': []})
+            payload = json.loads(call.call_args.args[3])
+            self.assertEqual(payload['chromium_audio_blocks_standby'], [])
 
     def test_rejected_live_input_draft_is_retained_without_repeated_open_attempts(self):
         self.autosave_patch.stop()
@@ -2039,7 +2065,7 @@ class GuiChecks(unittest.TestCase):
         firefox_audio = firefox_row.findChild(QObject, 'firefoxAudio')
         selector = window.findChild(QObject, 'mouseDisplayChoices')
         self.assertTrue(checkbox.property('checked'))
-        self.assertTrue(firefox_audio.property('checked'))
+        self.assertFalse(firefox_audio.property('checked'))
         QMetaObject.invokeMethod(firefox_audio, 'click')
         self.assertEqual(selector.property('count'), 2)
         legacy_values = json.loads(QQmlExpression(
@@ -2064,7 +2090,7 @@ class GuiChecks(unittest.TestCase):
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
         config = config_from_settings(backend.config, values)
         self.assertFalse(config['consider_input_devices'])
-        self.assertFalse(config['firefox_audio_blocks_standby'])
+        self.assertTrue(config['firefox_audio_blocks_standby'])
         self.assertEqual(config['mouse_outputs'], ['HDMI-A-2', 'DP-1'])
         backend._set_equipment({'outputs': [], 'adapters': [], 'inputs': [], 'errors': []}, '')
         app.processEvents()
@@ -2184,6 +2210,7 @@ class GuiChecks(unittest.TestCase):
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
         backend._service_status = 'running'
+        backend.config['firefox_audio_blocks_standby'] = True
         backend._service_data = {
             'firefox_audio_error': 'AT-SPI did not respond within 5 seconds',
             'blocking_apps': [], 'inhibitions_error': None,
@@ -2207,11 +2234,40 @@ class GuiChecks(unittest.TestCase):
         self.assertTrue(empty.property('visible'))
         engine.deleteLater()
 
+    def test_chromium_browser_audio_options_are_independent(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        engine.rootContext().setContextProperty(
+            'browserChoices', window.findChild(QObject, 'chromiumAudioChoices'))
+        chromium = QQmlExpression(engine.rootContext(), window, 'browserChoices.itemAt(0)').evaluate()[0]
+        chrome = QQmlExpression(engine.rootContext(), window, 'browserChoices.itemAt(1)').evaluate()[0]
+        self.assertFalse(chromium.property('checked'))
+        self.assertFalse(chrome.property('checked'))
+        QMetaObject.invokeMethod(chromium, 'click')
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertEqual(values['chromiumAudioBlocksStandby'], ['chromium'])
+        self.assertFalse(chrome.property('checked'))
+        self.assertEqual(config_from_settings(backend.config, values)
+                         ['chromium_audio_blocks_standby'], ['chromium'])
+        window.findChild(QObject, 'autoSaveTimer').stop()
+        engine.deleteLater()
+
     def test_firefox_mismatch_warning_is_only_shown_in_diagnostics(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
         backend._service_status = 'running'
+        backend.config['firefox_audio_blocks_standby'] = True
         backend._standby_reason = (
             'Automatic standby blocked: KWin windows are missing from AT-SPI; waiting for a match')
         backend._service_data = {
@@ -2240,6 +2296,20 @@ class GuiChecks(unittest.TestCase):
         self.assertIn('Automatic standby is blocked', banner.property('text'))
         self.assertIn('missing from AT-SPI', banner.property('text'))
         self.assertIn('missing from AT-SPI', backend.diagnostics)
+        self.assertIn('accessibility.force_disabled to -1', backend.diagnostics)
+        self.assertTrue(window.findChild(QObject, 'firefoxAccessibilityHelp').property('visible'))
+        backend._service_data['firefox_audio_error'] = None
+        backend._update_diagnostics()
+        backend.changed.emit()
+        self.assertFalse(window.findChild(QObject, 'firefoxAccessibilityHelp').property('visible'))
+        backend._service_data['firefox_audio_error'] = 'Firefox WebExtension reports audio, but mapping is unknown'
+        backend._update_diagnostics()
+        self.assertNotIn('Firefox accessibility:', backend.diagnostics)
+        backend._service_data['firefox_audio_error'] = 'AT-SPI did not respond'
+        backend.config['firefox_audio_blocks_standby'] = False
+        backend._update_diagnostics()
+        self.assertIn('Firefox audio: disabled', backend.diagnostics)
+        self.assertNotIn('Firefox accessibility:', backend.diagnostics)
         engine.deleteLater()
 
     def test_firefox_audio_row_uses_discovered_identity_or_audio_only_fallback(self):
@@ -2276,7 +2346,7 @@ class GuiChecks(unittest.TestCase):
                 name = row.findChild(QObject, 'appName:' + row_id)
                 self.assertEqual(audio.property('text'), 'Block standby while playing audio')
                 self.assertEqual(audio.parent(), name.parent())
-                self.assertTrue(audio.property('checked'))
+                self.assertFalse(audio.property('checked'))
                 self.assertEqual(row.findChild(QObject, 'idleApp:' + row_id).property('visible'),
                                  bool(app_id))
                 engine.deleteLater()
@@ -2367,17 +2437,17 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(window.findChild(QObject, 'installedAppsScroll').property('count'), 0)
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
-        self.assertFalse(values['firefoxAudioBlocksStandby'])
+        self.assertTrue(values['firefoxAudioBlocksStandby'])
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         app.processEvents()
         row = self.app_row(engine, window, 0)
-        self.assertFalse(row.findChild(QObject, 'firefoxAudio').property('checked'))
+        self.assertTrue(row.findChild(QObject, 'firefoxAudio').property('checked'))
         QMetaObject.invokeMethod(row.findChild(QObject, 'firefoxAudio'), 'click')
         search.setProperty('text', '')
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         app.processEvents()
         row = self.app_row(engine, window, 0)
-        self.assertTrue(row.findChild(QObject, 'firefoxAudio').property('checked'))
+        self.assertFalse(row.findChild(QObject, 'firefoxAudio').property('checked'))
         QMetaObject.invokeMethod(window.findChild(QObject, 'autoSaveTimer'), 'stop')
         engine.deleteLater()
 

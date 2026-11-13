@@ -11,19 +11,23 @@ DATA_DIR="${XDG_DATA_HOME:-$HOME_DIR/.local/share}"
 
 install -d "$APP_DIR/cec-tv" "$BIN_DIR" "$UNIT_DIR"
 for file in \
-    activity_policy.py cec_power_state.py configuration.py equipment.py firefox_media.py standby_apps.py \
+    activity_policy.py cec_power_state.py configuration.py equipment.py firefox_media.py chromium_media.py standby_apps.py \
     native_messaging.py providers.py \
     monitor.py start.py cec-kde-settings.py cec-power-command.py \
-    firefox-native-host.py topcec_gui.py activity.js firefox.js topcec.qml; do
+    firefox-native-host.py chromium-native-host.py topcec_gui.py activity.js firefox.js topcec.qml; do
     mode=0644
     case "$file" in
         monitor.py|start.py|cec-kde-settings.py|cec-power-command.py|\
-        firefox-native-host.py|topcec_gui.py)
+        firefox-native-host.py|chromium-native-host.py|topcec_gui.py)
             mode=0755
             ;;
     esac
     install -m "$mode" "$SOURCE_DIR/cec-tv/$file" "$APP_DIR/cec-tv/$file"
 done
+install -d "$APP_DIR/chromium-extension" "$APP_DIR/packaging"
+install -m 0644 "$SOURCE_DIR/chromium-extension/manifest.json" \
+    "$SOURCE_DIR/chromium-extension/background.js" "$APP_DIR/chromium-extension/"
+install -m 0755 "$SOURCE_DIR/packaging/setup-chromium-extension.py" "$APP_DIR/packaging/"
 TOPCEC_HOME="$HOME_DIR" TOPCEC_APP_DIR="$APP_DIR" \
     bash "$SOURCE_DIR/packaging/install-firefox-native-host.sh"
 

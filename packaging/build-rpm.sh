@@ -18,10 +18,10 @@ done
 
 ARCHIVE_ROOT="$WORK_DIR/topcec-$VERSION"
 mkdir -p "$ARCHIVE_ROOT/cec-tv" "$ARCHIVE_ROOT/packaging" \
-    "$ARCHIVE_ROOT/firefox-extension"
+    "$ARCHIVE_ROOT/firefox-extension" "$ARCHIVE_ROOT/chromium-extension"
 for file in \
     activity.js activity_policy.py cec-kde-settings.py cec-power-command.py \
-    cec_power_state.py configuration.py equipment.py firefox_media.py standby_apps.py firefox-native-host.py \
+    cec_power_state.py configuration.py equipment.py firefox_media.py chromium_media.py standby_apps.py firefox-native-host.py chromium-native-host.py \
     native_messaging.py firefox.js monitor.py providers.py \
     start.py topcec_gui.py topcec.qml net.local.topcec.svg; do
     install -m 0644 "$SOURCE_DIR/cec-tv/$file" "$ARCHIVE_ROOT/cec-tv/$file"
@@ -30,12 +30,14 @@ for file in LICENSE README.md PROVENANCE.md; do
     install -m 0644 "$SOURCE_DIR/$file" "$ARCHIVE_ROOT/$file"
 done
 for file in topcec.service topcec-gui topcec-gui.desktop \
-    net.local.topcec.media.json; do
+    net.local.topcec.media.json setup-chromium-extension.py; do
     install -m 0644 "$SOURCE_DIR/packaging/$file" "$ARCHIVE_ROOT/packaging/$file"
 done
 for file in manifest.json background.js; do
     install -m 0644 "$SOURCE_DIR/firefox-extension/$file" \
         "$ARCHIVE_ROOT/firefox-extension/$file"
+    install -m 0644 "$SOURCE_DIR/chromium-extension/$file" \
+        "$ARCHIVE_ROOT/chromium-extension/$file"
 done
 
 tar -C "$WORK_DIR" -czf "$WORK_DIR/SOURCES/topcec-$VERSION.tar.gz" \

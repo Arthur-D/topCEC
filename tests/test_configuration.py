@@ -89,7 +89,11 @@ class ConfigurationChecks(unittest.TestCase):
         self.assertEqual(config['devices'], ['/dev/input/event42'])
         self.assertEqual(config['mute_labels'], DEFAULT_CONFIG['mute_labels'])
         self.assertTrue(config['consider_input_devices'])
-        self.assertTrue(config['firefox_audio_blocks_standby'])
+        self.assertFalse(config['firefox_audio_blocks_standby'])
+        self.assertTrue(validate_config({
+            'schema_version': SCHEMA_VERSION,
+            'firefox_audio_blocks_standby': True,
+        })['firefox_audio_blocks_standby'])
         self.assertIsNone(config['mouse_output'])
         self.assertIsNone(config['mouse_outputs'])
         self.assertEqual(config['axis_deadzone_percent'], 0.0)

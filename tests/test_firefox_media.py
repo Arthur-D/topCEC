@@ -199,12 +199,15 @@ class FirefoxMediaChecks(unittest.TestCase):
                 manifest['allowed_extensions'], ['topcec-media@topcec.local'])
             self.assertTrue(os.access(manifest['path'], os.X_OK))
             self.assertTrue((app / 'firefox-extension/background.js').is_file())
+            with zipfile.ZipFile(app / 'topcec-firefox-media.zip') as archive:
+                self.assertEqual(set(archive.namelist()), {'manifest.json', 'background.js'})
             extra = app / 'preserve-me'
             extra.write_text('custom', encoding='utf-8')
             subprocess.run(
                 ['bash', str(ROOT / 'packaging/uninstall-user.sh')],
                 check=True, env=environment, capture_output=True, text=True)
             self.assertFalse((manifest_dir / 'net.local.topcec.media.json').exists())
+            self.assertFalse((app / 'topcec-firefox-media.zip').exists())
             self.assertEqual(extra.read_text(encoding='utf-8'), 'custom')
 
 
