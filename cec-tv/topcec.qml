@@ -28,6 +28,17 @@ Kirigami.ApplicationWindow {
     property var retainedAppIds: []
     property real defaultAxisDeadzone: 2
     property real defaultRzDeadzone: 5
+    onSettingsDirtyChanged: {
+        if (settingsDirty)
+            autoSaveTimer.restart()
+    }
+
+    Timer {
+        id: autoSaveTimer
+        objectName: "autoSaveTimer"
+        interval: 300
+        onTriggered: root.applySettings()
+    }
 
     globalDrawer: Kirigami.GlobalDrawer {
         id: navigationDrawer
@@ -257,7 +268,27 @@ Kirigami.ApplicationWindow {
             draft[path] = {}
         draft[path][String(axis.code)] = value
         axisDraft = draft
+        root.markSettingsDirty()
+    }
+
+    function markSettingsDirty() {
         settingsDirty = true
+        autoSaveTimer.restart()
+    }
+
+    function scheduleAutoSave() {
+        autoSaveTimer.restart()
+    }
+
+    function applySettings() {
+        if (!settingsDirty || !topcec.settingsEnabled || !equipmentReady)
+            return
+        let values = settingsValues()
+        submittedSettings = JSON.stringify(values)
+        values.targetOutput = outputField.valueToSave
+        values.adapter = adapterField.valueToSave
+        values.devices = savedInputPaths()
+        topcec.applySettings(values)
     }
 
     function setInputDeviceSelected(device, selected) {
@@ -432,7 +463,7 @@ Kirigami.ApplicationWindow {
         if (considerInputDevices.checked && !inputPaths().length)
             return "Select at least one input device."
         if (root.settingsDirty)
-            return "Unsaved changes."
+            return "Saving changes..."
         if (topcec.actionMessage.length)
             return topcec.actionMessage
         if (!topcec.dbusOnly && !topcec.backendAvailable)
@@ -447,7 +478,7 @@ Kirigami.ApplicationWindow {
             return root.diagnosticReport()
         return root.title + "\n" + settingsPage.title + "\nService: " + root.headerStatus + "\n"
             + root.displayedText(pageContent) + "\n"
-            + (applyFooter.visible ? saveSettingsButton.text + "\n" + settingsSaveStatus.text : "")
+            + (applyFooter.visible ? settingsSaveStatus.text : "")
     }
 
     function copyCurrentPage() {
@@ -580,7 +611,7 @@ Kirigami.ApplicationWindow {
             explicitSelection = true
             selectedValue = model[index].path
             editText = model[index].path
-            root.settingsDirty = true
+            root.markSettingsDirty()
         }
         onEditTextChanged: {
             if (!syncing && manualEntry) {
@@ -588,7 +619,7 @@ Kirigami.ApplicationWindow {
                 explicitSelection = true
                 selectedValue = editText
                 if (activeFocus)
-                    root.settingsDirty = true
+                    root.markSettingsDirty()
             }
         }
     }
@@ -649,13 +680,13 @@ Kirigami.ApplicationWindow {
         mouseOutputsFollowTarget = false
         mouseOutputsDraft = enabled ? [...selected.filter(item => item !== path), path]
             : selected.filter(item => item !== path)
-        settingsDirty = true
+        root.markSettingsDirty()
     }
 
     function setIdleApp(id, enabled) {
         idleAppsDraft = enabled ? [...idleAppsDraft.filter(item => item !== id), id]
             : idleAppsDraft.filter(item => item !== id)
-        settingsDirty = true
+        root.markSettingsDirty()
     }
 
     Component.onCompleted: loadSettings()
@@ -665,11 +696,22 @@ Kirigami.ApplicationWindow {
             root.retainedAppIds = [...new Set([...root.retainedAppIds, ...root.idleAppsDraft])]
         }
         function onConfigurationChanged() { root.loadSettings() }
+        function onSettingsEnabledChanged() {
+            if (root.settingsDirty)
+                root.scheduleAutoSave()
+        }
         function onSettingsSaved() {
             if (root.submittedSettings && JSON.stringify(root.settingsValues()) !== root.submittedSettings)
                 return
             root.settingsDirty = false
             root.loadSettings()
+        }
+    }
+    Connections {
+        target: root
+        function onEquipmentReadyChanged() {
+            if (root.settingsDirty)
+                root.scheduleAutoSave()
         }
     }
 
@@ -733,24 +775,6 @@ Kirigami.ApplicationWindow {
                     Layout.fillWidth: true
                     verticalAlignment: TextEdit.AlignVCenter
                     text: root.saveStatusText()
-                }
-                CopyableButton {
-                    id: saveSettingsButton
-                    objectName: "saveSettingsButton"
-                    text: "Save and apply"
-                    icon.name: "dialog-ok-apply"
-                    Accessible.name: "Save and apply settings"
-                    enabled: topcec.settingsEnabled && root.equipmentReady
-                    onClicked: {
-                        if (!root.equipmentReady)
-                            return
-                        let values = root.settingsValues()
-                        root.submittedSettings = JSON.stringify(values)
-                        values.targetOutput = outputField.valueToSave
-                        values.adapter = adapterField.valueToSave
-                        values.devices = root.savedInputPaths()
-                        topcec.applySettings(values)
-                    }
                 }
             }
         }
@@ -1144,7 +1168,7 @@ Kirigami.ApplicationWindow {
                                         id: manualOutput
                                         objectName: "manualOutput"
                                         text: "Enter display name manually"
-                                        onToggled: root.settingsDirty = true
+                                        onToggled: root.markSettingsDirty()
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true
@@ -1177,7 +1201,7 @@ Kirigami.ApplicationWindow {
                                         id: manualAdapter
                                         objectName: "manualAdapter"
                                         text: "Enter adapter path manually"
-                                        onToggled: root.settingsDirty = true
+                                        onToggled: root.markSettingsDirty()
                                     }
                                 }
                             }
@@ -1215,7 +1239,7 @@ Kirigami.ApplicationWindow {
                                             Layout.fillWidth: true
                                             Accessible.name: "Idle timeout"
                                             model: [topcec.plasmaTimeoutLabel, "Custom", "Disabled"]
-                                            onActivated: root.settingsDirty = true
+                                            onActivated: root.markSettingsDirty()
                                         }
                                     }
                                     RowLayout {
@@ -1232,7 +1256,7 @@ Kirigami.ApplicationWindow {
                                             editable: true
                                             from: 1
                                             to: 1440
-                                            onValueModified: root.settingsDirty = true
+                                            onValueModified: root.markSettingsDirty()
                                             TapHandler {
                                                 acceptedButtons: Qt.RightButton
                                                 onTapped: root.showCaption(timeoutMinutes.textFromValue(
@@ -1246,7 +1270,7 @@ Kirigami.ApplicationWindow {
                                         id: considerInputDevices
                                         objectName: "considerInputDevices"
                                         text: "Consider input devices"
-                                        onClicked: root.settingsDirty = true
+                                        onClicked: root.markSettingsDirty()
                                     }
                                     SelectableLabel {
                                         Layout.fillWidth: true
@@ -1346,13 +1370,8 @@ Kirigami.ApplicationWindow {
                         SelectableLabel {
                             objectName: "inputSaveHelp"
                             Layout.fillWidth: true
-                            text: !topcec.backendAvailable
-                                ? (topcec.dbusOnly
-                                    ? "Selections remain pending until the host reconnects."
-                                    : "Selections remain pending until the host reconnects or you save offline.")
-                                : topcec.liveSettingsAvailable
-                                    ? "Selections apply automatically without restarting."
-                                    : "Selections apply automatically and may restart the service."
+                            visible: topcec.dbusOnly && !topcec.backendAvailable
+                            text: "Selections remain pending until the host reconnects."
                         }
                         SelectableLabel {
                             Layout.fillWidth: true
@@ -1391,7 +1410,7 @@ Kirigami.ApplicationWindow {
                                         Accessible.name: "Input device paths (one per line)"
                                         selectByMouse: true
                                         onTextChanged: {
-                                            if (activeFocus) root.settingsDirty = true
+                                            if (activeFocus) root.markSettingsDirty()
                                         }
                                         wrapMode: TextEdit.WrapAnywhere
                                     }
@@ -1417,7 +1436,7 @@ Kirigami.ApplicationWindow {
                             visible: root.unresolvedInputs().length > 0
                             onClicked: {
                                 devicesField.text = root.inputPaths().filter(path => root.inputDetected(path)).join("\n")
-                                root.settingsDirty = true
+                                root.markSettingsDirty()
                             }
                         }
                         DisclosureButton {
@@ -1431,13 +1450,7 @@ Kirigami.ApplicationWindow {
                                 width: parent.width
                                 SelectableLabel {
                                     Layout.fillWidth: true
-                                    visible: root.selectedAxisDevices().some(device => !Array.isArray(device.axes))
-                                    text: "Axis information is unavailable for some selected devices. Check discovery diagnostics and update the host backend if needed."
-                                }
-                                SelectableLabel {
-                                    Layout.fillWidth: true
                                     visible: root.selectedAxisRows().length === 0
-                                        && !root.selectedAxisDevices().some(device => !Array.isArray(device.axes))
                                     text: "No axes detected on selected input devices."
                                 }
                                 Repeater {
@@ -1477,7 +1490,7 @@ Kirigami.ApplicationWindow {
                                 id: firefoxAudio
                                 objectName: "firefoxAudio"
                                 text: "Firefox · Audio"
-                                onToggled: root.settingsDirty = true
+                                onClicked: root.markSettingsDirty()
                             }
                             SelectableLabel {
                                 Layout.fillWidth: true
@@ -1543,7 +1556,7 @@ Kirigami.ApplicationWindow {
                                 Accessible.name: "Firefox mute-tab labels (one per line)"
                                 selectByMouse: true
                                 onTextChanged: {
-                                    if (activeFocus) root.settingsDirty = true
+                                    if (activeFocus) root.markSettingsDirty()
                                 }
                             }
                         }
