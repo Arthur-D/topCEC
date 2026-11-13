@@ -165,6 +165,7 @@ class LiveSettingsChecks(unittest.TestCase):
             mouse_outputs=config['mouse_outputs'],
             firefox_audio_blocks_standby=config['firefox_audio_blocks_standby'],
             idle_inhibition_apps=config['idle_inhibition_apps'],
+            force_inhibition_apps=config['force_inhibition_apps'],
             axis_deadzone_percent=config['axis_deadzone_percent'],
             rz_deadzone_percent=config['rz_deadzone_percent'],
             device_axis_deadzones=config['device_axis_deadzones'], config=str(path))
@@ -398,6 +399,66 @@ class LiveSettingsChecks(unittest.TestCase):
 
             self.run_service(path, scenario, inventory=inventory,
                              initial={'cec_enabled': True})
+
+    def test_force_inhibit_tracks_windows_and_persists_observed_apps(self):
+        inventory = {'outputs': [], 'adapters': [], 'inputs': [], 'errors': [],
+                    'apps': [{'id': 'player.desktop', 'name': 'Player'}],
+                    'apps_error': None}
+        plasma = Mock(requests=[{'kind': 'idle', 'app': 'Player',
+                                'reason': 'Playing', 'mode': 'block'}])
+        plasma.health.return_value = None
+        with tempfile.TemporaryDirectory() as directory, \
+               patch.object(monitor, 'PlasmaInhibitions', return_value=plasma), \
+               patch.object(monitor, 'firefox_window_snapshot', return_value='[]'):
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+               receiver = context.receiver
+               context.callbacks[500]()
+               context.workers[-1].poll.return_value = 0
+               context.callbacks[500]()
+               receiver.Report('Desktop-snapshot: ' + json.dumps([
+                   {'pid': 123, 'title': 'Player', 'desktop': 'player',
+                    'class': 'player', 'output': 'DP-9'}]))
+               self.apply(receiver, mouse_outputs=['DP-9'], firefox_audio_blocks_standby=False,
+                          force_inhibition_apps=['player.desktop'])
+               context.callbacks[100]()
+               status = json.loads(receiver.GetStatus())
+               self.assertEqual(status['observed_apps'][0]['id'], 'player.desktop')
+               self.assertIn('Force inhibit', status['blocking_apps'][0]['reason'])
+               with self.assertRaisesRegex(RuntimeError, 'Standby blocked'):
+                   receiver.RequestPower('off')
+               self.apply(receiver, mouse_outputs=['DP-2'])
+               context.callbacks[100]()
+               self.assertEqual(json.loads(receiver.GetStatus())['blocking_apps'], [])
+               receiver.Report('Desktop-snapshot: []')
+               context.callbacks[100]()
+               self.assertEqual(json.loads(receiver.GetStatus())['blocking_apps'], [])
+               context.now += 16
+               context.callbacks[100]()
+               self.assertIn('Window status unavailable',
+                             json.loads(receiver.GetStatus())['blocking_apps'][0]['reason'])
+
+            self.run_service(path, scenario, inventory=inventory, initial={'cec_enabled': True})
+            self.assertEqual(json.loads((path.parent / 'observed-inhibitors.json').read_text()),
+                            ['Player'])
+            saved = load_config(path)
+            self.assertEqual(saved['force_inhibition_apps'], ['player.desktop'])
+            plasma.requests = []
+
+            def after_restart(context):
+                context.callbacks[500]()
+                context.workers[-1].poll.return_value = 0
+                context.callbacks[500]()
+                context.receiver.Report('Desktop-snapshot: ' + json.dumps([
+                    {'pid': 123, 'title': 'Player', 'desktop': 'player',
+                     'class': 'player', 'output': 'DP-2'}]))
+                context.callbacks[100]()
+                status = json.loads(context.receiver.GetStatus())
+                self.assertEqual(status['observed_apps'][0]['id'], 'player.desktop')
+                self.assertIn('Force inhibit', status['blocking_apps'][0]['reason'])
+
+            self.run_service(path, after_restart, inventory=inventory, initial=saved)
 
     def test_input_and_disk_failure_roll_back_without_losing_monitoring(self):
         with tempfile.TemporaryDirectory() as directory:

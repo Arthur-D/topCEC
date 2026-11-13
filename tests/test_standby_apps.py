@@ -1,17 +1,68 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Hardware-free Plasma inhibition and window matching tests."""
 import json
+import tempfile
 from pathlib import Path
 import sys
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cec-tv'))
-from standby_apps import PlasmaInhibitions, decode_windows, matching_inhibitions
+from standby_apps import (InhibitionHistory, PlasmaInhibitions, decode_windows,
+                          forced_inhibitions, matching_inhibitions, observed_apps)
 
 
 class StandbyAppsChecks(unittest.TestCase):
+    def test_history_persists_idle_requests_and_maps_installed_apps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'history.json'
+            history = InhibitionHistory(path)
+            history.observe([{'kind': 'idle', 'app': 'Player'},
+                             {'kind': 'sleep', 'app': 'Downloader'},
+                             {'kind': 'idle', 'app': ''}])
+            self.assertEqual(InhibitionHistory(path).names, {'Player'})
+            self.assertEqual(observed_apps(history.names, [
+                {'id': 'player.desktop', 'name': 'Player'}]),
+                [{'id': 'player.desktop', 'name': 'Player'}])
+            path.write_text('broken', encoding='utf-8')
+            history = InhibitionHistory(path)
+            history.observe([{'kind': 'idle', 'app': 'Other'}])
+            self.assertIn('Cannot read', history.error)
+            self.assertEqual(path.read_text(encoding='utf-8'), 'broken')
+
+    def test_force_inhibition_follows_open_windows_and_selected_displays(self):
+        apps = [{'id': 'player.desktop', 'name': 'Player'}]
+        windows = [{'desktop': 'player', 'class': 'player', 'output': 'DP-1'}]
+        match = lambda outputs, fresh=True: forced_inhibitions(
+            ['player.desktop'], apps, windows, fresh, outputs)
+        self.assertEqual(match(['DP-1'])[0]['reason'], 'Force inhibit (window open)')
+        self.assertEqual(match(['TV']), [])
+        self.assertEqual(match([]), [])
+        self.assertTrue(match(['TV'], False)[0]['locationUnknown'])
+        windows[0]['output'] = 'unknown'
+        self.assertTrue(match(['TV'])[0]['locationUnknown'])
+        self.assertEqual(forced_inhibitions(['player.desktop'], apps, [], True, ['TV']), [])
+        apps[0]['window_class'] = 'PlayerWindow'
+        windows[0] = {'desktop': '', 'class': 'PlayerWindow', 'output': 'TV'}
+        self.assertEqual(match(['TV'])[0]['app'], 'Player')
+        windows[0] = {'desktop': '', 'class': '', 'output': 'TV'}
+        self.assertTrue(match(['TV'])[0]['identityUnknown'])
+
+    def test_history_save_failure_is_reported_and_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'history.json'
+            history = InhibitionHistory(path)
+            requests = [{'kind': 'idle', 'app': 'Player'}]
+            with patch('standby_apps.os.replace', side_effect=OSError('disk full')) as replace:
+                history.observe(requests, 0)
+                self.assertIn('disk full', history.error)
+                history.observe(requests, 1)
+                self.assertEqual(replace.call_count, 1)
+            history.observe(requests, 11)
+            self.assertIsNone(history.error)
+            self.assertEqual(InhibitionHistory(path).names, {'Player'})
+
     def test_selected_idle_request_is_scoped_to_display_and_preserves_reason(self):
         requests = [
             {'kind': 'idle', 'app': 'org.example.Player', 'reason': 'Playing video'},

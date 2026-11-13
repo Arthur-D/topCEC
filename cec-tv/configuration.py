@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
     'mute_labels': ['Mute tab'],
     'firefox_audio_blocks_standby': True,
     'idle_inhibition_apps': [],
+    'force_inhibition_apps': [],
     'cec_enabled': False,
     'cec_port': '/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00',
     'kde_timeout': False,
@@ -60,11 +61,12 @@ def validate_config(value):
         if (not isinstance(values, list) or (key == 'mute_labels' and not values)
                 or any(not isinstance(item, str) or not item.strip() for item in values)):
             raise ValueError(f'{key} must be a non-empty array of non-empty strings')
-    apps = config['idle_inhibition_apps']
-    if (not isinstance(apps, list)
-            or any(not isinstance(item, str) or not item.strip() for item in apps)
-            or len(set(apps)) != len(apps)):
-        raise ValueError('idle_inhibition_apps must be an array of unique app IDs')
+    for key in ('idle_inhibition_apps', 'force_inhibition_apps'):
+        apps = config[key]
+        if (not isinstance(apps, list)
+                or any(not isinstance(item, str) or not item.strip() for item in apps)
+                or len(set(apps)) != len(apps)):
+            raise ValueError(f'{key} must be an array of unique app IDs')
     for key in ('cec_enabled', 'kde_timeout', 'require_snapshot', 'consider_input_devices',
                 'firefox_audio_blocks_standby'):
         if type(config[key]) is not bool:

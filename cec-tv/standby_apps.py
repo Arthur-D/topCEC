@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plasma idle-inhibition observation and per-display matching."""
 import json
+import os
+from pathlib import Path
+import tempfile
 import time
 
 SERVICE = 'org.kde.Solid.PowerManagement.PolicyAgent'
@@ -13,6 +16,97 @@ INTERVAL = 2.0
 def app_key(value):
     value = value.strip().casefold()
     return value[:-8] if value.endswith('.desktop') else value
+
+
+def observed_apps(names, apps):
+    result = {}
+    for name in names:
+        key = app_key(name)
+        matches = [app for app in apps
+                   if key in (app_key(app['id']), app_key(app['name']))]
+        if len(matches) == 1:
+            app = matches[0]
+        else:
+            app = {'id': name, 'name': name}
+        result[app['id']] = app
+    return list(result.values())
+
+
+class InhibitionHistory:
+    def __init__(self, path):
+        self.path = Path(path)
+        self.names = set()
+        self.error = None
+        self.dirty = False
+        self.next_retry = 0.0
+        try:
+            data = json.loads(self.path.read_text(encoding='utf-8'))
+            if (not isinstance(data, list)
+                    or any(not isinstance(name, str) or not name.strip() for name in data)):
+                raise ValueError('Expected a list of app names')
+            self.names = set(data)
+        except FileNotFoundError:
+            pass
+        except (OSError, UnicodeError, ValueError) as error:
+            self.error = ('Cannot read inhibitor history: ' + str(error)
+                          + '; correct the file and restart the host service.')
+
+    def observe(self, requests, now=None):
+        now = time.monotonic() if now is None else now
+        names = {request['app'].strip() for request in requests
+                 if request['kind'] == 'idle' and request['app'].strip()}
+        if not names.issubset(self.names):
+            self.names.update(names)
+            self.dirty = True
+        if (not self.dirty or now < self.next_retry
+                or self.error and self.error.startswith('Cannot read')):
+            return
+        temporary = None
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temporary = tempfile.mkstemp(prefix=self.path.name + '.', dir=self.path.parent)
+            with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                json.dump(sorted(self.names), stream, ensure_ascii=False)
+                stream.write('\n')
+            os.replace(temporary, self.path)
+            self.dirty = False
+            self.error = None
+        except OSError as error:
+            self.error = 'Cannot save inhibitor history: ' + str(error)
+            self.next_retry = now + 10
+        finally:
+            if temporary is not None and os.path.exists(temporary):
+                os.unlink(temporary)
+
+
+def forced_inhibitions(enabled, apps, windows, windows_fresh, outputs):
+    if not enabled or not outputs:
+        return []
+    if not windows_fresh:
+        return [{'app': 'Selected apps', 'reason': 'Window status unavailable',
+                 'locationUnknown': True, 'identityUnknown': False}]
+    installed = {app_key(app['id']): app for app in apps}
+    result = []
+    for app in enabled:
+        identity = app_key(app)
+        details = installed.get(identity, {})
+        aliases = {identity}
+        if details.get('window_class'):
+            aliases.add(app_key(details['window_class']))
+        matches = [window for window in windows
+                   if aliases & {app_key(window['desktop']), app_key(window['class'])}]
+        relevant = [window for window in matches
+                    if window['output'] in outputs or window['output'] in ('', 'ingen', 'unknown')]
+        if relevant:
+            result.append({'app': details.get('name', app), 'reason': 'Force inhibit (window open)',
+                           'locationUnknown': any(window['output'] in ('', 'ingen', 'unknown')
+                                                  for window in relevant),
+                           'identityUnknown': False})
+    if any(not window['desktop'].strip() and not window['class'].strip()
+           and window['output'] in (*outputs, '', 'ingen', 'unknown') for window in windows):
+        result.append({'app': 'Selected apps', 'reason': 'Window identity unavailable',
+                       'locationUnknown': True, 'identityUnknown': True})
+    return result
 
 
 def decode_windows(payload):

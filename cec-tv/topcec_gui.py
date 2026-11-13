@@ -101,6 +101,8 @@ def config_from_settings(current, values):
             'firefoxAudioBlocksStandby', current['firefox_audio_blocks_standby']),
         'idle_inhibition_apps': values.get(
             'idleInhibitionApps', current['idle_inhibition_apps']),
+        'force_inhibition_apps': values.get(
+            'forceInhibitionApps', current['force_inhibition_apps']),
         'cec_enabled': True,
         'cec_port': str(values['adapter']).strip(),
         'kde_timeout': timeout_mode == 'kde',
@@ -392,6 +394,25 @@ class GuiBackend(QObject):
             return []
         return [app for app in apps if isinstance(app, dict)
                 and isinstance(app.get('id'), str) and isinstance(app.get('name'), str)]
+
+    @Property('QVariantList', notify=changed)
+    def observedApps(self):
+        apps = self._service_data.get('observed_apps')
+        if not isinstance(apps, list):
+            return []
+        return [app for app in apps if isinstance(app, dict)
+                and isinstance(app.get('id'), str) and isinstance(app.get('name'), str)]
+
+    @Property('QVariantList', notify=changed)
+    def activeInhibitorApps(self):
+        apps = self._service_data.get('active_inhibitor_apps')
+        return [app['id'] for app in apps
+                if isinstance(app, dict) and isinstance(app.get('id'), str)] \
+            if isinstance(apps, list) else []
+
+    @Property(str, notify=changed)
+    def inhibitionHistoryMessage(self):
+        return str(self._service_data.get('inhibition_history_error') or '')
 
     @Property(str, notify=changed)
     def appDiscoveryMessage(self):
@@ -910,7 +931,8 @@ class GuiBackend(QObject):
             config = result['config']
             # Older hosts returned the complete configuration without its version.
             optional = {'consider_input_devices', 'mouse_output', 'mouse_outputs',
-                        'firefox_audio_blocks_standby', 'idle_inhibition_apps'}
+                        'firefox_audio_blocks_standby', 'idle_inhibition_apps',
+                        'force_inhibition_apps'}
             if (isinstance(config, dict) and set(DEFAULT_CONFIG) - optional <= set(config)
                     and set(config) <= set(DEFAULT_CONFIG)):
                 config = {'schema_version': SCHEMA_VERSION, **config}

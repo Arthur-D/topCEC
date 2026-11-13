@@ -1935,6 +1935,8 @@ class GuiChecks(unittest.TestCase):
         backend._service_data = {
             'installed_apps': [{'id': 'player.desktop', 'name': 'Video Player'},
                                {'id': 'editor.desktop', 'name': 'Editor'}],
+            'observed_apps': [{'id': 'player.desktop', 'name': 'Video Player'}],
+            'active_inhibitor_apps': [{'id': 'player.desktop', 'name': 'Video Player'}],
             'installed_apps_error': None,
             'inhibitions_error': None,
             'blocking_apps': [{'app': 'Player', 'reason': 'Playing',
@@ -1948,23 +1950,37 @@ class GuiChecks(unittest.TestCase):
         window.setProperty('currentSection', 2)
         app.processEvents()
         repeater = window.findChild(QObject, 'installedAppsScroll')
-        self.assertEqual(repeater.property('count'), 3)
+        self.assertEqual(repeater.property('count'), 2)
         engine.rootContext().setContextProperty('appChoicesRepeater', repeater)
         def item(index):
             return QQmlExpression(engine.rootContext(), window,
                                   f'appChoicesRepeater.itemAtIndex({index})').evaluate()[0]
         player = item(0)
-        self.assertEqual(item(2).objectName(), 'idleApp:removed.desktop')
-        QMetaObject.invokeMethod(player, 'click')
+        self.assertEqual(player.objectName(), 'appRow:player.desktop')
+        self.assertEqual(item(1).objectName(), 'appRow:removed.desktop')
+        QMetaObject.invokeMethod(player.findChild(QObject, 'idleApp:player.desktop'), 'click')
+        QMetaObject.invokeMethod(player.findChild(QObject, 'forceApp:player.desktop'), 'click')
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
         self.assertEqual(values['idleInhibitionApps'], ['removed.desktop', 'player.desktop'])
         self.assertEqual(config_from_settings(backend.config, values)['idle_inhibition_apps'],
                          values['idleInhibitionApps'])
+        self.assertEqual(config_from_settings(backend.config, values)['force_inhibition_apps'],
+                         ['player.desktop'])
+        QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         window.findChild(QObject, 'appSearch').setProperty('text', 'editor')
         app.processEvents()
         self.assertEqual(repeater.property('count'), 1)
-        self.assertEqual(item(0).objectName(), 'idleApp:editor.desktop')
+        editor = item(0)
+        self.assertEqual(editor.objectName(), 'appRow:editor.desktop')
+        QMetaObject.invokeMethod(editor.findChild(QObject, 'forceApp:editor.desktop'), 'click')
+        window.findChild(QObject, 'appSearch').setProperty('text', '')
+        QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
+        app.processEvents()
+        self.assertEqual(repeater.property('count'), 3)
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertEqual(values['forceInhibitionApps'], ['player.desktop', 'editor.desktop'])
         engine.deleteLater()
 
     def test_invalid_settings_are_rejected(self):
