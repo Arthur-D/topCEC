@@ -27,6 +27,12 @@ from topcec_gui import GuiBackend, config_from_settings
 
 
 class GuiChecks(unittest.TestCase):
+    def app_row(self, engine, window, index):
+        engine.rootContext().setContextProperty(
+            'appChoicesList', window.findChild(QObject, 'installedAppsScroll'))
+        return QQmlExpression(engine.rootContext(), window,
+                              f'appChoicesList.itemAtIndex({index})').evaluate()[0]
+
     def test_settings_are_saved_automatically_after_changes(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
@@ -84,6 +90,11 @@ class GuiChecks(unittest.TestCase):
         engine.rootContext().setContextProperty('topcec', backend)
         engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
         window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        firefox_row = self.app_row(engine, window, 0)
+        firefox_audio = firefox_row.findChild(QObject, 'firefoxAudio')
         window.findChild(QObject, 'autoSaveTimer').setProperty('interval', 250)
         requests = []
         interface = Mock(isValid=Mock(return_value=True))
@@ -96,7 +107,7 @@ class GuiChecks(unittest.TestCase):
             QQmlExpression(engine.rootContext(), window, 'setIdleApp("player.desktop", true)').evaluate()
             QTest.qWait(130)
             self.assertEqual(requests, [])
-            QMetaObject.invokeMethod(window.findChild(QObject, 'firefoxAudio'), 'click')
+            QMetaObject.invokeMethod(firefox_audio, 'click')
             QTest.qWait(130)
             self.assertEqual(requests, [])
             QTest.qWait(160)
@@ -108,7 +119,7 @@ class GuiChecks(unittest.TestCase):
 
             QQmlExpression(engine.rootContext(), window, 'setMouseDisplay("DP-1", false)').evaluate()
             QQmlExpression(engine.rootContext(), window, 'setIdleApp("player.desktop", false)').evaluate()
-            QMetaObject.invokeMethod(window.findChild(QObject, 'firefoxAudio'), 'click')
+            QMetaObject.invokeMethod(firefox_audio, 'click')
             QTest.qWait(300)
             self.assertEqual(requests, [])
             callback(self.reply({'accepted': True, 'applied_live': True, 'config': first}))
@@ -1874,7 +1885,8 @@ class GuiChecks(unittest.TestCase):
         window.setProperty('currentSection', 2)
         app.processEvents()
         checkbox = window.findChild(QObject, 'considerInputDevices')
-        firefox_audio = window.findChild(QObject, 'firefoxAudio')
+        firefox_row = self.app_row(engine, window, 0)
+        firefox_audio = firefox_row.findChild(QObject, 'firefoxAudio')
         selector = window.findChild(QObject, 'mouseDisplayChoices')
         self.assertTrue(checkbox.property('checked'))
         self.assertTrue(firefox_audio.property('checked'))
@@ -1951,14 +1963,14 @@ class GuiChecks(unittest.TestCase):
         window.setProperty('currentSection', 2)
         app.processEvents()
         repeater = window.findChild(QObject, 'installedAppsScroll')
-        self.assertEqual(repeater.property('count'), 3)
+        self.assertEqual(repeater.property('count'), 4)
         engine.rootContext().setContextProperty('appChoicesRepeater', repeater)
         def item(index):
             return QQmlExpression(engine.rootContext(), window,
                                   f'appChoicesRepeater.itemAtIndex({index})').evaluate()[0]
         player = item(0)
         self.assertEqual(player.objectName(), 'appRow:player.desktop')
-        removed = item(2)
+        removed = item(3)
         self.assertEqual(removed.objectName(), 'appRow:removed.desktop')
         allow = player.findChild(QObject, 'idleApp:player.desktop')
         self.assertEqual(allow.property('text'), 'Allow screen standby')
@@ -2009,7 +2021,7 @@ class GuiChecks(unittest.TestCase):
         window.findChild(QObject, 'appSearch').setProperty('text', '')
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         app.processEvents()
-        self.assertEqual(repeater.property('count'), 4)
+        self.assertEqual(repeater.property('count'), 5)
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
         self.assertEqual(values['forceInhibitionApps'], ['player.desktop', 'editor.desktop'])
@@ -2041,6 +2053,85 @@ class GuiChecks(unittest.TestCase):
         backend.changed.emit()
         self.assertFalse(message.property('visible'))
         self.assertTrue(empty.property('visible'))
+        engine.deleteLater()
+
+    def test_firefox_audio_row_uses_discovered_identity_or_audio_only_fallback(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        for app_id, retained in (('org.mozilla.firefox.desktop', False),
+                                 ('firefox.desktop', False),
+                                 ('firefox.desktop', True), (None, False)):
+            with self.subTest(app_id=app_id, retained=retained):
+                backend = GuiBackend(dbus_only=True)
+                backend._connection_state = 'connected'
+                backend._service_status = 'running'
+                backend._config_source = 'saved'
+                backend.config = {**DEFAULT_CONFIG, 'devices': [],
+                                  'idle_inhibition_apps': [app_id] if retained else []}
+                firefox = {'id': app_id, 'name': 'Mozilla Firefox'} if app_id else None
+                backend._service_data = {
+                    'installed_apps': [firefox] if firefox and not retained else [],
+                    'observed_apps': [firefox] if firefox and not retained else [],
+                    'active_inhibitor_apps': [],
+                }
+                engine = QQmlApplicationEngine()
+                engine.rootContext().setContextProperty('topcec', backend)
+                engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+                window = engine.rootObjects()[0]
+                window.show()
+                window.setProperty('currentSection', 2)
+                app.processEvents()
+                app_list = window.findChild(QObject, 'installedAppsScroll')
+                self.assertEqual(app_list.property('count'), 1)
+                row = self.app_row(engine, window, 0)
+                row_id = app_id or '__firefox_audio__'
+                self.assertEqual(row.objectName(), 'appRow:' + row_id)
+                audio = row.findChild(QObject, 'firefoxAudio')
+                name = row.findChild(QObject, 'appName:' + row_id)
+                self.assertEqual(audio.property('text'), 'Block TV standby while playing audio')
+                self.assertEqual(audio.parent(), name.parent())
+                self.assertTrue(audio.property('checked'))
+                self.assertEqual(row.findChild(QObject, 'idleApp:' + row_id).property('visible'),
+                                 bool(app_id))
+                engine.deleteLater()
+                app.processEvents()
+
+    def test_firefox_audio_draft_survives_search_and_recreated_row(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        firefox = {'id': 'org.mozilla.firefox.desktop', 'name': 'Mozilla Firefox'}
+        backend._service_data = {
+            'installed_apps': [firefox], 'observed_apps': [],
+            'active_inhibitor_apps': [],
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        row = self.app_row(engine, window, 0)
+        QMetaObject.invokeMethod(row.findChild(QObject, 'firefoxAudio'), 'click')
+        search = window.findChild(QObject, 'appSearch')
+        search.setProperty('text', 'firefox')
+        app.processEvents()
+        self.assertEqual(window.findChild(QObject, 'installedAppsScroll').property('count'), 0)
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertFalse(values['firefoxAudioBlocksStandby'])
+        QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
+        app.processEvents()
+        row = self.app_row(engine, window, 0)
+        self.assertFalse(row.findChild(QObject, 'firefoxAudio').property('checked'))
+        QMetaObject.invokeMethod(row.findChild(QObject, 'firefoxAudio'), 'click')
+        search.setProperty('text', '')
+        QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
+        app.processEvents()
+        row = self.app_row(engine, window, 0)
+        self.assertTrue(row.findChild(QObject, 'firefoxAudio').property('checked'))
+        QMetaObject.invokeMethod(window.findChild(QObject, 'autoSaveTimer'), 'stop')
         engine.deleteLater()
 
     def test_invalid_settings_are_rejected(self):
