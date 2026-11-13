@@ -391,6 +391,12 @@ class EvdevActivityProvider:
         return None
 
 
+def is_firefox_executable(path):
+    executable = Path(path)
+    return (executable.name in ("firefox", "firefox-bin")
+            and executable.parent.name == "firefox")
+
+
 def firefox_window_snapshot(payload, read_exe=None):
     """Resolve KWin PIDs on the host; never infer browser identity from titles."""
     if read_exe is None:
@@ -404,9 +410,7 @@ def firefox_window_snapshot(payload, read_exe=None):
                 or row["pid"] <= 0 or not isinstance(row.get("title"), str)
                 or not isinstance(row.get("output"), str)):
             raise ValueError("Invalid window identity")
-        executable = Path(read_exe(row["pid"]))
-        if (executable.name in ("firefox", "firefox-bin")
-                and executable.parent.name == "firefox"):
+        if is_firefox_executable(read_exe(row["pid"])):
             result.append({"title": row["title"], "output": row["output"]})
     return json.dumps(result)
 
@@ -577,9 +581,11 @@ def decode_scan(output, errors, returncode):
     return frames
 
 
-def scan_atspi(mute_labels):
+def scan_atspi(mute_labels, read_exe=None):
     """Separate process so broken AT-SPI cannot freeze evdev/D-Bus handling."""
     import pyatspi
+    if read_exe is None:
+        read_exe = lambda pid: str(Path(f'/proc/{pid}/exe').readlink())
     desktop = pyatspi.Registry.getDesktop(0)
     frames = []
     visited = 0
@@ -611,7 +617,10 @@ def scan_atspi(mute_labels):
         app = desktop.getChildAtIndex(index)
         if app is None:
             raise RuntimeError('AT-SPI application is missing')
-        if 'firefox' not in (app.name or '').casefold():
+        pid = app.get_process_id()
+        if type(pid) is not int or pid <= 0:
+            raise RuntimeError('AT-SPI application process identity is unavailable')
+        if not is_firefox_executable(read_exe(pid)):
             continue
         found = False
         for child_index in range(app.childCount):
@@ -1173,6 +1182,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 worker_labels = list(args.mute_label)
             reason = None
             audible = False
+            firefox_audio_error = None
             media_outputs = mouse_outputs(runtime_config)
             native_audio_states = [
                 webextension_media.audio_state(mapping, now, output, mapping.ttl)
@@ -1182,9 +1192,10 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 audible = any(state[0] for state in native_audio_states)
                 uncertain_audio = any(state[1] for state in native_audio_states)
                 if uncertain_audio:
-                    reason = (
+                    firefox_audio_error = (
                         'Firefox WebExtension reports audio, but its active window '
                         'cannot be uniquely matched to a KWin display')
+                    reason = firefox_audio_error
             elif runtime_config['firefox_audio_blocks_standby'] and media_outputs:
                 reason = scan_error
                 if scan_stamp is None or now - scan_stamp > SCAN_MAX_AGE:
@@ -1212,7 +1223,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                         reason = 'KWin windows are missing from AT-SPI; waiting for a match'
                     if not frames and mapping.reports:
                         reason = 'KWin reported Firefox, but AT-SPI found no frames'
-            reason = reason or mapping.health(now, args.require_snapshot)
+                firefox_audio_error = reason
+            mapping_error = mapping.health(now, args.require_snapshot)
+            reason = reason or mapping_error
+            if runtime_config['firefox_audio_blocks_standby'] and media_outputs:
+                firefox_audio_error = firefox_audio_error or mapping_error
             inhibition_error = plasma_inhibitions.health(now)
             apps_error = equipment_snapshot.get('apps_error')
             if equipment_snapshot.get('apps') is None:
@@ -1281,6 +1296,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     if kde_settings and type(kde_settings.value) is int else None),
                 'fail_safe_reason': reason,
                 'playback_active': audible,
+                'firefox_audio_error': firefox_audio_error,
                 'blocking_apps': blocking_apps,
                 'inhibitions_error': inhibition_error,
                 'scan_status': scan_error,
@@ -1509,6 +1525,17 @@ def self_test():
                 def getState(self):
                     return SimpleNamespace(contains=lambda state: False)
 
+                def get_process_id(self):
+                    return 10
+
+            class UnresponsiveApp:
+                def get_process_id(self):
+                    return 20
+
+                @property
+                def name(self):
+                    raise AssertionError('Unrelated app name must not be queried')
+
             quiet = Node('frame', 'PSLive — Mozilla Firefox', [
                 Node('page tab', 'PSLive'),
                 Node('document web', children=[Node('button', 'Mute tab')])])
@@ -1518,16 +1545,20 @@ def self_test():
             indicator = Node('frame', 'Localized sharing indicator',
                              attributes=["id:webrtcIndicator", "tag:html"])
             app = Node('application', 'Firefox', [quiet, indicator, sounding])
-            desktop = Node('desktop', children=[app])
+            desktop = Node('desktop', children=[UnresponsiveApp(), app])
             fake = SimpleNamespace(STATE_DEFUNCT=99,
                                    Registry=SimpleNamespace(getDesktop=lambda n: desktop))
+            executable = lambda pid: {10: '/usr/lib/firefox/firefox',
+                                      20: '/usr/bin/unrelated'}[pid]
             with patch.dict(sys.modules, {'pyatspi': fake}):
-                result = scan_atspi(['Mute tab'])
+                result = scan_atspi(['Mute tab'], executable)
                 for attributes in ((), ["id:main-window", "tag:html"],
                                    ["id:webrtcIndicator", "tag:button"]):
                     indicator.attributes = attributes
                     with self.assertRaises(RuntimeError):
-                        scan_atspi(['Mute tab'])
+                        scan_atspi(['Mute tab'], executable)
+                with self.assertRaises(OSError):
+                    scan_atspi(['Mute tab'], lambda pid: (_ for _ in ()).throw(OSError('denied')))
             self.assertEqual(result, [
                 {'title': quiet.name, 'audio': False},
                 {'title': sounding.name, 'audio': True}])
@@ -2007,6 +2038,12 @@ def self_test():
             result.receiver.RequestPower('on')
             result.power.request.assert_called_once_with('on')
 
+        def test_firefox_scan_timeout_is_exposed_as_unknown_audio_status(self):
+            result = self.run_monitor_steps([(0, '[]', None), (6, '[]', None)])
+            self.assertFalse(result.status['playback_active'])
+            self.assertIn('AT-SPI did not respond', result.status['firefox_audio_error'])
+            self.assertIn('AT-SPI did not respond', result.status['fail_safe_reason'])
+
         def test_dbus_config_api_validates_persists_and_applies_live(self):
             import tempfile
             from pathlib import Path
@@ -2051,6 +2088,7 @@ def self_test():
                 (0, window_map, None, media, TARGET)])
             self.assertTrue(result.status['playback_active'])
             self.assertIsNone(result.status['fail_safe_reason'])
+            self.assertIsNone(result.status['firefox_audio_error'])
             self.assertTrue(any(
                 call.kwargs.get('wake_requested') is False
                 for call in result.power.activity.call_args_list))

@@ -1513,7 +1513,7 @@ Kirigami.ApplicationWindow {
                             }
                             SelectableLabel {
                                 Layout.fillWidth: true
-                                text: "Idle inhibition follows an app's Plasma request. Force inhibit blocks TV standby while the app has a window on a selected display; it does not prevent computer sleep."
+                                text: "Blocking screen standby follows an app's Plasma request. Force inhibit blocks TV standby while the app has a window on a selected display; it does not prevent computer sleep."
                             }
                             CopyableCheckBox {
                                 id: showAllApps
@@ -1569,8 +1569,8 @@ Kirigami.ApplicationWindow {
                                         spacing: Kirigami.Units.smallSpacing
                                         CopyableCheckBox {
                                             objectName: "idleApp:" + modelData.id
-                                            text: "Idle inhibition"
-                                            Accessible.name: modelData.name + " idle inhibition"
+                                            text: "Blocking screen standby"
+                                            Accessible.name: modelData.name + " blocking screen standby"
                                             checked: root.idleAppsDraft.includes(modelData.id)
                                             onClicked: root.setIdleApp(modelData.id, checked)
                                         }
@@ -1628,13 +1628,22 @@ Kirigami.ApplicationWindow {
                         text: "Firefox · Audio"
                     }
                     SelectableLabel {
+                        objectName: "firefoxAudioStatus"
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2 && firefoxAudio.checked
+                            && topcec.firefoxAudioStatusMessage.length > 0
+                        text: topcec.firefoxAudioStatusMessage
+                    }
+                    SelectableLabel {
                         Layout.fillWidth: true
                         visible: root.currentSection === 2 && topcec.inhibitionsMessage.length > 0
                         text: topcec.inhibitionsMessage
                     }
                     SelectableLabel {
+                        objectName: "noBlockingApps"
                         Layout.fillWidth: true
                         visible: root.currentSection === 2 && !topcec.firefoxPlaybackActive
+                            && (!firefoxAudio.checked || topcec.firefoxAudioStatusMessage.length === 0)
                             && topcec.blockingApps.length === 0 && topcec.inhibitionsMessage.length === 0
                         text: "No apps are currently blocking standby."
                     }
@@ -1643,7 +1652,7 @@ Kirigami.ApplicationWindow {
                         delegate: SelectableLabel {
                             required property var modelData
                             Layout.fillWidth: true
-                            text: modelData.app + " · " + (modelData.reason || "Idle inhibition")
+                            text: modelData.app + " · " + (modelData.reason || "Blocking screen standby")
                                 + (modelData.identityUnknown ? " (app identity unknown)"
                                     : (modelData.locationUnknown ? " (display unknown)" : ""))
                         }

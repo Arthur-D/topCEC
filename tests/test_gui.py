@@ -1958,6 +1958,8 @@ class GuiChecks(unittest.TestCase):
         player = item(0)
         self.assertEqual(player.objectName(), 'appRow:player.desktop')
         self.assertEqual(item(1).objectName(), 'appRow:removed.desktop')
+        self.assertEqual(player.findChild(QObject, 'idleApp:player.desktop').property('text'),
+                         'Blocking screen standby')
         QMetaObject.invokeMethod(player.findChild(QObject, 'idleApp:player.desktop'), 'click')
         QMetaObject.invokeMethod(player.findChild(QObject, 'forceApp:player.desktop'), 'click')
         values = json.loads(QQmlExpression(
@@ -1981,6 +1983,34 @@ class GuiChecks(unittest.TestCase):
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
         self.assertEqual(values['forceInhibitionApps'], ['player.desktop', 'editor.desktop'])
+        engine.deleteLater()
+
+    def test_firefox_detection_failure_is_not_reported_as_no_blockers(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._service_data = {
+            'firefox_audio_error': 'AT-SPI did not respond within 5 seconds',
+            'blocking_apps': [], 'inhibitions_error': None,
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        message = window.findChild(QObject, 'firefoxAudioStatus')
+        empty = window.findChild(QObject, 'noBlockingApps')
+        self.assertTrue(message.property('visible'))
+        self.assertIn('AT-SPI did not respond', message.property('text'))
+        self.assertIn('blocked as a precaution', message.property('text'))
+        self.assertFalse(empty.property('visible'))
+        backend._service_data['firefox_audio_error'] = None
+        backend.changed.emit()
+        self.assertFalse(message.property('visible'))
+        self.assertTrue(empty.property('visible'))
         engine.deleteLater()
 
     def test_invalid_settings_are_rejected(self):
