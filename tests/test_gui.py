@@ -739,8 +739,29 @@ class GuiChecks(unittest.TestCase):
         self.assertTrue(adapter.property('acceptable'))
         self.assertFalse(adapter.property('detected'))
         self.assertFalse(turn_on.property('enabled'))
-        self.assertEqual(service_status.property('text'),
-                         'Monitoring, no CEC adapter selected')
+        self.assertEqual(service_status.property('text'), 'Monitoring,')
+        self.assertEqual(power_state.property('text'), 'No CEC adapter selected')
+        backend._set_equipment(None, 'Equipment detection failed')
+        app.processEvents()
+        self.assertEqual(power_state.property('text'), 'CEC adapter detection unavailable')
+        backend._set_equipment({
+            'outputs': [], 'adapters': [
+                {'path': config['cec_port'], 'label': 'Detected CEC adapter'}],
+            'inputs': [{'path': path, 'label': 'Detected input'}
+                       for path in config['devices']],
+            'errors': [],
+        }, 'Equipment refreshed')
+        app.processEvents()
+        self.assertEqual(power_state.property('text'), 'No display detected')
+        backend._set_equipment({
+            'outputs': [{'path': 'DP-1', 'label': 'Other display'}],
+            'adapters': [{'path': config['cec_port'], 'label': 'Detected CEC adapter'}],
+            'inputs': [{'path': path, 'label': 'Detected input'}
+                       for path in config['devices']],
+            'errors': [],
+        }, 'Equipment refreshed')
+        app.processEvents()
+        self.assertEqual(power_state.property('text'), 'No display selected')
         backend._set_equipment({
             'outputs': [{'path': config['target_output'], 'label': 'Detected display'}],
             'adapters': [{'path': config['cec_port'], 'label': 'Detected CEC adapter'}],
@@ -750,6 +771,7 @@ class GuiChecks(unittest.TestCase):
         }, 'Equipment refreshed')
         app.processEvents()
         self.assertTrue(turn_on.property('enabled'))
+        self.assertEqual(power_state.property('text'), 'turning on')
         backend._power_state = 'unknown'
         backend._service_status = 'configuration-only'
         backend.changed.emit()
