@@ -1204,12 +1204,12 @@ class GuiChecks(unittest.TestCase):
         first = QQmlExpression(engine.rootContext(), window, 'axisRows.itemAt(0)').evaluate()[0]
         second = QQmlExpression(engine.rootContext(), window, 'axisRows.itemAt(1)').evaluate()[0]
         self.assertEqual(first.property('value'), 12)
-        self.assertEqual(second.property('value'), 5)
-        second.setProperty('value', 9)
+        self.assertEqual(second.property('value'), 0)
+        second.setProperty('value', 0)
         QMetaObject.invokeMethod(second, 'valueModified')
         expression = QQmlExpression(engine.rootContext(), window, 'JSON.stringify(settingsValues().deviceAxisDeadzones)')
         draft = json.loads(expression.evaluate()[0])
-        self.assertEqual(draft, {'/dev/input/wheel': {'0': 12, '5': 9}})
+        self.assertEqual(draft, {'/dev/input/wheel': {'0': 12, '5': 0}})
         self.assertTrue(window.property('settingsDirty'))
         with patch.object(backend, '_service_interface', return_value=Mock(isValid=lambda: True)), \
                 patch.object(backend, '_async_call') as call:

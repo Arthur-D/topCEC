@@ -91,7 +91,7 @@ configuration, external research repositories and credentials are excluded.
   entry's `StartupWMClass`. An unidentified window blocks conservatively.
   Background processes without windows do not count. It does not inhibit Plasma
   idle or system sleep.
-- Axis deadzones: ABS_RZ 5%, other axes 2%. Missing input devices stop the monitor;
+- Axis deadzones: 0% by default. Missing input devices stop the monitor;
   systemd retries after 15 seconds. Failed ON can retry upon activity after 10 seconds.
 - CEC operations are bounded by a 130-second monitor deadline. An unconfirmed OFF
   does not trigger an automatic ON; a wake requested during the operation remains
@@ -224,8 +224,8 @@ keys, malformed values, or unreadable files stop startup with an error.
   "cec_port": "/dev/serial/by-id/usb-Pulse-Eight_CEC_Adapter_v12-if00",
   "kde_timeout": false,
   "require_snapshot": false,
-  "axis_deadzone_percent": 2.0,
-  "rz_deadzone_percent": 5.0,
+  "axis_deadzone_percent": 0.0,
+  "rz_deadzone_percent": 0.0,
   "device_axis_deadzones": {}
 }
 ```
