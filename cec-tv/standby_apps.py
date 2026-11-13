@@ -23,6 +23,15 @@ def is_screen_inhibition(request):
     return 'idle' in request['kind'].split(':')
 
 
+def window_aliases(identity, details):
+    aliases = {identity}
+    if details.get('window_class'):
+        aliases.add(app_key(details['window_class']))
+    if details.get('steam_id'):
+        aliases.add('steam_app_' + details['steam_id'])
+    return aliases
+
+
 def observed_apps(names, apps):
     result = {}
     for name in names:
@@ -95,9 +104,7 @@ def forced_inhibitions(enabled, apps, windows, windows_fresh, outputs):
     for app in enabled:
         identity = app_key(app)
         details = installed.get(identity, {})
-        aliases = {identity}
-        if details.get('window_class'):
-            aliases.add(app_key(details['window_class']))
+        aliases = window_aliases(identity, details)
         matches = [window for window in windows
                    if aliases & {app_key(window['desktop']), app_key(window['class'])}]
         relevant = [window for window in matches
@@ -150,11 +157,9 @@ def matching_inhibitions(inhibitions, exceptions, apps, windows, windows_fresh, 
         if candidates <= exceptions:
             continue
         ambiguous = len(candidates) != 1
-        window_keys = set(candidates)
+        window_keys = set()
         for candidate in candidates:
-            window_class = identities.get(candidate, {}).get('window_class')
-            if window_class:
-                window_keys.add(app_key(window_class))
+            window_keys.update(window_aliases(candidate, identities.get(candidate, {})))
         app_windows = [
             row for row in windows
             if window_keys & {app_key(row['desktop']), app_key(row['class'])}

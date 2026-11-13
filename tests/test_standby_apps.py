@@ -64,6 +64,25 @@ class StandbyAppsChecks(unittest.TestCase):
             self.assertIsNone(history.error)
             self.assertEqual(InhibitionHistory(path).names, {'Player'})
 
+    def test_steam_window_matches_selected_game_and_display(self):
+        apps = [{'id': 'game.desktop', 'name': 'Game', 'steam_id': '553850',
+                 'window_class': 'OtherClass'}]
+        window = {'desktop': '', 'class': 'steam_app_553850', 'output': 'TV'}
+        match = lambda outputs: forced_inhibitions(
+            ['game.desktop'], apps, [window], True, outputs)
+        self.assertEqual(match(['TV'])[0]['app'], 'Game')
+        self.assertEqual(match(['other']), [])
+        window['class'] = 'steam_app_553851'
+        self.assertEqual(match(['TV']), [])
+        window['class'] = 'OtherClass'
+        self.assertEqual(match(['TV'])[0]['app'], 'Game')
+        window['class'] = 'steam_app_553850'
+        requests = [{'kind': 'idle', 'app': 'game.desktop', 'reason': 'Playing'}]
+        self.assertEqual(matching_inhibitions(
+            requests, [], apps, [window], True, ['other']), [])
+        self.assertFalse(matching_inhibitions(
+            requests, [], apps, [window], True, ['TV'])[0]['locationUnknown'])
+
     def test_selected_idle_request_is_scoped_to_display_and_preserves_reason(self):
         requests = [
             {'kind': 'sleep:idle', 'app': 'org.example.Player', 'reason': 'Playing video'},
