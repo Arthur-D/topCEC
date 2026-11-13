@@ -110,6 +110,17 @@ def discover_apps():
             window_class = get_window_class() if get_window_class else None
             if window_class:
                 row['window_class'] = window_class
+            get_commandline = getattr(app, 'get_commandline', None)
+            commandline = get_commandline() if get_commandline else None
+            steam_uri = re.search(
+                r"""(?:^|[\s"'])steam://rungameid/([0-9]+)(?=$|[\s"'])""",
+                commandline or '', re.IGNORECASE)
+            steam_desktop = re.fullmatch(r'steam_app_([0-9]+)\.desktop', identity,
+                                         re.IGNORECASE)
+            if steam_uri:
+                row['steam_id'] = steam_uri.group(1)
+            elif steam_desktop:
+                row['steam_id'] = steam_desktop.group(1)
             apps.setdefault(identity, row)
     return sorted(apps.values(), key=lambda app: (app['name'].casefold(), app['id']))
 

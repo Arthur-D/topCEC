@@ -35,6 +35,21 @@ class EquipmentChecks(unittest.TestCase):
             self.assertEqual(equipment.discover_apps(), [
                 {'id': 'player.desktop', 'name': 'Player', 'window_class': 'PlayerWindow'}])
 
+    def test_discovered_steam_ids_come_from_launchers_or_desktop_ids(self):
+        def entry(identity, command):
+            return SimpleNamespace(get_id=lambda: identity, get_display_name=lambda: identity,
+                                   get_commandline=lambda: command)
+        gio = SimpleNamespace(AppInfo=SimpleNamespace(get_all=lambda: [
+            entry('game.desktop', 'steam "steam://rungameid/553850"'),
+            entry('steam_app_123.desktop', 'steam'),
+            entry('other.desktop', 'steam steam://rungameid/553850extra')]))
+        with patch.dict(sys.modules, {'gi.repository': SimpleNamespace(Gio=gio)}):
+            self.assertEqual(equipment.discover_apps(), [
+                {'id': 'game.desktop', 'name': 'game.desktop', 'steam_id': '553850'},
+                {'id': 'other.desktop', 'name': 'other.desktop'},
+                {'id': 'steam_app_123.desktop', 'name': 'steam_app_123.desktop',
+                 'steam_id': '123'}])
+
     def test_inventory_uses_stable_paths_names_and_connected_displays(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

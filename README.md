@@ -90,7 +90,8 @@ configuration, external research repositories and credentials are excluded.
   display blocks TV standby even without an app inhibition request. A window on
   an unknown display, or a stale window snapshot, blocks conservatively. This
   matches KWin's desktop-file or window-class identity, including a desktop
-  entry's `StartupWMClass`. An unidentified window blocks conservatively.
+  entry's `StartupWMClass` and Steam game IDs from Steam launchers. An
+  unidentified window blocks conservatively.
   Background processes without windows do not count. It does not inhibit Plasma
   idle or system sleep.
 - Axis deadzones: 0% by default. Missing input devices stop the monitor;
