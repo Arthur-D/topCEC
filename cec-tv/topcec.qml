@@ -667,7 +667,16 @@ Kirigami.ApplicationWindow {
             }
         }
         let query = appSearch.text.trim().toLowerCase()
-        return apps.filter(app => !query || (app.name + " " + app.id).toLowerCase().includes(query))
+        if (query && !showAllApps.checked) {
+            for (let id of topcec.activeInhibitorApps) {
+                if (!apps.some(app => app.id === id)) {
+                    let installed = topcec.installedApps.find(app => app.id === id)
+                    apps.push(installed || {id: id, name: id})
+                }
+            }
+        }
+        return apps.filter(app => !query || ((showAllApps.checked || topcec.activeInhibitorApps.includes(app.id))
+            && (app.name + " " + app.id).toLowerCase().includes(query)))
             .sort((a, b) => Number(topcec.activeInhibitorApps.includes(b.id))
                 - Number(topcec.activeInhibitorApps.includes(a.id))
                 || a.name.localeCompare(b.name))
@@ -1513,7 +1522,7 @@ Kirigami.ApplicationWindow {
                             }
                             SelectableLabel {
                                 Layout.fillWidth: true
-                                text: "Blocking screen standby follows an app's Plasma request. Force inhibit blocks TV standby while the app has a window on a selected display; it does not prevent computer sleep."
+                                text: "Turn off Allow screen standby to follow an app's Plasma request. Force block screen standby blocks TV standby while the app has a window on a selected display. Neither option prevents computer sleep."
                             }
                             CopyableCheckBox {
                                 id: showAllApps
@@ -1529,7 +1538,8 @@ Kirigami.ApplicationWindow {
                                 id: appSearch
                                 objectName: "appSearch"
                                 Layout.fillWidth: true
-                                placeholderText: "Search installed apps"
+                                placeholderText: showAllApps.checked ? "Search all installed apps"
+                                    : "Search apps currently requesting screen inhibition"
                                 Accessible.name: placeholderText
                             }
                             SelectableLabel {
@@ -1545,7 +1555,9 @@ Kirigami.ApplicationWindow {
                             SelectableLabel {
                                 Layout.fillWidth: true
                                 visible: root.appChoices().length === 0
-                                text: appSearch.text.length > 0 ? "No apps match this search."
+                                text: appSearch.text.trim().length > 0
+                                    ? (showAllApps.checked ? "No installed apps match this search."
+                                        : "No apps currently requesting screen inhibition match this search.")
                                     : "No apps have requested idle inhibition yet. Show all installed apps to choose one."
                             }
                             ListView {
@@ -1569,15 +1581,15 @@ Kirigami.ApplicationWindow {
                                         spacing: Kirigami.Units.smallSpacing
                                         CopyableCheckBox {
                                             objectName: "idleApp:" + modelData.id
-                                            text: "Blocking screen standby"
-                                            Accessible.name: modelData.name + " blocking screen standby"
-                                            checked: root.idleAppsDraft.includes(modelData.id)
-                                            onClicked: root.setIdleApp(modelData.id, checked)
+                                            text: "Allow screen standby"
+                                            Accessible.name: modelData.name + " allow screen standby"
+                                            checked: !root.idleAppsDraft.includes(modelData.id)
+                                            onClicked: root.setIdleApp(modelData.id, !checked)
                                         }
                                         CopyableCheckBox {
                                             objectName: "forceApp:" + modelData.id
-                                            text: "Force inhibit"
-                                            Accessible.name: modelData.name + " force inhibit"
+                                            text: "Force block screen standby"
+                                            Accessible.name: modelData.name + " force block screen standby"
                                             checked: root.forceAppsDraft.includes(modelData.id)
                                             onClicked: root.setForceApp(modelData.id, checked)
                                         }

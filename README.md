@@ -71,17 +71,19 @@ configuration, external research repositories and credentials are excluded.
   of treating it as inactive. Snapshot interval 2 seconds; mapping TTL 15 seconds.
   The AT-SPI fallback identifies Firefox by its process executable before
   querying application accessibility data, avoiding unrelated unresponsive apps.
-- The Standby page lists installed desktop apps and lets each app's Plasma idle
-  inhibition block topCEC standby independently of its media settings. Sleep-only
-  inhibitions are ignored. Matching requests and their reasons appear under
-  “Currently blocking standby”; deselecting an app affects topCEC, not Plasma's
-  own power policy. Unknown app identity or display, stale Plasma status, and
-  failed installed-app discovery block standby when an app is selected. Selected
-  app IDs remain saved if an app is uninstalled. The default list shows current
-  and previously observed idle-inhibiting apps and selected apps; “Show all
-  installed apps” includes the rest. Observed app names are stored in
-  `observed-inhibitors.json` beside the host configuration.
-- Each app also has a “Force inhibit” option: an open window on a selected mouse
+- “Allow screen standby” is on by default. Turn it off to let an app's Plasma
+  idle-inhibition requests block topCEC standby independently of its media
+  settings. Sleep-only inhibitions are ignored; matching requests and their
+  reasons appear under “Currently blocking standby”. This setting affects
+  topCEC, not Plasma's power policy. Unknown app identity or display, stale
+  Plasma status, and failed installed-app discovery block standby when an app
+  is selected to block. Existing selections remain unchanged, including for
+  uninstalled apps. The default list shows current and previously observed
+  idle-inhibiting apps and selected apps. Its search filters to apps currently
+  requesting screen inhibition; “Show all installed apps” searches all apps.
+  Observed app names are stored in `observed-inhibitors.json` beside the host
+  configuration.
+- Each app also has a “Force block screen standby” option: an open window on a selected mouse
   display blocks TV standby even without an app inhibition request. A window on
   an unknown display, or a stale window snapshot, blocks conservatively. This
   matches KWin's desktop-file or window-class identity, including a desktop
