@@ -2295,9 +2295,11 @@ class GuiChecks(unittest.TestCase):
         def item(index):
             return QQmlExpression(engine.rootContext(), window,
                                   f'appChoicesRepeater.itemAtIndex({index})').evaluate()[0]
-        player = item(0)
+        player = next(item(index) for index in range(repeater.property('count'))
+                      if item(index).objectName() == 'appRow:player.desktop')
+        removed = next(item(index) for index in range(repeater.property('count'))
+                       if item(index).objectName() == 'appRow:removed.desktop')
         self.assertEqual(player.objectName(), 'appRow:player.desktop')
-        removed = item(2)
         self.assertEqual(removed.objectName(), 'appRow:removed.desktop')
         allow = player.findChild(QObject, 'idleApp:player.desktop')
         self.assertEqual(allow.property('text'), 'Allow standby')
@@ -2737,6 +2739,40 @@ class GuiChecks(unittest.TestCase):
                                  bool(app_id))
                 engine.deleteLater()
                 app.processEvents()
+
+    def test_firefox_keeps_its_place_when_video_inhibitor_becomes_active(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._config_source = 'saved'
+        firefox = {'id': 'firefox.desktop', 'name': 'Mozilla Firefox'}
+        chromium = {'id': 'chromium.desktop', 'name': 'Chromium'}
+        backend._service_data = {
+            'installed_apps': [firefox, chromium],
+            'observed_apps': [firefox, chromium],
+            'active_inhibitor_apps': [],
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+
+        choices = QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(appChoices())').evaluate()[0]
+        self.assertEqual([item['name'] for item in json.loads(choices)],
+                         ['Chromium', 'Mozilla Firefox'])
+        backend._service_data['active_inhibitor_apps'] = [{'id': 'firefox.desktop'}]
+        backend.changed.emit()
+        app.processEvents()
+        active_choices = QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(appChoices())').evaluate()[0]
+        self.assertEqual([item['name'] for item in json.loads(active_choices)],
+                         ['Chromium', 'Mozilla Firefox'])
+        engine.deleteLater()
 
     def test_uninstalled_browsers_are_not_shown(self):
         app = QGuiApplication.instance() or QGuiApplication([])
