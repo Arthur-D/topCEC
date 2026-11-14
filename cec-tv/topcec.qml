@@ -20,6 +20,9 @@ Kirigami.ApplicationWindow {
     readonly property var sectionNames: ["Overview", "Display", "Standby", "Input", "Diagnostics"]
     property bool settingsDirty: false
     property string submittedSettings: ""
+    readonly property bool settingsSavePaused: settingsDirty && topcec.settingsEnabled
+        && submittedSettings.length > 0
+        && JSON.stringify(settingsValues()) === submittedSettings
     property var axisDraft: ({})
     property var mouseOutputsDraft: []
     property bool mouseOutputsLegacy: false
@@ -293,7 +296,10 @@ Kirigami.ApplicationWindow {
         if (!settingsDirty || !topcec.settingsEnabled || !equipmentReady)
             return
         let values = settingsValues()
-        submittedSettings = JSON.stringify(values)
+        let snapshot = JSON.stringify(values)
+        if (snapshot === submittedSettings)
+            return
+        submittedSettings = snapshot
         values.targetOutput = outputField.valueToSave
         values.adapter = adapterField.valueToSave
         values.devices = savedInputPaths()
@@ -484,9 +490,12 @@ Kirigami.ApplicationWindow {
 
     function saveStatusText() {
         if (!topcec.settingsEnabled)
-            return "Connect to the host service to save settings."
+            return topcec.backendAvailable ? "Saving changes..."
+                : "Connect to the host service to save settings."
         if (!root.equipmentReady)
             return "Choose a display and CEC adapter."
+        if (root.settingsSavePaused)
+            return "Changes not saved. Automatic retry paused; edit settings or retry."
         if (root.settingsDirty)
             return "Saving changes..."
         if (topcec.actionMessage.length)
@@ -868,6 +877,7 @@ Kirigami.ApplicationWindow {
             if (root.submittedSettings && JSON.stringify(root.settingsValues()) !== root.submittedSettings)
                 return
             root.settingsDirty = false
+            root.submittedSettings = ""
             root.loadSettings()
         }
     }
@@ -940,6 +950,17 @@ Kirigami.ApplicationWindow {
                     Layout.fillWidth: true
                     verticalAlignment: TextEdit.AlignVCenter
                     text: root.saveStatusText()
+                }
+                Controls.Button {
+                    objectName: "retrySettingsButton"
+                    text: "Retry saving"
+                    icon.name: "view-refresh"
+                    visible: root.settingsSavePaused
+                    enabled: topcec.settingsEnabled && root.equipmentReady
+                    onClicked: {
+                        root.submittedSettings = ""
+                        root.applySettings()
+                    }
                 }
             }
         }

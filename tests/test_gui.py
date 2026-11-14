@@ -73,6 +73,93 @@ class GuiChecks(unittest.TestCase):
         self.assertFalse(window.property('settingsDirty'))
         engine.deleteLater()
 
+    def test_failed_autosave_pauses_until_edit_or_explicit_retry(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        for failure in ('host', 'confirmation', 'validation'):
+            with self.subTest(failure=failure):
+                backend = GuiBackend(dbus_only=True)
+                backend._connection_state = 'connected'
+                backend._service_status = 'running'
+                engine = QQmlApplicationEngine()
+                engine.rootContext().setContextProperty('topcec', backend)
+                engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+                window = engine.rootObjects()[0]
+                app.processEvents()
+                window.findChild(QObject, 'timeoutMode').setProperty('currentIndex', 1)
+                window.findChild(QObject, 'autoSaveTimer').setProperty('interval', 30)
+                timeout = window.findChild(QObject, 'timeoutMinutes')
+                original = dict(backend.config)
+                requests = []
+                interface = Mock(isValid=Mock(return_value=True))
+                with patch.object(backend, '_service_interface', return_value=interface), \
+                        patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                                     requests.append((method, callback, args))), \
+                        patch.object(backend, 'refresh'), \
+                        patch.object(topcec_gui, 'config_from_settings',
+                                     side_effect=ValueError('Invalid setting') if failure == 'validation'
+                                     else config_from_settings):
+                    timeout.setProperty('value', 13)
+                    QMetaObject.invokeMethod(timeout, 'valueModified')
+                    QTest.qWait(80)
+                    if failure == 'validation':
+                        self.assertEqual(requests, [])
+                    else:
+                        self.assertEqual(len(requests), 1)
+                        _, callback, _ = requests.pop()
+                        callback(
+                            topcec_gui.QDBusMessage.createError(
+                                'net.local.CecActivity.Error',
+                                'Settings not applied: missing input device')
+                            if failure == 'host' else self.reply({'accepted': False}))
+                    message = backend.actionMessage
+                    for _ in range(3):
+                        backend.changed.emit()
+                        QTest.qWait(80)
+                    self.assertEqual(requests, [])
+                    self.assertEqual(backend.actionMessage, message)
+                    self.assertEqual(backend.config, original)
+                    self.assertTrue(window.property('settingsDirty'))
+                    self.assertEqual(timeout.property('value'), 13)
+                    self.assertIn('paused', window.findChild(
+                        QObject, 'settingsSaveStatus').property('text').lower())
+                with patch.object(backend, '_service_interface', return_value=interface), \
+                        patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                                     requests.append((method, callback, args))), \
+                        patch.object(backend, 'refresh'):
+                    timeout.setProperty('value', 14)
+                    QMetaObject.invokeMethod(timeout, 'valueModified')
+                    QTest.qWait(80)
+                    self.assertEqual(len(requests), 1)
+                    _, callback, _ = requests.pop()
+                    # A newer edit must still be queued even if the in-flight save fails.
+                    timeout.setProperty('value', 15)
+                    QMetaObject.invokeMethod(timeout, 'valueModified')
+                    QTest.qWait(80)
+                    self.assertEqual(requests, [])
+                    callback(topcec_gui.QDBusMessage.createError(
+                        'net.local.CecActivity.Error', 'Input device still missing'))
+                    QTest.qWait(80)
+                    self.assertEqual(len(requests), 1)
+                    _, callback, arguments = requests.pop()
+                    self.assertEqual(json.loads(arguments[0])['timeout_seconds'], 900)
+                    callback(topcec_gui.QDBusMessage.createError(
+                        'net.local.CecActivity.Error', 'Input device still missing'))
+                    QTest.qWait(80)
+                    self.assertEqual(requests, [])
+                    retry = window.findChild(QObject, 'retrySettingsButton')
+                    self.assertTrue(retry.property('visible'))
+                    QMetaObject.invokeMethod(retry, 'click')
+                    self.assertEqual(len(requests), 1)
+                    _, callback, arguments = requests.pop()
+                    callback(self.reply({'accepted': True, 'applied_live': True,
+                                         'config': json.loads(arguments[0])}))
+                    QTest.qWait(80)
+                    self.assertEqual(requests, [])
+                    self.assertFalse(window.property('settingsDirty'))
+                    self.assertFalse(retry.property('visible'))
+                engine.deleteLater()
+                app.processEvents()
+
     def test_autosave_retains_unavailable_equipment_and_empty_input_selection(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         for saved_status in (True, None):
