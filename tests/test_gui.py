@@ -2125,7 +2125,11 @@ class GuiChecks(unittest.TestCase):
                                {'id': 'editor.desktop', 'name': 'Editor',
                                 'launcher_group': 'editor.desktop'},
                                {'id': 'editor-menu.desktop', 'name': 'Editor',
-                                'launcher_group': 'editor.desktop'}],
+                                'launcher_group': 'editor.desktop'},
+                               {'id': 'editor-handler.desktop', 'name': 'Editor',
+                                'menu_hidden': True},
+                               {'id': 'archived.desktop', 'name': 'Archived',
+                                'menu_hidden': True}],
             'observed_apps': [{'id': 'player.desktop', 'name': 'Video Player'},
                               {'id': 'archived.desktop', 'name': 'Archived'}],
             'active_inhibitor_apps': [{'id': 'player.desktop', 'name': 'Video Player'}],
@@ -2193,6 +2197,9 @@ class GuiChecks(unittest.TestCase):
         backend.changed.emit()
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         self.assertIn('all installed', search.property('placeholderText'))
+        search.setProperty('text', 'editor')
+        app.processEvents()
+        self.assertEqual(repeater.property('count'), 1)
         search.setProperty('text', 'editor-menu.desktop')
         app.processEvents()
         self.assertEqual(repeater.property('count'), 1)

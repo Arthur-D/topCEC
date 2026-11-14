@@ -16,19 +16,21 @@ import equipment
 
 class EquipmentChecks(unittest.TestCase):
     def test_installed_apps_include_hidden_entries_and_deduplicate_ids(self):
-        def entry(identity, name):
-            return SimpleNamespace(get_id=lambda: identity, get_display_name=lambda: name)
+        def entry(identity, name, visible=True):
+            return SimpleNamespace(get_id=lambda: identity, get_display_name=lambda: name,
+                                   should_show=lambda: visible)
         gio = SimpleNamespace(AppInfo=SimpleNamespace(get_all=lambda: [
             entry('one.desktop', 'One'), entry('one.desktop', 'Duplicate'),
-            entry('hidden.desktop', 'Hidden'), entry(None, 'No ID')]))
+            entry('hidden.desktop', 'Hidden', visible=False), entry(None, 'No ID')]))
         with patch.dict(sys.modules, {'gi.repository': SimpleNamespace(Gio=gio)}):
             self.assertEqual(equipment.discover_apps(), [
-                {'id': 'hidden.desktop', 'name': 'Hidden'},
+                {'id': 'hidden.desktop', 'name': 'Hidden', 'menu_hidden': True},
                 {'id': 'one.desktop', 'name': 'One'}])
 
     def test_discovered_apps_expose_startup_window_class(self):
         app = SimpleNamespace(get_id=lambda: 'player.desktop',
                              get_display_name=lambda: 'Player',
+                             should_show=lambda: True,
                              get_startup_wm_class=lambda: 'PlayerWindow')
         gio = SimpleNamespace(AppInfo=SimpleNamespace(get_all=lambda: [app]))
         with patch.dict(sys.modules, {'gi.repository': SimpleNamespace(Gio=gio)}):
@@ -39,6 +41,7 @@ class EquipmentChecks(unittest.TestCase):
         def entry(identity, command='webapp-manager', **properties):
             return SimpleNamespace(
                 get_id=lambda: identity, get_display_name=lambda: 'Web Apps',
+                should_show=lambda: True,
                 get_commandline=lambda: command, get_string=properties.get,
                 get_boolean=lambda key: properties.get(key, False))
 
@@ -62,6 +65,7 @@ class EquipmentChecks(unittest.TestCase):
     def test_discovered_steam_ids_come_from_launchers_or_desktop_ids(self):
         def entry(identity, command):
             return SimpleNamespace(get_id=lambda: identity, get_display_name=lambda: identity,
+                                   should_show=lambda: True,
                                    get_commandline=lambda: command)
         gio = SimpleNamespace(AppInfo=SimpleNamespace(get_all=lambda: [
             entry('game.desktop', 'steam "steam://rungameid/553850"'),
