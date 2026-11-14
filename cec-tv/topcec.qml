@@ -412,6 +412,9 @@ Kirigami.ApplicationWindow {
         && topcec.serviceStatus === "running"
     readonly property bool cecAdapterSelected: adapterField.detected
     function powerStateText() {
+        if (topcec.serviceStatus === "configuration-only"
+                && topcec.powerState === "unknown")
+            return "Configuration only"
         if (root.serviceHealthy) {
             if (!root.cecAdapterSelected)
                 return adapterField.availabilityKnown
@@ -1719,50 +1722,51 @@ Kirigami.ApplicationWindow {
                                         checked: modelData.groupIds.some(id => root.forceAppsDraft.includes(id))
                                         onClicked: root.setAppGroup(modelData.groupIds, checked, true)
                                     }
-                                    CopyableCheckBox {
-                                        objectName: modelData.isFirefox ? "firefoxAudio"
-                                            : (appRow.browserAudio ? "browserAudio:" + modelData.browserId : "")
+                                    Flow {
+                                        objectName: "browserMediaOptions:" + modelData.id
                                         Layout.row: appRow.stackPolicies ? 3 : 2
                                         Layout.column: 0
                                         Layout.columnSpan: 4
-                                        Layout.maximumWidth: implicitWidth
-                                        Layout.alignment: Qt.AlignTop | Qt.AlignLeft
-                                        visible: modelData.isFirefox || appRow.browserAudio
-                                        text: "Block standby while playing audio"
-                                        Accessible.name: modelData.name + " block standby while playing audio"
-                                        checked: appRow.browserAudio
-                                            ? root.chromiumAudioDraft.includes(modelData.browserId)
-                                            : root.firefoxAudioEnabled
-                                        onClicked: {
-                                            if (appRow.browserAudio)
-                                                root.setChromiumAudio(modelData.browserId, checked)
-                                            else
-                                                root.firefoxAudioEnabled = checked
-                                            root.markSettingsDirty()
-                                        }
-                                    }
-                                    CopyableCheckBox {
-                                        objectName: modelData.isFirefox ? "firefoxVideo"
-                                            : (appRow.browserAudio ? "browserVideo:" + modelData.browserId : "")
-                                        Layout.row: appRow.stackPolicies ? 4 : 3
-                                        Layout.column: 0
-                                        Layout.columnSpan: 4
-                                        Layout.maximumWidth: implicitWidth
-                                        visible: modelData.isFirefox || appRow.browserAudio
-                                        text: "Block standby while playing video"
-                                        Accessible.name: modelData.name + " block standby while playing video"
-                                        checked: appRow.browserAudio
-                                            ? root.chromiumVideoDraft.includes(modelData.browserId)
-                                            : root.firefoxVideoEnabled
-                                        onClicked: {
-                                            if (appRow.browserAudio) {
-                                                let choices = root.chromiumVideoDraft.filter(id => id !== modelData.browserId)
-                                                if (checked) choices.push(modelData.browserId)
-                                                root.chromiumVideoDraft = choices
-                                            } else {
-                                                root.firefoxVideoEnabled = checked
+                                        Layout.fillWidth: true
+                                        spacing: Kirigami.Units.smallSpacing
+                                        CopyableCheckBox {
+                                            id: browserAudioControl
+                                            objectName: modelData.isFirefox ? "firefoxAudio"
+                                                : (appRow.browserAudio ? "browserAudio:" + modelData.browserId : "")
+                                            visible: modelData.isFirefox || appRow.browserAudio
+                                            text: "Block standby while playing audio"
+                                            Accessible.name: modelData.name + " block standby while playing audio"
+                                            checked: appRow.browserAudio
+                                                ? root.chromiumAudioDraft.includes(modelData.browserId)
+                                                : root.firefoxAudioEnabled
+                                            onClicked: {
+                                                if (appRow.browserAudio)
+                                                    root.setChromiumAudio(modelData.browserId, checked)
+                                                else
+                                                    root.firefoxAudioEnabled = checked
+                                                root.markSettingsDirty()
                                             }
-                                            root.markSettingsDirty()
+                                        }
+                                        CopyableCheckBox {
+                                            id: browserVideoControl
+                                            objectName: modelData.isFirefox ? "firefoxVideo"
+                                                : (appRow.browserAudio ? "browserVideo:" + modelData.browserId : "")
+                                            visible: modelData.isFirefox || appRow.browserAudio
+                                            text: "Block standby while playing video"
+                                            Accessible.name: modelData.name + " block standby while playing video"
+                                            checked: appRow.browserAudio
+                                                ? root.chromiumVideoDraft.includes(modelData.browserId)
+                                                : root.firefoxVideoEnabled
+                                            onClicked: {
+                                                if (appRow.browserAudio) {
+                                                    let choices = root.chromiumVideoDraft.filter(id => id !== modelData.browserId)
+                                                    if (checked) choices.push(modelData.browserId)
+                                                    root.chromiumVideoDraft = choices
+                                                } else {
+                                                    root.firefoxVideoEnabled = checked
+                                                }
+                                                root.markSettingsDirty()
+                                            }
                                         }
                                     }
                                     Item {
