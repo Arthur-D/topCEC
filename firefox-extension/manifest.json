@@ -1,13 +1,20 @@
 {
   "manifest_version": 2,
   "name": "topCEC Firefox media status",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "GPL-3.0-or-later",
-  "description": "Reports only tab audio flags and active window titles to topCEC.",
+  "description": "Sends active tab titles and audible/muted flags to the local topCEC app for TV standby detection.",
+  "incognito": "not_allowed",
   "browser_specific_settings": {
     "gecko": {
       "id": "topcec-media@topcec.local",
-      "strict_min_version": "115.0"
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "browsingActivity",
+          "websiteActivity"
+        ]
+      }
     }
   },
   "permissions": [
