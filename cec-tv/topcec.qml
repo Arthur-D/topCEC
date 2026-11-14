@@ -1727,7 +1727,7 @@ Kirigami.ApplicationWindow {
                                     Flow {
                                         objectName: "browserMediaOptions:" + modelData.id
                                         Layout.row: appRow.stackPolicies ? 3 : 2
-                                        Layout.column: 0
+                                        Layout.column: appRow.stackName ? 0 : 1
                                         Layout.columnSpan: 4
                                         Layout.fillWidth: true
                                         spacing: Kirigami.Units.smallSpacing

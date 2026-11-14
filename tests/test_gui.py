@@ -2758,6 +2758,7 @@ class GuiChecks(unittest.TestCase):
                     self.assertLessEqual(left.x() + left.width(), right.x())
             for firefox_position, player_position in zip(firefox_positions, player_positions):
                 self.assertEqual(firefox_position.x(), player_position.x())
+            self.assertEqual(firefox_positions[3].x(), firefox_positions[1].x())
             self.assertGreater(firefox_positions[3].y(), firefox_positions[2].y())
             if width == 1300:
                 self.assertAlmostEqual(
@@ -2772,6 +2773,7 @@ class GuiChecks(unittest.TestCase):
         QTest.qWait(50)
         firefox_positions = [
             control.mapToItem(firefox_row, QPointF(0, 0)) for control in firefox_controls]
+        self.assertEqual(firefox_positions[3].x(), firefox_positions[1].x())
         self.assertGreater(firefox_positions[3].y(), firefox_positions[2].y())
         for control in firefox_controls + player_controls:
             self.assertLessEqual(control.x() + control.width(), control.parentItem().width() + 1)
