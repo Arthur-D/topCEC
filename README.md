@@ -77,6 +77,8 @@ Settings save automatically after a short pause. A running host applies the
 changes without restarting. An offline native GUI saves for the next start.
 Saved hardware paths are retained when hardware disappears; choose a replacement
 or explicitly remove unlisted inputs.
+If saving fails, the draft and error remain visible without repeatedly retrying.
+Correct the settings or use **Retry saving** after resolving the error.
 
 ## Configure without the GUI
 
