@@ -1082,9 +1082,23 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
 
         @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
         def GetStatus(self):
+            now = time.monotonic()
+            report_ttl = runtime_config['mapping_ttl_seconds']
+            extension_reports = {
+                'firefox': (webextension_media.stamp is not None
+                            and now - webextension_media.stamp <= report_ttl),
+                **{
+                    browser: any(
+                        kind == browser and now - stamp <= report_ttl
+                        for (kind, _instance), (_windows, stamp)
+                        in chromium_media.snapshots.items())
+                    for browser in BROWSERS
+                },
+            }
             return json.dumps({
                 **status_snapshot, 'configuration_saved': config_path.is_file(),
                 'settings_apply': 'live', 'process_id': os.getpid(),
+                'browser_extension_reports': extension_reports,
                 'installed_apps': equipment_snapshot.get('apps'),
                 'installed_apps_error': equipment_snapshot.get(
                     'apps_error', 'Installed app discovery has not completed'),
