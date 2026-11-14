@@ -813,9 +813,7 @@ Kirigami.ApplicationWindow {
         return grouped.filter(app => !query || ((showAllApps.checked
             || app.groupIds.some(id => topcec.activeInhibitorApps.includes(id)))
             && (app.name + " " + app.groupIds.join(" ")).toLowerCase().includes(query)))
-            .sort((a, b) => Number(b.groupIds.some(id => topcec.activeInhibitorApps.includes(id)))
-                - Number(a.groupIds.some(id => topcec.activeInhibitorApps.includes(id)))
-                || a.name.localeCompare(b.name))
+            .sort((a, b) => a.name.localeCompare(b.name))
     }
 
     function selectedMouseDisplays() {
