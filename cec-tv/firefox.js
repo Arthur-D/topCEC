@@ -12,8 +12,10 @@ function reportFirefox() {
         const snapshot = [];
         for (let i = 0; i < windows.length; i++) {
             const w = windows[i];
+            const geometry = w.clientGeometry;
             snapshot.push({pid: Number(w.pid), title: String(w.caption || ''),
                            output: w.output ? String(w.output.name) : 'ingen',
+                           size: geometry ? [geometry.width, geometry.height] : null,
                            desktop: String(w.desktopFileName || ''),
                            class: String(w.resourceClass || '')});
         }

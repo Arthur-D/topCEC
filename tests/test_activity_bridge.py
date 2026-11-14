@@ -92,7 +92,7 @@ class ActivityBridgeTests(unittest.TestCase):
 
 
 class AppWindowBridgeTests(unittest.TestCase):
-    def test_desktop_snapshot_includes_app_identity_and_display(self):
+    def test_desktop_snapshot_includes_app_identity_display_and_size(self):
         engine = QJSEngine()
         setup = engine.evaluate('''
             var messages = [];
@@ -103,7 +103,8 @@ class AppWindowBridgeTests(unittest.TestCase):
             var workspace = {
                 windowList: function() { return [{
                     pid: 123, caption: "Player", desktopFileName: "player",
-                    resourceClass: "Player", output: {name: "DP-1"}
+                    resourceClass: "Player", output: {name: "DP-1"},
+                    clientGeometry: {width: 640, height: 360}
                 }]; },
                 activeWindow: null, windowActivated: signal()
             };
@@ -116,7 +117,7 @@ class AppWindowBridgeTests(unittest.TestCase):
         snapshot = json.loads(messages[0].removeprefix('Desktop-snapshot: '))
         self.assertEqual(snapshot, [{
             'pid': 123, 'title': 'Player', 'desktop': 'player',
-            'class': 'Player', 'output': 'DP-1',
+            'class': 'Player', 'output': 'DP-1', 'size': [640, 360],
         }])
 
 
