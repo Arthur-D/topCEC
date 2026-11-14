@@ -4,6 +4,7 @@ import io
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import struct
 import sys
@@ -40,6 +41,47 @@ class FirefoxMediaChecks(unittest.TestCase):
         self.assertEqual(manifest['permissions'],
                          ['tabs', 'nativeMessaging', 'webNavigation', '<all_urls>'])
         self.assertTrue(manifest['content_scripts'][0]['all_frames'])
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is required for JavaScript tests')
+    def test_video_state_prioritizes_playing_over_inaccessible_frames(self):
+        script = r'''
+const fs = require("fs");
+const vm = require("vm");
+const assert = require("assert");
+let states = [];
+const listener = {addListener() {}};
+const browser = {
+    webNavigation: {getAllFrames: async () => states.map((_, frameId) => ({frameId}))},
+    tabs: {
+        sendMessage: async (_tabId, _message, {frameId}) => {
+            if (states[frameId] === null) throw new Error("inaccessible");
+            return {playing: states[frameId]};
+        },
+        onUpdated: listener, onActivated: listener, onCreated: listener,
+        onRemoved: listener, onAttached: listener, onDetached: listener,
+    },
+    windows: {getAll: async () => [], onCreated: listener, onRemoved: listener},
+    runtime: {
+        connectNative: () => ({onDisconnect: listener, onMessage: listener,
+                               postMessage() {}}),
+        onStartup: listener, onInstalled: listener,
+    },
+};
+const context = vm.createContext({browser, setTimeout, clearTimeout,
+                                  setInterval() {}, console});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), context);
+(async () => {
+    for (const [input, expected] of [
+        [[true, null], true], [[false, null], null], [[false, false], false],
+        [[true, false], true], [[], null],
+    ]) {
+        states = input;
+        assert.strictEqual(await context.videoState(1), expected);
+    }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+'''
+        subprocess.run(['node', '-e', script, str(ROOT / 'firefox-extension/background.js')],
+                       check=True, capture_output=True, text=True)
 
     def test_video_only_uses_all_tabs_and_blocks_unknown_on_target_display(self):
         self.mapping.snapshot(json.dumps([

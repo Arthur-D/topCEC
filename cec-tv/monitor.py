@@ -1411,9 +1411,9 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 ]
                 if any(state is None for state in video_states):
                     reason = reason or 'Firefox video extension is unavailable or stale'
-                elif any(state[1] for state in video_states):
+                if any(state is not None and state[1] for state in video_states):
                     reason = reason or 'Firefox video state or display is unknown'
-                elif any(state[0] for state in video_states):
+                if any(state is not None and state[0] for state in video_states):
                     blocking_apps.append({
                         'app': 'Mozilla Firefox', 'reason': 'Video',
                         'identityUnknown': False, 'locationUnknown': False})

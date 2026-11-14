@@ -2036,12 +2036,19 @@ Kirigami.ApplicationWindow {
                         text: topcec.inhibitionsMessage
                     }
                     SelectableLabel {
+                        objectName: "standbyBlockStatus"
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2 && topcec.standbyBlockMessage.length > 0
+                        text: topcec.standbyBlockMessage
+                    }
+                    SelectableLabel {
                         objectName: "noBlockingApps"
                         Layout.fillWidth: true
                         visible: root.currentSection === 2 && !topcec.firefoxPlaybackActive
                             && (!root.firefoxAudioEnabled || topcec.firefoxAudioStatusMessage.length === 0)
                             && topcec.chromiumAudioStatusMessage.length === 0
                             && topcec.blockingApps.length === 0 && topcec.inhibitionsMessage.length === 0
+                            && topcec.standbyBlockMessage.length === 0
                         text: "No apps are currently blocking standby."
                     }
                     Repeater {

@@ -2395,6 +2395,34 @@ class GuiChecks(unittest.TestCase):
         self.assertTrue(empty.property('visible'))
         engine.deleteLater()
 
+    def test_video_fail_safe_is_not_reported_as_no_blockers(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._service_data = {
+            'fail_safe_reason': 'Firefox video state or display is unknown',
+            'blocking_apps': [], 'inhibitions_error': None,
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        message = window.findChild(QObject, 'standbyBlockStatus')
+        empty = window.findChild(QObject, 'noBlockingApps')
+        self.assertTrue(message.property('visible'))
+        self.assertIn('Firefox video', message.property('text'))
+        self.assertFalse(empty.property('visible'))
+        backend._service_data['fail_safe_reason'] = None
+        backend.changed.emit()
+        app.processEvents()
+        self.assertFalse(message.property('visible'))
+        self.assertTrue(empty.property('visible'))
+        engine.deleteLater()
+
     def test_chromium_browser_audio_options_are_independent(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)

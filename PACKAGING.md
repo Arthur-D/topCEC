@@ -67,6 +67,8 @@ AT-SPI fallback detects audio only.
 The extensions require access to sites and their frames to inspect video
 elements. Browser-restricted pages and inaccessible frames cannot be inspected;
 video inside closed shadow roots or non-HTML players may not be detected.
+When video status or display matching is unknown, the Standby page shows the
+fail-safe reason instead of reporting that no apps are blocking standby.
 The extensions send active tab titles and per-tab audio and video flags locally
 to topCEC so it can match playback with a KWin display. They do not send URLs
 or page contents. Reload existing tabs after installing or updating an extension.

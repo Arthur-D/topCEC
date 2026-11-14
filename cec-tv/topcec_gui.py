@@ -591,6 +591,15 @@ class GuiBackend(QObject):
             return 'The host has not reported Plasma idle-inhibition status.'
         return ''
 
+    @Property(str, notify=changed)
+    def standbyBlockMessage(self):
+        reason = self._service_data.get('fail_safe_reason')
+        if (self.backendAvailable and self._service_status == 'running'
+                and isinstance(reason, str) and reason
+                and not reason.startswith('App standby block: ')):
+            return 'Automatic standby blocked: ' + reason
+        return ''
+
     def _set_service_data(self, data):
         previous = self._service_data.get('installed_apps')
         self._service_data = data
