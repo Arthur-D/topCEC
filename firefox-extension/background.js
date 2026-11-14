@@ -32,7 +32,7 @@ async function videoState(tabId) {
                 return null;
             }
         }));
-        return states.includes(null) ? null : states.some(Boolean);
+        return states.some(Boolean) ? true : (states.includes(null) ? null : false);
     } catch (_error) {
         return null;
     }
