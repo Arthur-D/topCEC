@@ -1518,6 +1518,8 @@ def self_test():
     import unittest
     from types import SimpleNamespace
 
+    test_output = 'DP-3'
+
     class Checks(unittest.TestCase):
         def permission_guidance(self, *, device_gid=50, mode=stat.S_IFCHR | 0o660,
                                 members=(), process_groups=(), primary_gid=100,
@@ -1611,7 +1613,7 @@ def self_test():
             self.assertFalse(timer.expired)
 
         def test_timer(self):
-            timer = Timer(0)
+            timer = Timer(0, timeout=60)
             self.assertIsNone(timer.tick(59.9))
             self.assertIn('TV in standby', timer.tick(60))
             self.assertIsNone(timer.tick(61))
@@ -1619,7 +1621,7 @@ def self_test():
             self.assertIsNone(timer.activity(63))
 
         def test_fail_safe(self):
-            timer = Timer(0)
+            timer = Timer(0, timeout=60)
             self.assertIsNone(timer.tick(100, True))
             self.assertIsNone(timer.tick(159))
             self.assertIn('TV in standby', timer.tick(160))
@@ -1716,11 +1718,11 @@ def self_test():
                 {'title': sounding.name, 'audio': True}])
 
         def test_process_window_identity(self):
-            rows = [{"pid": 10, "title": "Web App", "output": TARGET},
-                    {"pid": 20, "title": "Firefox fake title", "output": TARGET}]
+            rows = [{"pid": 10, "title": "Web App", "output": test_output},
+                    {"pid": 20, "title": "Firefox fake title", "output": test_output}]
             paths = {10: "/app/lib/firefox/firefox-bin", 20: "/app/chromium/chrome"}
             self.assertEqual(json.loads(firefox_window_snapshot(json.dumps(rows), paths.__getitem__)),
-                             [{"title": "Web App", "output": TARGET}])
+                             [{"title": "Web App", "output": test_output}])
             def inaccessible(pid):
                 raise ProcessLookupError("process disappeared")
             with self.assertRaises(OSError):
@@ -1733,17 +1735,17 @@ def self_test():
         def test_snapshots(self):
             m = Mapping(15)
             self.assertIsNotNone(m.health(0, True))
-            self.assertTrue(m.snapshot(json.dumps([{'title': 'A', 'output': TARGET}]), 0))
-            self.assertEqual(m.output('A', Counter({'A': 1}), 1), TARGET)
+            self.assertTrue(m.snapshot(json.dumps([{'title': 'A', 'output': test_output}]), 0))
+            self.assertEqual(m.output('A', Counter({'A': 1}), 1), test_output)
             # Rename removes the old title immediately, not after a TTL.
-            m.snapshot(json.dumps([{'title': 'B', 'output': TARGET}]), 2)
-            self.assertNotIn(('A', TARGET), m.reports)
+            m.snapshot(json.dumps([{'title': 'B', 'output': test_output}]), 2)
+            self.assertNotIn(('A', test_output), m.reports)
             # A move replaces the previous output instead of creating ambiguity.
             m.snapshot(json.dumps([{'title': 'B', 'output': 'HDMI-A-1'}]), 3)
             self.assertEqual(m.output('B', Counter({'B': 1}), 4), 'HDMI-A-1')
-            m.report(TARGET, 'B', 4)
+            m.report(test_output, 'B', 4)
             self.assertEqual(len(m.reports), 1)
-            rows = [{'title': 'B', 'output': TARGET}] * 2
+            rows = [{'title': 'B', 'output': test_output}] * 2
             m.snapshot(json.dumps(rows), 5)
             self.assertIsNone(m.output('B', Counter({'B': 1}), 6))
             self.assertFalse(m.snapshot('[{}]', 7))
@@ -1787,24 +1789,24 @@ def self_test():
 
         def test_match_diagnostics(self):
             m = Mapping(15)
-            m.snapshot(json.dumps([{'title': 'New title', 'output': TARGET}]), 10)
+            m.snapshot(json.dumps([{'title': 'New title', 'output': test_output}]), 10)
             frames = [{'title': 'Old title', 'audio': True}]
             diag = MatchDiagnostics()
             lines = diag.update(frames, m, 11, 10.5)
             details = json.loads(lines[1].split(': ', 1)[1])
             self.assertEqual(details['mangler_i_AT_SPI'], ['New title'])
             self.assertEqual(details['bare_i_AT_SPI'], ['Old title'])
-            self.assertEqual(details['KWin'][0]['skjerm'], TARGET)
+            self.assertEqual(details['KWin'][0]['skjerm'], test_output)
             self.assertIn('0.5 s', lines[0])
             self.assertEqual(diag.update(frames, m, 12, 10.5), [])
             resolved = [{'title': 'New title', 'audio': True}]
             self.assertIn('2.0 s', diag.update(resolved, m, 13, 12)[0])
             self.assertEqual(diag.update(resolved, m, 14, 12), [])
             # Diagnostics must not change the matching input or its result.
-            self.assertEqual(m.output('New title', Counter({'New title': 1}), 14), TARGET)
+            self.assertEqual(m.output('New title', Counter({'New title': 1}), 14), test_output)
 
         def run_monitor_steps(self, steps, diagnostics_enabled=True, config_path=None,
-                              timeout=int(DEFAULT_TIMEOUT), target=TARGET,
+                              timeout=int(DEFAULT_TIMEOUT), target=test_output,
                               input_error=None, recovery_action=None,
                               input_error_after=0, equipment_result=None,
                               equipment_failure=None, equipment_updates=None):
@@ -2035,7 +2037,7 @@ def self_test():
                         for action in ('on', 'off'):
                             with self.assertRaisesRegex(RuntimeError, 'configuration-only'):
                                 receiver.RequestPower(action)
-                        receiver.Report('Mouse-activity: ' + TARGET)
+                        receiver.Report('Mouse-activity: ' + test_output)
                         config = {
                             **initial, 'target_output': 'DP-1',
                             'devices': ['/dev/input/by-id/selected-keyboard'],
@@ -2087,7 +2089,7 @@ def self_test():
                     self.assertEqual(result.power.activity.call_count, expected)
             legacy = self.run_monitor_steps([
                 (0, None, None, None, None, ['TV-aktivitet: mus'])])
-            legacy.power.activity.assert_called_once()
+            legacy.power.activity.assert_not_called()
 
         def test_runtime_startup_messages_reflect_configured_timeout(self):
             custom = self.run_monitor_steps([(0, None, None)], timeout=600)
@@ -2103,7 +2105,7 @@ def self_test():
                           custom.status['fail_safe_reason'])
 
         def test_runtime_match_diagnostics(self):
-            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            snapshot = json.dumps([{'title': 'New title', 'output': test_output}])
             mismatch = (json.dumps({'ok': True, 'frames': [
                 {'title': 'Old title', 'audio': False}]}), '', 0)
             match = (json.dumps({'ok': True, 'frames': [
@@ -2129,10 +2131,10 @@ def self_test():
                               if not message.startswith('MATCH-DIAG:')], baseline.all_messages)
 
         def test_mismatch_keeps_standby_blocked_until_matching_recovers(self):
-            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            snapshot = json.dumps([{'title': 'New title', 'output': test_output}])
             mismatch = (json.dumps({'ok': True, 'frames': [
                 {'title': 'Old title', 'audio': False}]}), '', 0)
-            steps = [(0, snapshot, None, None, TARGET)]
+            steps = [(0, snapshot, None, None, test_output)]
             for now in range(1, 12):
                 steps.append((now, snapshot, mismatch if now % 3 == 1 else None))
             pending = self.run_monitor_steps(steps, timeout=1)
@@ -2148,7 +2150,7 @@ def self_test():
             self.assertIsNone(recovered.status['fail_safe_reason'])
 
         def test_runtime_invalid_scans_preserve_match_diagnostics(self):
-            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            snapshot = json.dumps([{'title': 'New title', 'output': test_output}])
             mismatch = (json.dumps({'ok': True, 'frames': []}), '', 0)
             match = (json.dumps({'ok': True, 'frames': [
                 {'title': 'New title', 'audio': False}]}), '', 0)
@@ -2174,7 +2176,7 @@ def self_test():
                     self.assertIn('matching restored', recovered.messages[-1])
 
         def test_runtime_stale_observations_preserve_match_diagnostics(self):
-            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            snapshot = json.dumps([{'title': 'New title', 'output': test_output}])
             mismatch = (json.dumps({'ok': True, 'frames': []}), '', 0)
             cases = {
                 'no scan': [(0, snapshot, None)],
@@ -2200,7 +2202,7 @@ def self_test():
                     self.assertEqual(result.update.call_count, calls[name])
 
         def test_dbus_status_and_manual_control_api(self):
-            snapshot = json.dumps([{'title': 'Firefox', 'output': TARGET}])
+            snapshot = json.dumps([{'title': 'Firefox', 'output': test_output}])
             result = self.run_monitor_steps([(0, snapshot, None)])
             status = json.loads(result.receiver.GetStatus())
             self.assertEqual(status['service'], 'running')
@@ -2247,7 +2249,7 @@ def self_test():
 
         def test_webextension_audio_uses_active_window_display_without_atspi(self):
             window_map = json.dumps([
-                {'title': 'TV video — Mozilla Firefox', 'output': TARGET},
+                {'title': 'TV video — Mozilla Firefox', 'output': test_output},
             ])
             media = json.dumps({
                 'version': 1,
@@ -2258,7 +2260,7 @@ def self_test():
                 }],
             })
             result = self.run_monitor_steps([
-                (0, window_map, None, media, TARGET)])
+                (0, window_map, None, media, test_output)])
             self.assertTrue(result.status['playback_active'])
             self.assertIsNone(result.status['fail_safe_reason'])
             self.assertIsNone(result.status['firefox_audio_error'])
@@ -2269,17 +2271,17 @@ def self_test():
         def test_matching(self):
             m = Mapping(15)
             frames = [{'title': 'Preferences — Mozilla Firefox', 'audio': True}]
-            self.assertEqual(audio_state(frames, m, 0), (False, True))
-            m.report(TARGET, frames[0]['title'], 0)
-            self.assertEqual(audio_state(frames, m, 1), (True, False))
-            self.assertEqual(audio_state(frames * 2, m, 1), (False, True))
+            self.assertEqual(audio_state(frames, m, 0, test_output), (False, True))
+            m.report(test_output, frames[0]['title'], 0)
+            self.assertEqual(audio_state(frames, m, 1, test_output), (True, False))
+            self.assertEqual(audio_state(frames * 2, m, 1, test_output), (False, True))
             m.report('HDMI-A-1', frames[0]['title'], 1)
-            self.assertEqual(audio_state(frames, m, 2), (False, True))
-            self.assertEqual(audio_state(frames, m, 17), (False, True))
+            self.assertEqual(audio_state(frames, m, 2, test_output), (False, True))
+            self.assertEqual(audio_state(frames, m, 17, test_output), (False, True))
             m.report('HDMI-A-1', frames[0]['title'], 18)
-            self.assertEqual(audio_state(frames, m, 18), (False, False))
+            self.assertEqual(audio_state(frames, m, 18, test_output), (False, False))
             frames[0]['audio'] = False
-            self.assertEqual(audio_state(frames, m, 99), (False, False))
+            self.assertEqual(audio_state(frames, m, 99, test_output), (False, False))
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(Checks)
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1

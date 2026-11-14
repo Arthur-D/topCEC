@@ -1050,19 +1050,7 @@ Kirigami.ApplicationWindow {
                         SelectableLabel {
                             Layout.fillWidth: true
                             wrapMode: Text.Wrap
-                            text: "3. Before first start, configure the correct display, CEC adapter, and input devices with the native host GUI. Once the service is started, you can configure it here even if input initialization fails:"
-                        }
-                        Controls.TextArea {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 34
-                            readOnly: true
-                            selectByMouse: true
-                            wrapMode: TextEdit.NoWrap
-                            text: "~/.local/bin/topcec-gui"
-                        }
-                        SelectableLabel {
-                            Layout.fillWidth: true
-                            text: "4. Enable and start the user service:"
+                            text: "3. Start the host service. CEC stays off until you configure a TV display and adapter:"
                         }
                         Controls.TextArea {
                             Layout.fillWidth: true
@@ -1075,7 +1063,7 @@ Kirigami.ApplicationWindow {
                         SelectableLabel {
                             Layout.fillWidth: true
                             wrapMode: Text.Wrap
-                            text: "5. Return here. The GUI reconnects when the service appears; you can also retry now."
+                            text: "4. Return here to configure your display and adapter. Use Retry Connection if needed."
                         }
                         RowLayout {
                             CopyableButton {
