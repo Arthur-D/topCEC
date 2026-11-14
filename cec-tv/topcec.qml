@@ -186,6 +186,10 @@ Kirigami.ApplicationWindow {
         return inputPaths().filter(path => !inputDetected(path))
     }
 
+    function unstableInputs() {
+        return savedInputPaths().split("\n").filter(path => /^\/dev\/input\/event\d+$/.test(path))
+    }
+
     function inputSelectionSummary() {
         let summary = inputPaths().length + " selected"
         let unlistedCount = unresolvedInputs().length
@@ -1485,6 +1489,32 @@ Kirigami.ApplicationWindow {
                                 text: root.inputSelectionSummary()
                             }
                         }
+                        SelectableLabel {
+                            objectName: "retainedInputs"
+                            Layout.fillWidth: true
+                            visible: root.unresolvedInputs().length > 0
+                            text: "Unlisted input paths\n"
+                                + root.unresolvedInputs().map(path => root.retainedValue(path)).join("\n")
+                                + "\nReconnect the devices or remove these paths if they are no longer needed."
+                        }
+                        CopyableButton {
+                            objectName: "removeUndetectedInputs"
+                            text: "Remove unlisted inputs"
+                            visible: root.unresolvedInputs().length > 0
+                            onClicked: {
+                                devicesField.text = root.inputPaths().filter(path => root.inputDetected(path)).join("\n")
+                                topcec.rememberInputDraft(root.savedInputPaths())
+                                root.markSettingsDirty()
+                            }
+                        }
+                        SelectableLabel {
+                            objectName: "unstableInputs"
+                            Layout.fillWidth: true
+                            visible: root.unstableInputs().length > 0
+                            text: "Some selected devices only have /dev/input/event paths. "
+                                + "These can change after reconnecting or restarting; check your selection if saving fails.\n"
+                                + root.unstableInputs().join("\n")
+                        }
                         SurfaceFrame {
                             objectName: "inputFormCard"
                             Layout.fillWidth: true
@@ -1576,22 +1606,6 @@ Kirigami.ApplicationWindow {
                                     enabled: root.inputPaths().length > 0
                                     onClicked: topcec.copyText(root.inputPaths().join("\n"))
                                 }
-                            }
-                        }
-                        SelectableLabel {
-                            objectName: "retainedInputs"
-                            Layout.fillWidth: true
-                            visible: root.unresolvedInputs().length > 0
-                            text: "Unlisted input paths\n"
-                                + root.unresolvedInputs().map(path => root.retainedValue(path)).join("\n")
-                        }
-                        CopyableButton {
-                            objectName: "removeUndetectedInputs"
-                            text: "Remove unlisted inputs"
-                            visible: root.unresolvedInputs().length > 0
-                            onClicked: {
-                                devicesField.text = root.inputPaths().filter(path => root.inputDetected(path)).join("\n")
-                                root.markSettingsDirty()
                             }
                         }
                         DisclosureButton {

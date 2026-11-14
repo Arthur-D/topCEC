@@ -76,7 +76,10 @@ native GUI instead, use `flatpak run net.local.topcec` explicitly.
 Settings save automatically after a short pause. A running host applies the
 changes without restarting. An offline native GUI saves for the next start.
 Saved hardware paths are retained when hardware disappears; choose a replacement
-or explicitly remove unlisted inputs.
+or explicitly remove unlisted inputs in **Input**. A missing selected input can
+prevent settings from being applied: reconnect it or remove its unlisted path.
+Devices without a stable alias may appear as `/dev/input/eventN`; those numbers
+can change on reconnect or restart, so check the selection before saving.
 If saving fails, the draft and error remain visible without repeatedly retrying.
 Correct the settings or use **Retry saving** after resolving the error.
 

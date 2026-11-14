@@ -493,6 +493,7 @@ class GuiChecks(unittest.TestCase):
             keyboard = self.input_choice(engine, window, '/dev/input/by-path/keyboard')
             mouse = self.input_choice(engine, window, '/dev/input/by-id/mouse')
             self.assertTrue(keyboard.property('checked'))
+            self.assertFalse(window.findChild(QObject, 'unstableInputs').property('visible'))
             self.assertFalse(mouse.property('checked'))
             QMetaObject.invokeMethod(mouse, 'forceActiveFocus')
             QTest.keyClick(window, Qt.Key.Key_Space)
@@ -567,6 +568,48 @@ class GuiChecks(unittest.TestCase):
             self.assertEqual(load_config(host_path)['devices'], saved['devices'])
             fresh_engine.deleteLater()
             engine.deleteLater()
+
+    def test_removing_unlisted_input_replaces_failed_draft_and_saves(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        self.autosave_patch.stop()
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        initial = {'schema_version': 1, **DEFAULT_CONFIG,
+                   'devices': ['/dev/input/event16', '/dev/input/event17']}
+        backend._config_reply(0, self.reply(initial))
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.setProperty('currentSection', 3)
+        backend._equipment_reply(0, self.reply({
+            'outputs': [], 'adapters': [],
+            'inputs': [{'path': '/dev/input/event16', 'label': 'Mouse'}],
+            'errors': []}))
+        app.processEvents()
+        self.assertIn('/dev/input/event17', window.findChild(QObject, 'retainedInputs').property('text'))
+        self.assertIn('/dev/input/event16', window.findChild(QObject, 'unstableInputs').property('text'))
+
+        requests = []
+        interface = Mock(isValid=Mock(return_value=True))
+        with patch.object(backend, '_service_interface', return_value=interface), \
+                patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                             requests.append((callback, json.loads(args[0])))), \
+                patch.object(backend, 'refresh'):
+            backend.rememberInputDraft('/dev/input/event16\n/dev/input/event17')
+            callback, _ = requests.pop()
+            callback(topcec_gui.QDBusMessage.createError(
+                'net.local.CecActivity.Error', 'No such file: /dev/input/event17'))
+            QMetaObject.invokeMethod(window.findChild(QObject, 'removeUndetectedInputs'), 'clicked')
+            callback, submitted = requests.pop()
+            self.assertEqual(submitted['devices'], ['/dev/input/event16'])
+            callback(self.reply({'accepted': True, 'applied_live': True, 'config': submitted}))
+            self.assertFalse(backend.hasInputDraft())
+            backend._save_pending_inputs()
+            self.assertEqual(requests, [])
+        self.assertEqual(backend.config['devices'], ['/dev/input/event16'])
+        engine.deleteLater()
 
     def test_save_confirmation_errors_and_new_drafts_are_not_discarded(self):
         app = QGuiApplication.instance() or QGuiApplication([])
