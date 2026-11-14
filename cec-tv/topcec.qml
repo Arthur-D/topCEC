@@ -414,7 +414,7 @@ Kirigami.ApplicationWindow {
     function powerStateText() {
         if (topcec.serviceStatus === "configuration-only"
                 && topcec.powerState === "unknown")
-            return "Configuration only"
+            return "No CEC-enabled TV detected"
         if (root.serviceHealthy) {
             if (!root.cecAdapterSelected)
                 return adapterField.availabilityKnown
@@ -1137,6 +1137,8 @@ Kirigami.ApplicationWindow {
                                     spacing: Kirigami.Units.smallSpacing
                                     SelectableLabel {
                                         objectName: "serviceStatusLabel"
+                                        Layout.minimumWidth: implicitWidth
+                                        wrapMode: TextEdit.NoWrap
                                         text: root.headerStatus + ","
                                         color: root.serviceHealthy
                                             ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.textColor

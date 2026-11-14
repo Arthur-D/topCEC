@@ -744,7 +744,10 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(window.findChild(QObject, 'serviceStatusLabel').property('text'),
                          'Configuration only,')
         self.assertEqual(
-            window.findChild(QObject, 'powerStateLabel').property('text'), 'Configuration only')
+            window.findChild(QObject, 'powerStateLabel').property('text'),
+            'No CEC-enabled TV detected')
+        self.assertEqual(
+            window.findChild(QObject, 'serviceStatusLabel').property('lineCount'), 1)
         power_state = window.findChild(QQuickItem, 'powerStateLabel')
         monitoring = window.findChild(QQuickItem, 'monitoringStatusRow')
         service_status = window.findChild(QQuickItem, 'serviceStatusLabel')
