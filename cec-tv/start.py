@@ -13,7 +13,13 @@ BASE = Path(__file__).resolve().parent
 
 
 def qdbus(*args, required=True):
-    result = subprocess.run(['/usr/bin/qdbus', *args], capture_output=True,
+    command = next((path for path in (
+        '/usr/bin/qdbus-qt6', '/usr/bin/qdbus6', '/usr/lib64/qt6/bin/qdbus',
+        '/usr/lib/qt6/bin/qdbus',
+    ) if os.access(path, os.X_OK)), None)
+    if command is None:
+        raise RuntimeError('Qt 6 qdbus was not found; install your Qt 6 D-Bus tools.')
+    result = subprocess.run([command, *args], capture_output=True,
                             text=True, timeout=10)
     if required and result.returncode:
         raise RuntimeError(result.stderr or result.stdout)
@@ -46,8 +52,6 @@ def main():
     command = ['/usr/bin/python3', str(BASE / 'monitor.py'), '--require-snapshot']
     if config_path:
         command += ['--config', str(config_path)]
-    else:
-        command += ['--kde-timeout']
     os.execv('/usr/bin/python3', command)
 
 

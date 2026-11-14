@@ -89,7 +89,11 @@ class ConfigurationChecks(unittest.TestCase):
         self.assertEqual(config['devices'], ['/dev/input/event42'])
         self.assertEqual(config['mute_labels'], DEFAULT_CONFIG['mute_labels'])
         self.assertTrue(config['consider_input_devices'])
-        self.assertTrue(config['firefox_audio_blocks_standby'])
+        self.assertFalse(config['firefox_audio_blocks_standby'])
+        self.assertTrue(validate_config({
+            'schema_version': SCHEMA_VERSION,
+            'firefox_audio_blocks_standby': True,
+        })['firefox_audio_blocks_standby'])
         self.assertIsNone(config['mouse_output'])
         self.assertIsNone(config['mouse_outputs'])
         self.assertEqual(config['axis_deadzone_percent'], 0.0)
@@ -233,7 +237,7 @@ class ConfigurationChecks(unittest.TestCase):
                         0)[-1]):
                 self.assertEqual(monitor.main(), 0)
 
-    def test_service_launcher_forwards_config_and_preserves_live_cec_guards(self):
+    def test_service_launch_reaches_monitor_and_respects_saved_cec_setting(self):
         def qdbus(*args, **kwargs):
             if args[0] == 'org.freedesktop.DBus':
                 return 'false'
@@ -243,18 +247,35 @@ class ConfigurationChecks(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'config.json'
-            path.write_text('{"schema_version": 1}', encoding='utf-8')
-            with patch('sys.argv', ['start.py', '--config', str(path)]), \
-                    patch.object(start, 'qdbus', side_effect=qdbus), \
-                    patch.object(start.os, 'execv') as execv:
-                start.main()
-            command = execv.call_args.args[1]
-            self.assertIn('--config', command)
-            self.assertIn(str(path), command)
-            self.assertNotIn('--cec', command)
-            self.assertIn('--require-snapshot', command)
-            self.assertNotIn('--kde-timeout', command)
-            self.assertNotIn('--device', command)
+            for enabled in (None, False, True):
+                with self.subTest(enabled=enabled):
+                    if enabled is not None:
+                        save_config(path, {
+                            'schema_version': 1, 'target_output': 'HDMI-A-1',
+                            'cec_port': '/dev/ttyACM0', 'cec_enabled': enabled,
+                        })
+                    def enter_monitor(executable, command):
+                        with patch('sys.argv', command[1:]), \
+                                patch.object(monitor, 'run', return_value=0) as run:
+                            self.assertEqual(monitor.main(), 0)
+                        args = run.call_args.args[0]
+                        self.assertIs(args.cec, bool(enabled))
+                        self.assertTrue(args.require_snapshot)
+                        self.assertEqual(args.config, str(path) if enabled is not None else None)
+                    with patch('sys.argv', ['start.py']), \
+                            patch.object(start, 'default_config_path', return_value=path), \
+                            patch.object(start, 'qdbus', side_effect=qdbus), \
+                            patch.object(start.os, 'execv', side_effect=enter_monitor) as execv:
+                        start.main()
+                    execv.assert_called_once()
+
+    def test_launcher_uses_qt6_qdbus(self):
+        with patch.object(start.os, 'access', side_effect=lambda path, _: path in (
+                '/usr/bin/qdbus', '/usr/bin/qdbus-qt6')), \
+                patch.object(start.subprocess, 'run',
+                             return_value=SimpleNamespace(stdout='true', returncode=0)) as run:
+            self.assertEqual(start.qdbus('org.kde.KWin'), 'true')
+        self.assertEqual(run.call_args.args[0], ['/usr/bin/qdbus-qt6', 'org.kde.KWin'])
 
     def test_service_launcher_validates_config_before_loading_bridges(self):
         with patch('sys.argv', ['start.py', '--config', '/missing/topcec.json']), \
@@ -302,8 +323,8 @@ class ConfigurationChecks(unittest.TestCase):
                 patch.object(start.os, 'execv') as execv:
             start.main()
         command = execv.call_args.args[1]
-        self.assertIn('--kde-timeout', command)
         self.assertNotIn('--cec', command)
+        self.assertNotIn('--config', command)
         self.assertNotIn('--device', command)
         self.assertFalse(any('/dev/input/by-id/' in value for value in command))
 

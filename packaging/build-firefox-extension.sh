@@ -13,7 +13,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 source = Path(sys.argv[1])
 target = Path(sys.argv[2])
 with ZipFile(target, 'w', compression=ZIP_DEFLATED) as archive:
-    for name in ('manifest.json', 'background.js'):
+    for name in ('manifest.json', 'background.js', 'video.js'):
         path = source / name
         if not path.is_file():
             raise SystemExit(f'Missing Firefox extension file: {path}')

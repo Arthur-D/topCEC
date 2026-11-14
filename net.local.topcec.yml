@@ -24,6 +24,7 @@ modules:
       - install -D -m 0755 packaging/flatpak/topcec-gui /app/bin/topcec-gui
       - install -D -m 0644 packaging/topcec-gui.desktop /app/share/applications/net.local.topcec.desktop
       - install -D -m 0644 cec-tv/net.local.topcec.svg /app/share/icons/hicolor/scalable/apps/net.local.topcec.svg
+      - install -D -m 0644 packaging/net.local.topcec.metainfo.xml /app/share/metainfo/net.local.topcec.metainfo.xml
     sources:
       - type: dir
         path: .

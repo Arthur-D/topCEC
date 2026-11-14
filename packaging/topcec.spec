@@ -3,7 +3,7 @@
 %global _userunitdir %{_prefix}/lib/systemd/user
 
 Name:           topcec
-Version:        %{_topcec_version}
+Version:        0.1.0
 Release:        1%{?dist}
 Summary:        Per-display HDMI-CEC power management for KDE Plasma
 License:        GPL-3.0-or-later
@@ -16,9 +16,12 @@ Requires:       python3-gobject
 Requires:       python3-evdev
 Requires:       python3-pyatspi
 Requires:       systemd
-Requires:       /usr/bin/qdbus
+Requires:       /usr/bin/qdbus-qt6
 Requires:       /usr/bin/kreadconfig6
 Requires:       /usr/bin/cec-client
+Requires:       /usr/bin/gdbus
+Requires:       /usr/bin/kscreen-doctor
+BuildRequires:  python3
 
 %description
 topCEC monitors KDE Wayland activity and Firefox audio accessibility state to
@@ -29,8 +32,9 @@ graphical session and is not enabled automatically.
 Summary:        Optional Kirigami control panel for topCEC
 Requires:       %{name} = %{version}-%{release}
 Requires:       python3-pyside6
-Requires:       kirigami
-Requires:       /usr/bin/kscreen-doctor
+Requires:       kf6-kirigami
+Requires:       kf6-kirigami-addons
+Requires:       qt6-qtdeclarative
 
 %description gui
 Optional PySide6/Kirigami graphical settings and manual-control client. The
@@ -52,6 +56,7 @@ install -m 0644 cec-tv/activity.js \
     cec-tv/configuration.py \
     cec-tv/equipment.py \
     cec-tv/firefox_media.py \
+    cec-tv/chromium_media.py \
     cec-tv/standby_apps.py \
     cec-tv/firefox.js \
     cec-tv/monitor.py \
@@ -61,12 +66,23 @@ install -m 0644 cec-tv/activity.js \
     %{buildroot}%{_topcec_appdir}/cec-tv/
 install -m 0755 cec-tv/firefox-native-host.py \
     %{buildroot}%{_topcec_appdir}/cec-tv/firefox-native-host.py
+install -m 0755 cec-tv/chromium-native-host.py \
+    %{buildroot}%{_topcec_appdir}/cec-tv/chromium-native-host.py
 install -d %{buildroot}%{_prefix}/lib/mozilla/native-messaging-hosts
 install -m 0644 packaging/net.local.topcec.media.json \
     %{buildroot}%{_prefix}/lib/mozilla/native-messaging-hosts/net.local.topcec.media.json
 install -d %{buildroot}%{_datadir}/topcec/firefox-extension
-install -m 0644 firefox-extension/manifest.json firefox-extension/background.js \
+install -m 0644 firefox-extension/manifest.json firefox-extension/background.js firefox-extension/video.js \
     %{buildroot}%{_datadir}/topcec/firefox-extension/
+(cd firefox-extension && python3 -m zipfile -c \
+    %{buildroot}%{_datadir}/topcec/topcec-firefox-media.zip manifest.json background.js video.js)
+install -d %{buildroot}%{_datadir}/topcec/chromium-extension \
+    %{buildroot}%{_datadir}/topcec/packaging %{buildroot}%{_datadir}/topcec/cec-tv
+install -m 0644 chromium-extension/manifest.json chromium-extension/background.js chromium-extension/video.js \
+    %{buildroot}%{_datadir}/topcec/chromium-extension/
+install -m 0755 packaging/setup-chromium-extension.py \
+    %{buildroot}%{_datadir}/topcec/packaging/
+install -m 0755 cec-tv/chromium-native-host.py %{buildroot}%{_datadir}/topcec/cec-tv/
 install -d %{buildroot}%{_userunitdir}
 install -m 0644 packaging/topcec.service \
     %{buildroot}%{_userunitdir}/topcec.service
@@ -93,7 +109,7 @@ install -D -m 0644 cec-tv/net.local.topcec.svg \
 
 %files
 %license LICENSE
-%doc README.md PROVENANCE.md
+%doc README.md PACKAGING.md RELEASE-AUDIT.md PROVENANCE.md
 %dir %{_topcec_appdir}
 %dir %{_topcec_appdir}/cec-tv
 %{_topcec_appdir}/cec-tv/activity.js
@@ -104,9 +120,11 @@ install -D -m 0644 cec-tv/net.local.topcec.svg \
 %{_topcec_appdir}/cec-tv/configuration.py
 %{_topcec_appdir}/cec-tv/equipment.py
 %{_topcec_appdir}/cec-tv/firefox_media.py
+%{_topcec_appdir}/cec-tv/chromium_media.py
 %{_topcec_appdir}/cec-tv/standby_apps.py
 %{_topcec_appdir}/cec-tv/native_messaging.py
 %{_topcec_appdir}/cec-tv/firefox-native-host.py
+%{_topcec_appdir}/cec-tv/chromium-native-host.py
 %{_topcec_appdir}/cec-tv/firefox.js
 %{_topcec_appdir}/cec-tv/monitor.py
 %{_topcec_appdir}/cec-tv/providers.py
@@ -116,6 +134,11 @@ install -D -m 0644 cec-tv/net.local.topcec.svg \
 %dir %{_datadir}/topcec
 %{_datadir}/topcec/firefox-extension/manifest.json
 %{_datadir}/topcec/firefox-extension/background.js
+%{_datadir}/topcec/firefox-extension/video.js
+%{_datadir}/topcec/topcec-firefox-media.zip
+%{_datadir}/topcec/chromium-extension/
+%{_datadir}/topcec/packaging/
+%{_datadir}/topcec/cec-tv/
 
 %files gui
 %{_bindir}/topcec-gui

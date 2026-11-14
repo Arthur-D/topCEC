@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from configuration import (
     validate_config, mouse_outputs,
 )
 from firefox_media import FirefoxWebExtensionProvider
+from chromium_media import BROWSERS, ChromiumMedia
 from standby_apps import (InhibitionHistory, PlasmaInhibitions, decode_windows,
                           forced_inhibitions, is_screen_inhibition, matching_inhibitions,
                           observed_apps)
@@ -43,6 +45,62 @@ SCAN_MAX_AGE = 8.0
 
 def log(message):
     print(time.strftime('[%H:%M:%S]'), message, flush=True)
+
+
+def browser_setup(request):
+    if not isinstance(request, dict) or set(request) != {
+            'browser', 'flatpak', 'extension_id', 'grant_access'}:
+        raise ValueError('Invalid browser setup request')
+    browser, flatpak = request['browser'], request['flatpak']
+    extension_id, grant_access = request['extension_id'], request['grant_access']
+    if (not isinstance(browser, str) or (browser not in BROWSERS and browser != 'firefox')
+            or type(flatpak) is not bool or type(grant_access) is not bool
+            or not isinstance(extension_id, str)
+            or (extension_id and not re.fullmatch('[a-p]{32}', extension_id))
+            or (grant_access and (not flatpak or not extension_id))):
+        raise ValueError('Invalid browser setup options or extension ID')
+    if browser == 'firefox':
+        if extension_id or grant_access:
+            raise ValueError('Firefox does not use a Chromium extension ID or Flatpak grant')
+        extension = Path(__file__).resolve().parent.parent / 'firefox-extension'
+        if not extension.is_dir():
+            extension = Path('/usr/share/topcec/firefox-extension')
+        if not all((extension / name).is_file()
+                   for name in ('manifest.json', 'background.js')):
+            raise RuntimeError('Firefox extension files are not installed; update topCEC.')
+        return {
+            'browser': browser, 'extension': str(extension), 'flatpak': flatpak,
+            'registered': True, 'access_granted': False,
+        }
+    script = Path(__file__).resolve().parent.parent / 'packaging/setup-chromium-extension.py'
+    if not script.is_file():
+        script = Path('/usr/share/topcec/packaging/setup-chromium-extension.py')
+    if not script.is_file():
+        raise RuntimeError('Browser setup is not installed; update the host installation.')
+    command = [sys.executable, str(script), browser, '--json']
+    if flatpak:
+        command.append('--flatpak')
+    if extension_id:
+        command += ['--extension-id', extension_id]
+    if grant_access:
+        command.append('--grant-flatpak-access')
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError('Browser setup failed: ' + str(error)) from error
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or 'Browser setup failed without details')
+    try:
+        response = json.loads(result.stdout)
+    except (ValueError, TypeError) as error:
+        raise RuntimeError('Invalid browser setup response') from error
+    if (not isinstance(response, dict) or response.get('browser') != browser
+            or response.get('flatpak') is not flatpak
+            or not isinstance(response.get('extension'), str)
+            or type(response.get('registered')) is not bool
+            or type(response.get('access_granted')) is not bool):
+        raise RuntimeError('Invalid browser setup response')
+    return response
 
 
 def input_group_command(username, gid, local_path='/etc/group',
@@ -719,12 +777,14 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         media_provider = FirefoxMediaProvider()
     mapping = Mapping(args.mapping_ttl)
     webextension_media = FirefoxWebExtensionProvider()
+    chromium_media = ChromiumMedia()
     match_diagnostics = MatchDiagnostics()
     selector = selectors.DefaultSelector()
     devices = {}
     focus = None
     worker = None
     worker_labels = None
+    scan_generation = worker_generation = 0
     worker_started = next_scan = 0.0
     frames = []
     scan_stamp = None
@@ -761,7 +821,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'mouse_outputs': getattr(args, 'mouse_outputs', None),
         'mute_labels': DEFAULT_CONFIG['mute_labels'] if args.mute_label is None else args.mute_label,
         'firefox_audio_blocks_standby': getattr(
-            args, 'firefox_audio_blocks_standby', True),
+            args, 'firefox_audio_blocks_standby',
+            DEFAULT_CONFIG['firefox_audio_blocks_standby']),
+        'chromium_audio_blocks_standby': getattr(args, 'chromium_audio_blocks_standby', []),
+        'firefox_video_blocks_standby': getattr(args, 'firefox_video_blocks_standby', False),
+        'chromium_video_blocks_standby': getattr(args, 'chromium_video_blocks_standby', []),
         'idle_inhibition_apps': getattr(args, 'idle_inhibition_apps', []),
         'idle_inhibition_exceptions': getattr(args, 'idle_inhibition_exceptions', []),
         'force_inhibition_apps': getattr(args, 'force_inhibition_apps', []),
@@ -859,6 +923,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         nonlocal selector, devices, activity_provider, runtime_config, startup_error
         nonlocal power, kde_settings, target_output, worker, frames, scan_stamp, scan_error, next_scan
         nonlocal previous_status, previous_playback
+        nonlocal scan_generation
         replacing_power = (config['cec_enabled'] != (power is not None)
                            or (power is not None and config['cec_port'] != runtime_config['cec_port']))
         if replacing_power and power is not None and (
@@ -941,9 +1006,16 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         old_kde, kde_settings = kde_settings, staged_kde
         if old_kde is not None and old_kde is not kde_settings:
             retire(old_kde, 'Old KDE timeout reader')
-        if saved['mute_labels'] != old_config['mute_labels'] or startup_error:
+        if (saved['mute_labels'] != old_config['mute_labels'] or startup_error
+                or saved['firefox_audio_blocks_standby']
+                != old_config['firefox_audio_blocks_standby']):
+            if (saved['firefox_audio_blocks_standby']
+                    != old_config['firefox_audio_blocks_standby']):
+                scan_generation += 1
             frames, scan_stamp = [], None
-            scan_error = 'Waiting for a scan with the updated mute-tab labels'
+            scan_error = ('Waiting for a scan with the updated mute-tab labels'
+                          if saved['mute_labels'] != old_config['mute_labels']
+                          else 'Waiting for the first AT-SPI scan')
             next_scan = 0
         if saved['target_output'] != old_config['target_output']:
             for state in devices.values():
@@ -979,6 +1051,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         log('Settings saved and applied live; service not restarted.')
         return saved
 
+    browser_setup_lock = threading.Lock()
+
     class Receiver(dbus.service.Object):
         @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='')
         def Report(self, message):
@@ -1003,6 +1077,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             elif message.startswith("Desktop-snapshot: "):
                 first = mapping.snapshot_stamp is None
                 raw_snapshot = message[len("Desktop-snapshot: "):]
+                if not chromium_media.update_windows(raw_snapshot, time.monotonic()):
+                    log('Browser window snapshot unavailable: ' + chromium_media.error)
                 try:
                     app_windows = decode_windows(raw_snapshot)
                     app_windows_stamp = time.monotonic()
@@ -1034,9 +1110,23 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
 
         @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
         def GetStatus(self):
+            now = time.monotonic()
+            report_ttl = runtime_config['mapping_ttl_seconds']
+            extension_reports = {
+                'firefox': (webextension_media.stamp is not None
+                            and now - webextension_media.stamp <= report_ttl),
+                **{
+                    browser: any(
+                        kind == browser and now - stamp <= report_ttl
+                        for (kind, _instance), (_windows, stamp)
+                        in chromium_media.snapshots.items())
+                    for browser in BROWSERS
+                },
+            }
             return json.dumps({
                 **status_snapshot, 'configuration_saved': config_path.is_file(),
                 'settings_apply': 'live', 'process_id': os.getpid(),
+                'browser_extension_reports': extension_reports,
                 'installed_apps': equipment_snapshot.get('apps'),
                 'installed_apps_error': equipment_snapshot.get(
                     'apps_error', 'Installed app discovery has not completed'),
@@ -1057,6 +1147,30 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         @dbus.service.method('net.local.CecActivity', in_signature='', out_signature='s')
         def GetEquipment(self):
             return json.dumps(equipment_snapshot, sort_keys=True)
+
+        @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='s',
+                             async_callbacks=('reply', 'fail'))
+        def SetupBrowser(self, payload, reply, fail):
+            if not browser_setup_lock.acquire(blocking=False):
+                fail(dbus.DBusException('Another browser setup is already in progress.'))
+                return
+            payload = str(payload)
+            def work():
+                try:
+                    result = json.dumps(browser_setup(json.loads(payload)))
+                except (ValueError, TypeError, RuntimeError) as error:
+                    message = str(error)
+                    log('Browser setup failed: ' + message)
+                    GLib.idle_add(lambda: (fail(dbus.DBusException(message)), False)[1])
+                else:
+                    GLib.idle_add(lambda: (reply(result), False)[1])
+                finally:
+                    browser_setup_lock.release()
+            try:
+                threading.Thread(target=work, daemon=True).start()
+            except RuntimeError as error:
+                browser_setup_lock.release()
+                fail(dbus.DBusException('Could not start browser setup: ' + str(error)))
 
         @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='s')
         def ApplySettings(self, serialized_config):
@@ -1094,12 +1208,25 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 raise dbus.DBusException(str(error))
             return json.dumps({'accepted': True, 'action': str(action)})
 
+    class BrowserReceiver(dbus.service.Object):
+        @dbus.service.method('net.local.topcec.BrowserMedia', in_signature='s', out_signature='')
+        def Report(self, payload):
+            try:
+                chromium_media.update(str(payload), time.monotonic())
+            except (ValueError, TypeError, json.JSONDecodeError) as error:
+                log('Invalid browser extension snapshot: ' + str(error))
+                raise dbus.DBusException('Invalid browser extension snapshot: ' + str(error))
+
     bus = dbus.SessionBus()
     plasma_inhibitions = PlasmaInhibitions(bus, dbus)
     try:
         name = dbus.service.BusName('net.local.CecActivity', bus=bus,
                                    do_not_queue=True)
         receiver = Receiver(bus, '/net/local/CecActivity')
+        media_bus = dbus.SessionBus(private=True)
+        media_name = dbus.service.BusName('net.local.topcec.BrowserMedia', bus=media_bus,
+                                         do_not_queue=True)
+        media_receiver = BrowserReceiver(media_bus, '/net/local/topcec/BrowserMedia')
     except dbus.DBusException as error:
         log('Cannot own the D-Bus name. Stop the existing monitor first: ' + str(error))
         return 2
@@ -1140,7 +1267,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     loop = GLib.MainLoop()
     def poll():
         nonlocal worker, worker_started, next_scan, frames, scan_stamp
-        nonlocal worker_labels
+        nonlocal worker_labels, worker_generation
         nonlocal scan_error, previous_status, warning_reported, previous_playback
         nonlocal startup_error, selector
         plasma_inhibitions.poll(time.monotonic())
@@ -1206,6 +1333,13 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 except BlockingIOError:
                     pass
             now = time.monotonic()
+            if worker is not None and (
+                    not runtime_config['firefox_audio_blocks_standby']
+                    or worker_generation != scan_generation):
+                if worker.poll() is None:
+                    worker.kill()
+                worker.communicate()
+                worker = None
             if worker is not None:
                 if worker.poll() is not None:
                     output, errors = worker.communicate()
@@ -1227,7 +1361,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     worker = None
                     scan_error = 'AT-SPI did not respond within 5 seconds'
                     next_scan = now + SCAN_INTERVAL
-            if worker is None and now >= next_scan:
+            if (runtime_config['firefox_audio_blocks_standby']
+                    and worker is None and now >= next_scan):
                 command = [sys.executable, str(Path(__file__).resolve()), '--atspi-scan']
                 for label in args.mute_label:
                     command += ['--mute-label', label]
@@ -1235,6 +1370,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                                           stderr=subprocess.PIPE, text=True)
                 worker_started = now
                 worker_labels = list(args.mute_label)
+                worker_generation = scan_generation
             reason = None
             audible = False
             firefox_audio_error = None
@@ -1295,6 +1431,45 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 runtime_config['force_inhibition_apps'], equipment_snapshot.get('apps') or [],
                 app_windows, app_windows_stamp is not None
                 and now - app_windows_stamp <= mapping.ttl, media_outputs))
+            if runtime_config['firefox_video_blocks_standby'] and media_outputs:
+                video_states = [
+                    webextension_media.video_state(mapping, now, output, mapping.ttl)
+                    for output in media_outputs
+                ]
+                if any(state is None for state in video_states):
+                    reason = reason or 'Firefox video extension is unavailable or stale'
+                if any(state is not None and state[1] for state in video_states):
+                    reason = reason or 'Firefox video state or display is unknown'
+                if any(state is not None and state[0] for state in video_states):
+                    blocking_apps.append({
+                        'app': 'Mozilla Firefox', 'reason': 'Video',
+                        'identityUnknown': False, 'locationUnknown': False})
+            browser_errors = {}
+            browser_video_errors = {}
+            for browser in runtime_config['chromium_audio_blocks_standby']:
+                if not media_outputs:
+                    continue
+                playing, error = chromium_media.state(
+                    browser, media_outputs, now, mapping.ttl)
+                if error:
+                    browser_errors[browser] = error
+                    reason = reason or (BROWSERS[browser][0] + ' audio: ' + error)
+                elif playing:
+                    blocking_apps.append({
+                        'app': BROWSERS[browser][0], 'reason': 'Audio',
+                        'identityUnknown': False, 'locationUnknown': False})
+            for browser in runtime_config['chromium_video_blocks_standby']:
+                if not media_outputs:
+                    continue
+                playing, error = chromium_media.state(
+                    browser, media_outputs, now, mapping.ttl, video=True)
+                if error:
+                    browser_video_errors[browser] = error
+                    reason = reason or (BROWSERS[browser][0] + ' video: ' + error)
+                elif playing:
+                    blocking_apps.append({
+                        'app': BROWSERS[browser][0], 'reason': 'Video',
+                        'identityUnknown': False, 'locationUnknown': False})
             if media_outputs and inhibition_error:
                 reason = reason or inhibition_error
             if blocking_apps:
@@ -1351,9 +1526,12 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 'fail_safe_reason': reason,
                 'playback_active': audible,
                 'firefox_audio_error': firefox_audio_error,
+                'chromium_audio_errors': browser_errors,
+                'chromium_video_errors': browser_video_errors,
                 'blocking_apps': blocking_apps,
                 'inhibitions_error': inhibition_error,
-                'scan_status': scan_error,
+                'scan_status': (scan_error if runtime_config['firefox_audio_blocks_standby']
+                                else 'Firefox audio detection disabled'),
             })
         except Exception as error:
             # An input disconnect or callback failure must never become silence.
@@ -1407,7 +1585,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             state['device'].close()
         selector.close()
         # Keep D-Bus objects referenced for the entire loop lifetime.
-        del receiver, name
+        del receiver, name, media_receiver, media_name
+        media_bus.close()
         if kde_settings:
             kde_settings.close()
         if power and (not startup_error or power.process is not None or power.may_be_off):
@@ -1419,6 +1598,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
 def self_test():
     import unittest
     from types import SimpleNamespace
+
+    test_output = 'DP-3'
 
     class Checks(unittest.TestCase):
         def permission_guidance(self, *, device_gid=50, mode=stat.S_IFCHR | 0o660,
@@ -1513,7 +1694,7 @@ def self_test():
             self.assertFalse(timer.expired)
 
         def test_timer(self):
-            timer = Timer(0)
+            timer = Timer(0, timeout=60)
             self.assertIsNone(timer.tick(59.9))
             self.assertIn('TV in standby', timer.tick(60))
             self.assertIsNone(timer.tick(61))
@@ -1521,7 +1702,7 @@ def self_test():
             self.assertIsNone(timer.activity(63))
 
         def test_fail_safe(self):
-            timer = Timer(0)
+            timer = Timer(0, timeout=60)
             self.assertIsNone(timer.tick(100, True))
             self.assertIsNone(timer.tick(159))
             self.assertIn('TV in standby', timer.tick(160))
@@ -1642,11 +1823,11 @@ def self_test():
                 self.assertFalse(is_firefox_accessible_process(10, executable))
 
         def test_process_window_identity(self):
-            rows = [{"pid": 10, "title": "Web App", "output": TARGET},
-                    {"pid": 20, "title": "Firefox fake title", "output": TARGET}]
+            rows = [{"pid": 10, "title": "Web App", "output": test_output},
+                    {"pid": 20, "title": "Firefox fake title", "output": test_output}]
             paths = {10: "/app/lib/firefox/firefox-bin", 20: "/app/chromium/chrome"}
             self.assertEqual(json.loads(firefox_window_snapshot(json.dumps(rows), paths.__getitem__)),
-                             [{"title": "Web App", "output": TARGET}])
+                             [{"title": "Web App", "output": test_output}])
             def inaccessible(pid):
                 raise ProcessLookupError("process disappeared")
             with self.assertRaises(OSError):
@@ -1659,17 +1840,17 @@ def self_test():
         def test_snapshots(self):
             m = Mapping(15)
             self.assertIsNotNone(m.health(0, True))
-            self.assertTrue(m.snapshot(json.dumps([{'title': 'A', 'output': TARGET}]), 0))
-            self.assertEqual(m.output('A', Counter({'A': 1}), 1), TARGET)
+            self.assertTrue(m.snapshot(json.dumps([{'title': 'A', 'output': test_output}]), 0))
+            self.assertEqual(m.output('A', Counter({'A': 1}), 1), test_output)
             # Rename removes the old title immediately, not after a TTL.
-            m.snapshot(json.dumps([{'title': 'B', 'output': TARGET}]), 2)
-            self.assertNotIn(('A', TARGET), m.reports)
+            m.snapshot(json.dumps([{'title': 'B', 'output': test_output}]), 2)
+            self.assertNotIn(('A', test_output), m.reports)
             # A move replaces the previous output instead of creating ambiguity.
             m.snapshot(json.dumps([{'title': 'B', 'output': 'HDMI-A-1'}]), 3)
             self.assertEqual(m.output('B', Counter({'B': 1}), 4), 'HDMI-A-1')
-            m.report(TARGET, 'B', 4)
+            m.report(test_output, 'B', 4)
             self.assertEqual(len(m.reports), 1)
-            rows = [{'title': 'B', 'output': TARGET}] * 2
+            rows = [{'title': 'B', 'output': test_output}] * 2
             m.snapshot(json.dumps(rows), 5)
             self.assertIsNone(m.output('B', Counter({'B': 1}), 6))
             self.assertFalse(m.snapshot('[{}]', 7))
@@ -1713,24 +1894,24 @@ def self_test():
 
         def test_match_diagnostics(self):
             m = Mapping(15)
-            m.snapshot(json.dumps([{'title': 'New title', 'output': TARGET}]), 10)
+            m.snapshot(json.dumps([{'title': 'New title', 'output': test_output}]), 10)
             frames = [{'title': 'Old title', 'audio': True}]
             diag = MatchDiagnostics()
             lines = diag.update(frames, m, 11, 10.5)
             details = json.loads(lines[1].split(': ', 1)[1])
             self.assertEqual(details['mangler_i_AT_SPI'], ['New title'])
             self.assertEqual(details['bare_i_AT_SPI'], ['Old title'])
-            self.assertEqual(details['KWin'][0]['skjerm'], TARGET)
+            self.assertEqual(details['KWin'][0]['skjerm'], test_output)
             self.assertIn('0.5 s', lines[0])
             self.assertEqual(diag.update(frames, m, 12, 10.5), [])
             resolved = [{'title': 'New title', 'audio': True}]
             self.assertIn('2.0 s', diag.update(resolved, m, 13, 12)[0])
             self.assertEqual(diag.update(resolved, m, 14, 12), [])
             # Diagnostics must not change the matching input or its result.
-            self.assertEqual(m.output('New title', Counter({'New title': 1}), 14), TARGET)
+            self.assertEqual(m.output('New title', Counter({'New title': 1}), 14), test_output)
 
         def run_monitor_steps(self, steps, diagnostics_enabled=True, config_path=None,
-                              timeout=int(DEFAULT_TIMEOUT), target=TARGET,
+                              timeout=int(DEFAULT_TIMEOUT), target=test_output,
                               input_error=None, recovery_action=None,
                               input_error_after=0, equipment_result=None,
                               equipment_failure=None, equipment_updates=None):
@@ -1748,7 +1929,8 @@ def self_test():
 
             class Object:
                 def __init__(self, *args):
-                    context.receiver = self
+                    if args[1] == '/net/local/CecActivity':
+                        context.receiver = self
 
             def timeout_add(interval, callback):
                 if interval == 100:
@@ -1835,9 +2017,12 @@ def self_test():
             service = SimpleNamespace(
                 Object=Object, BusName=Mock(),
                 method=lambda *args, **kwargs: lambda method: method)
+            plasma_properties = Mock()
+            plasma_properties.Get.side_effect = (
+                lambda *args, reply_handler, **kwargs: reply_handler([]))
             dbus = SimpleNamespace(
                 service=service, SessionBus=Mock(return_value=session_bus),
-                DBusException=RuntimeError)
+                Interface=Mock(return_value=plasma_properties), DBusException=RuntimeError)
             loop = Mock()
             loop.run.side_effect = main_loop
             glib = SimpleNamespace(MainLoop=lambda: loop, timeout_add=timeout_add)
@@ -1860,6 +2045,7 @@ def self_test():
                     [device] * input_error_after + [input_error])
             args = SimpleNamespace(kde_timeout=False, cec=True, cec_port='unused',
                                    mapping_ttl=15, require_snapshot=True, device=['unused'],
+                                   firefox_audio_blocks_standby=True,
                                    mute_label=['Mute tab'], axis_deadzone_percent=2.0,
                                    rz_deadzone_percent=5.0,
                                    timeout_seconds=timeout,
@@ -1959,7 +2145,7 @@ def self_test():
                         for action in ('on', 'off'):
                             with self.assertRaisesRegex(RuntimeError, 'configuration-only'):
                                 receiver.RequestPower(action)
-                        receiver.Report('Mouse-activity: ' + TARGET)
+                        receiver.Report('Mouse-activity: ' + test_output)
                         config = {
                             **initial, 'target_output': 'DP-1',
                             'devices': ['/dev/input/by-id/selected-keyboard'],
@@ -2011,7 +2197,7 @@ def self_test():
                     self.assertEqual(result.power.activity.call_count, expected)
             legacy = self.run_monitor_steps([
                 (0, None, None, None, None, ['TV-aktivitet: mus'])])
-            legacy.power.activity.assert_called_once()
+            legacy.power.activity.assert_not_called()
 
         def test_runtime_startup_messages_reflect_configured_timeout(self):
             custom = self.run_monitor_steps([(0, None, None)], timeout=600)
@@ -2027,7 +2213,7 @@ def self_test():
                           custom.status['fail_safe_reason'])
 
         def test_runtime_match_diagnostics(self):
-            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            snapshot = json.dumps([{'title': 'New title', 'output': test_output}])
             mismatch = (json.dumps({'ok': True, 'frames': [
                 {'title': 'Old title', 'audio': False}]}), '', 0)
             match = (json.dumps({'ok': True, 'frames': [
@@ -2053,10 +2239,10 @@ def self_test():
                               if not message.startswith('MATCH-DIAG:')], baseline.all_messages)
 
         def test_mismatch_keeps_standby_blocked_until_matching_recovers(self):
-            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            snapshot = json.dumps([{'title': 'New title', 'output': test_output}])
             mismatch = (json.dumps({'ok': True, 'frames': [
                 {'title': 'Old title', 'audio': False}]}), '', 0)
-            steps = [(0, snapshot, None, None, TARGET)]
+            steps = [(0, snapshot, None, None, test_output)]
             for now in range(1, 12):
                 steps.append((now, snapshot, mismatch if now % 3 == 1 else None))
             pending = self.run_monitor_steps(steps, timeout=1)
@@ -2072,7 +2258,7 @@ def self_test():
             self.assertIsNone(recovered.status['fail_safe_reason'])
 
         def test_runtime_invalid_scans_preserve_match_diagnostics(self):
-            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            snapshot = json.dumps([{'title': 'New title', 'output': test_output}])
             mismatch = (json.dumps({'ok': True, 'frames': []}), '', 0)
             match = (json.dumps({'ok': True, 'frames': [
                 {'title': 'New title', 'audio': False}]}), '', 0)
@@ -2098,7 +2284,7 @@ def self_test():
                     self.assertIn('matching restored', recovered.messages[-1])
 
         def test_runtime_stale_observations_preserve_match_diagnostics(self):
-            snapshot = json.dumps([{'title': 'New title', 'output': TARGET}])
+            snapshot = json.dumps([{'title': 'New title', 'output': test_output}])
             mismatch = (json.dumps({'ok': True, 'frames': []}), '', 0)
             cases = {
                 'no scan': [(0, snapshot, None)],
@@ -2124,7 +2310,7 @@ def self_test():
                     self.assertEqual(result.update.call_count, calls[name])
 
         def test_dbus_status_and_manual_control_api(self):
-            snapshot = json.dumps([{'title': 'Firefox', 'output': TARGET}])
+            snapshot = json.dumps([{'title': 'Firefox', 'output': test_output}])
             result = self.run_monitor_steps([(0, snapshot, None)])
             status = json.loads(result.receiver.GetStatus())
             self.assertEqual(status['service'], 'running')
@@ -2171,7 +2357,7 @@ def self_test():
 
         def test_webextension_audio_uses_active_window_display_without_atspi(self):
             window_map = json.dumps([
-                {'title': 'TV video — Mozilla Firefox', 'output': TARGET},
+                {'title': 'TV video — Mozilla Firefox', 'output': test_output},
             ])
             media = json.dumps({
                 'version': 1,
@@ -2182,7 +2368,7 @@ def self_test():
                 }],
             })
             result = self.run_monitor_steps([
-                (0, window_map, None, media, TARGET)])
+                (0, window_map, None, media, test_output)])
             self.assertTrue(result.status['playback_active'])
             self.assertIsNone(result.status['fail_safe_reason'])
             self.assertIsNone(result.status['firefox_audio_error'])
@@ -2193,17 +2379,17 @@ def self_test():
         def test_matching(self):
             m = Mapping(15)
             frames = [{'title': 'Preferences — Mozilla Firefox', 'audio': True}]
-            self.assertEqual(audio_state(frames, m, 0), (False, True))
-            m.report(TARGET, frames[0]['title'], 0)
-            self.assertEqual(audio_state(frames, m, 1), (True, False))
-            self.assertEqual(audio_state(frames * 2, m, 1), (False, True))
+            self.assertEqual(audio_state(frames, m, 0, test_output), (False, True))
+            m.report(test_output, frames[0]['title'], 0)
+            self.assertEqual(audio_state(frames, m, 1, test_output), (True, False))
+            self.assertEqual(audio_state(frames * 2, m, 1, test_output), (False, True))
             m.report('HDMI-A-1', frames[0]['title'], 1)
-            self.assertEqual(audio_state(frames, m, 2), (False, True))
-            self.assertEqual(audio_state(frames, m, 17), (False, True))
+            self.assertEqual(audio_state(frames, m, 2, test_output), (False, True))
+            self.assertEqual(audio_state(frames, m, 17, test_output), (False, True))
             m.report('HDMI-A-1', frames[0]['title'], 18)
-            self.assertEqual(audio_state(frames, m, 18), (False, False))
+            self.assertEqual(audio_state(frames, m, 18, test_output), (False, False))
             frames[0]['audio'] = False
-            self.assertEqual(audio_state(frames, m, 99), (False, False))
+            self.assertEqual(audio_state(frames, m, 99, test_output), (False, False))
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(Checks)
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
@@ -2249,6 +2435,9 @@ def main():
     args.mouse_output = config['mouse_output']
     args.mouse_outputs = config['mouse_outputs']
     args.firefox_audio_blocks_standby = config['firefox_audio_blocks_standby']
+    args.chromium_audio_blocks_standby = config['chromium_audio_blocks_standby']
+    args.firefox_video_blocks_standby = config['firefox_video_blocks_standby']
+    args.chromium_video_blocks_standby = config['chromium_video_blocks_standby']
     args.idle_inhibition_apps = config['idle_inhibition_apps']
     args.idle_inhibition_exceptions = config['idle_inhibition_exceptions']
     args.force_inhibition_apps = config['force_inhibition_apps']

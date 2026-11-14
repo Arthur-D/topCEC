@@ -26,6 +26,10 @@ class StandbyAppsChecks(unittest.TestCase):
             self.assertCountEqual(observed_apps(history.names, [
                 {'id': 'player.desktop', 'name': 'Player'}]),
                 [{'id': 'player.desktop', 'name': 'Player'}, {'id': 'Steam', 'name': 'Steam'}])
+            self.assertEqual(observed_apps({'Player'}, [
+                {'id': 'player.desktop', 'name': 'Player', 'launcher_group': 'player.desktop'},
+                {'id': 'player-copy.desktop', 'name': 'Player', 'launcher_group': 'player.desktop'},
+            ]), [{'id': 'Player', 'name': 'Player', 'launcher_group': 'player.desktop'}])
             path.write_text('broken', encoding='utf-8')
             history = InhibitionHistory(path)
             history.observe([{'kind': 'idle', 'app': 'Other'}])
@@ -112,6 +116,26 @@ class StandbyAppsChecks(unittest.TestCase):
             requests, [], [], [], True, 'TV')[0]['identityUnknown'])
         self.assertEqual(matching_inhibitions(
             requests, ['Unrecognized'], [], [], True, 'TV'), [])
+
+    def test_browser_executable_request_matches_installed_browser_window(self):
+        for path, desktop, name, window_class in (
+            ('/app/chromium/chrome', 'org.chromium.Chromium', 'Chromium', 'chromium'),
+            ('/app/extra/chrome', 'com.google.Chrome', 'Google Chrome', 'google-chrome'),
+        ):
+            app_id = desktop + '.desktop'
+            requests = [{'kind': 'idle', 'app': path, 'reason': 'Video'}]
+            apps = [{'id': app_id, 'name': name, 'window_class': window_class}]
+            windows = [{'desktop': desktop, 'class': window_class, 'output': 'other'}]
+            with self.subTest(path=path):
+                self.assertEqual(
+                    matching_inhibitions(requests, [], apps, windows, True, 'TV'), [])
+                result = matching_inhibitions(requests, [], apps, windows, True, 'other')
+                self.assertEqual(len(result), 1)
+                self.assertFalse(result[0]['locationUnknown'])
+                self.assertFalse(result[0]['identityUnknown'])
+                for exceptions in ([path], [app_id]):
+                    self.assertEqual(
+                        matching_inhibitions(requests, exceptions, apps, windows, True, 'other'), [])
 
     def test_ambiguous_names_and_unknown_window_outputs_block_safely(self):
         requests = [{'kind': 'idle', 'app': 'Player', 'reason': 'Playing'}]

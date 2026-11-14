@@ -6,6 +6,8 @@ from pathlib import Path
 import tempfile
 import time
 
+from chromium_media import BROWSERS, executable_browser
+
 SERVICE = 'org.kde.Solid.PowerManagement.PolicyAgent'
 PATH = '/org/kde/Solid/PowerManagement/PolicyAgent'
 PROPERTIES = 'org.freedesktop.DBus.Properties'
@@ -38,10 +40,13 @@ def observed_apps(names, apps):
         key = app_key(name)
         matches = [app for app in apps
                    if key in (app_key(app['id']), app_key(app['name']))]
+        groups = {app.get('launcher_group') for app in matches}
         if len(matches) == 1:
             app = matches[0]
         else:
             app = {'id': name, 'name': name}
+            if len(groups) == 1 and None not in groups:
+                app['launcher_group'] = groups.pop()
         result[app['id']] = app
     return list(result.values())
 
@@ -154,7 +159,13 @@ def matching_inhibitions(inhibitions, exceptions, apps, windows, windows_fresh, 
         identity = app_key(request['app'])
         candidates = ({identity} if identity in identities
                       else aliases.get(identity, {identity}))
-        if candidates <= exceptions:
+        if identity.startswith('/'):
+            browser = executable_browser(identity)
+            if browser in BROWSERS:
+                browser_apps = identities.keys() & set(BROWSERS[browser][1])
+                if len(browser_apps) == 1:
+                    candidates = browser_apps
+        if candidates <= exceptions or identity in exceptions:
             continue
         ambiguous = len(candidates) != 1
         window_keys = set()
@@ -172,8 +183,8 @@ def matching_inhibitions(inhibitions, exceptions, apps, windows, windows_fresh, 
             'app': request['app'],
             'reason': request['reason'],
             'locationUnknown': unknown,
-            'identityUnknown': ambiguous or (identity not in identities
-                                             and identity not in aliases and not app_windows),
+            'identityUnknown': ambiguous or (not candidates & identities.keys()
+                                             and not app_windows),
         })
     return selected
 

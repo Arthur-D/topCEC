@@ -1,0 +1,125 @@
+name: Verify and package
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing version tag to build and publish
+        required: true
+        type: string
+  push:
+    branches: [main, 'release-retry/v*']
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  fedora:
+    outputs:
+      release_tag: ${{ steps.assets.outputs.release_tag }}
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - name: Install build tools
+        run: dnf -y install git rpm-build python3 dbus-daemon nodejs desktop-file-utils
+      - name: Select source ref
+        id: source
+        env:
+          MANUAL_RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          tag="$MANUAL_RELEASE_TAG"
+          case "$GITHUB_REF" in
+            refs/heads/release-retry/v*) tag="${GITHUB_REF_NAME#release-retry/}" ;;
+            refs/tags/v*) tag="$GITHUB_REF_NAME" ;;
+          esac
+          if [[ -n "$tag" ]]; then
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            printf 'ref=refs/tags/%s\nrelease_tag=%s\n' "$tag" "$tag" >> "$GITHUB_OUTPUT"
+          else
+            printf 'ref=%s\n' "$GITHUB_REF" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.source.outputs.ref }}
+      - name: Build and rebuild the Fedora RPMs
+        shell: bash
+        run: |
+          bash packaging/build-rpm.sh
+          rpmbuild --rebuild dist/*.src.rpm
+      - name: Install the RPMs and verify the payload
+        shell: bash
+        run: |
+          dnf -y install ./dist/*.noarch.rpm
+          desktop-file-validate /usr/share/applications/net.local.topcec.desktop
+          set +e
+          QT_QPA_PLATFORM=offscreen timeout 5s dbus-run-session -- topcec-gui
+          result=$?
+          test "$result" = 124
+      - name: Run hardware-free tests
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          for suite in self-test cec-power cec-power-state activity-policy providers \
+            firefox-media chromium-media standby-apps configuration equipment gui \
+            live-settings license packaging test_cec_live.py test_kde_settings.py \
+            check_fixed.py check_cec.py; do
+            python3 -B tests/run.py "$suite"
+          done
+          python3 -B tests/test_activity_bridge.py
+      - name: Stage release assets
+        id: assets
+        if: steps.source.outputs.release_tag != ''
+        env:
+          RELEASE_TAG: ${{ steps.source.outputs.release_tag }}
+        shell: bash
+        run: |
+          version="$(awk '$1 == "Version:" {print $2; exit}' packaging/topcec.spec)"
+          test "$RELEASE_TAG" = "v$version"
+          git -c "safe.directory=$GITHUB_WORKSPACE" archive \
+            --prefix="topcec-$version/" --format=tar.gz \
+            -o "dist/topcec-$version.tar.gz" HEAD
+          printf 'release_tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          (cd dist && sha256sum -- *.rpm *.tar.gz > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        if: steps.assets.outputs.release_tag != ''
+        with:
+          name: release-assets
+          path: |
+            dist/*.rpm
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  release:
+    needs: fedora
+    if: needs.fedora.outputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release
+      - name: Verify and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.fedora.outputs.release_tag }}
+        shell: bash
+        run: |
+          (cd release && sha256sum -c SHA256SUMS)
+          cat > "$RUNNER_TEMP/topcec-release.md" <<NOTES
+          topCEC manages HDMI-CEC standby and wake for one TV in a KDE Plasma 6 Wayland session.
+
+          - Install from the source archive, or install both Fedora 44 binary RPMs together. See the [installation guide](https://github.com/Arthur-D/topCEC/blob/$RELEASE_TAG/README.md).
+          - CEC stays off until you configure the TV display and adapter. The host service runs as your desktop user.
+          - The Flatpak GUI and browser audio bridges are optional. This release does not include a Flatpak binary or a signed Firefox add-on.
+          - Packages were built and checked in Fedora 44. A physical TV standby/wake cycle and startup at Plasma login are not covered by CI.
+          NOTES
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "topCEC $RELEASE_TAG" \
+            --notes-file "$RUNNER_TEMP/topcec-release.md" release/*

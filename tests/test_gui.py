@@ -73,6 +73,93 @@ class GuiChecks(unittest.TestCase):
         self.assertFalse(window.property('settingsDirty'))
         engine.deleteLater()
 
+    def test_failed_autosave_pauses_until_edit_or_explicit_retry(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        for failure in ('host', 'confirmation', 'validation'):
+            with self.subTest(failure=failure):
+                backend = GuiBackend(dbus_only=True)
+                backend._connection_state = 'connected'
+                backend._service_status = 'running'
+                engine = QQmlApplicationEngine()
+                engine.rootContext().setContextProperty('topcec', backend)
+                engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+                window = engine.rootObjects()[0]
+                app.processEvents()
+                window.findChild(QObject, 'timeoutMode').setProperty('currentIndex', 1)
+                window.findChild(QObject, 'autoSaveTimer').setProperty('interval', 30)
+                timeout = window.findChild(QObject, 'timeoutMinutes')
+                original = dict(backend.config)
+                requests = []
+                interface = Mock(isValid=Mock(return_value=True))
+                with patch.object(backend, '_service_interface', return_value=interface), \
+                        patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                                     requests.append((method, callback, args))), \
+                        patch.object(backend, 'refresh'), \
+                        patch.object(topcec_gui, 'config_from_settings',
+                                     side_effect=ValueError('Invalid setting') if failure == 'validation'
+                                     else config_from_settings):
+                    timeout.setProperty('value', 13)
+                    QMetaObject.invokeMethod(timeout, 'valueModified')
+                    QTest.qWait(80)
+                    if failure == 'validation':
+                        self.assertEqual(requests, [])
+                    else:
+                        self.assertEqual(len(requests), 1)
+                        _, callback, _ = requests.pop()
+                        callback(
+                            topcec_gui.QDBusMessage.createError(
+                                'net.local.CecActivity.Error',
+                                'Settings not applied: missing input device')
+                            if failure == 'host' else self.reply({'accepted': False}))
+                    message = backend.actionMessage
+                    for _ in range(3):
+                        backend.changed.emit()
+                        QTest.qWait(80)
+                    self.assertEqual(requests, [])
+                    self.assertEqual(backend.actionMessage, message)
+                    self.assertEqual(backend.config, original)
+                    self.assertTrue(window.property('settingsDirty'))
+                    self.assertEqual(timeout.property('value'), 13)
+                    self.assertIn('paused', window.findChild(
+                        QObject, 'settingsSaveStatus').property('text').lower())
+                with patch.object(backend, '_service_interface', return_value=interface), \
+                        patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                                     requests.append((method, callback, args))), \
+                        patch.object(backend, 'refresh'):
+                    timeout.setProperty('value', 14)
+                    QMetaObject.invokeMethod(timeout, 'valueModified')
+                    QTest.qWait(80)
+                    self.assertEqual(len(requests), 1)
+                    _, callback, _ = requests.pop()
+                    # A newer edit must still be queued even if the in-flight save fails.
+                    timeout.setProperty('value', 15)
+                    QMetaObject.invokeMethod(timeout, 'valueModified')
+                    QTest.qWait(80)
+                    self.assertEqual(requests, [])
+                    callback(topcec_gui.QDBusMessage.createError(
+                        'net.local.CecActivity.Error', 'Input device still missing'))
+                    QTest.qWait(80)
+                    self.assertEqual(len(requests), 1)
+                    _, callback, arguments = requests.pop()
+                    self.assertEqual(json.loads(arguments[0])['timeout_seconds'], 900)
+                    callback(topcec_gui.QDBusMessage.createError(
+                        'net.local.CecActivity.Error', 'Input device still missing'))
+                    QTest.qWait(80)
+                    self.assertEqual(requests, [])
+                    retry = window.findChild(QObject, 'retrySettingsButton')
+                    self.assertTrue(retry.property('visible'))
+                    QMetaObject.invokeMethod(retry, 'click')
+                    self.assertEqual(len(requests), 1)
+                    _, callback, arguments = requests.pop()
+                    callback(self.reply({'accepted': True, 'applied_live': True,
+                                         'config': json.loads(arguments[0])}))
+                    QTest.qWait(80)
+                    self.assertEqual(requests, [])
+                    self.assertFalse(window.property('settingsDirty'))
+                    self.assertFalse(retry.property('visible'))
+                engine.deleteLater()
+                app.processEvents()
+
     def test_autosave_retains_unavailable_equipment_and_empty_input_selection(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         for saved_status in (True, None):
@@ -131,6 +218,10 @@ class GuiChecks(unittest.TestCase):
         backend.config = {
             **DEFAULT_CONFIG, 'target_output': 'HDMI-A-2', 'cec_port': '/dev/mock-cec',
             'devices': [], 'consider_input_devices': False}
+        backend._service_data = {
+            'installed_apps': [{'id': 'firefox.desktop', 'name': 'Mozilla Firefox'}],
+            'observed_apps': [], 'active_inhibitor_apps': [],
+        }
         backend._set_equipment({
             'outputs': [{'path': 'HDMI-A-2', 'label': 'TV'},
                         {'path': 'DP-1', 'label': 'Monitor'}],
@@ -181,7 +272,7 @@ class GuiChecks(unittest.TestCase):
             self.assertEqual(method, 'ApplySettings')
             self.assertNotIn('DP-1', latest['mouse_outputs'])
             self.assertEqual(latest['idle_inhibition_apps'], [])
-            self.assertTrue(latest['firefox_audio_blocks_standby'])
+            self.assertFalse(latest['firefox_audio_blocks_standby'])
             callback(self.reply({'accepted': True, 'applied_live': True, 'config': latest}))
             self.assertFalse(window.property('settingsDirty'))
         engine.deleteLater()
@@ -232,6 +323,32 @@ class GuiChecks(unittest.TestCase):
                 self.assertFalse(backend.liveSettingsAvailable)
                 self.assertIn('remain pending', helper.property('text'))
                 engine.deleteLater()
+
+    def test_chromium_settings_require_a_compatible_host(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        old_config = {'schema_version': 1, **DEFAULT_CONFIG}
+        del old_config['chromium_audio_blocks_standby']
+        backend._config_reply(0, self.reply(old_config))
+        interface = Mock(isValid=Mock(return_value=True))
+        with patch.object(backend, 'refresh'), \
+                patch.object(backend, '_service_interface', return_value=interface), \
+                patch.object(backend, '_async_call') as call:
+            backend.applySettings({**self.values, 'chromiumAudioBlocksStandby': ['chrome']})
+            self.assertFalse(call.called)
+            self.assertIn('updated host backend', backend.actionMessage)
+            backend.applySettings(self.values)
+            payload = json.loads(call.call_args.args[3])
+            self.assertNotIn('chromium_audio_blocks_standby', payload)
+
+        backend._settings_in_flight = False
+        backend._config_reply(backend._refresh_generation, self.reply(
+            {'schema_version': 1, **DEFAULT_CONFIG, 'chromium_audio_blocks_standby': ['chrome']}))
+        with patch.object(backend, '_service_interface', return_value=interface), \
+                patch.object(backend, '_async_call') as call:
+            backend.applySettings({**self.values, 'chromiumAudioBlocksStandby': []})
+            payload = json.loads(call.call_args.args[3])
+            self.assertEqual(payload['chromium_audio_blocks_standby'], [])
 
     def test_rejected_live_input_draft_is_retained_without_repeated_open_attempts(self):
         self.autosave_patch.stop()
@@ -376,6 +493,7 @@ class GuiChecks(unittest.TestCase):
             keyboard = self.input_choice(engine, window, '/dev/input/by-path/keyboard')
             mouse = self.input_choice(engine, window, '/dev/input/by-id/mouse')
             self.assertTrue(keyboard.property('checked'))
+            self.assertFalse(window.findChild(QObject, 'unstableInputs').property('visible'))
             self.assertFalse(mouse.property('checked'))
             QMetaObject.invokeMethod(mouse, 'forceActiveFocus')
             QTest.keyClick(window, Qt.Key.Key_Space)
@@ -450,6 +568,48 @@ class GuiChecks(unittest.TestCase):
             self.assertEqual(load_config(host_path)['devices'], saved['devices'])
             fresh_engine.deleteLater()
             engine.deleteLater()
+
+    def test_removing_unlisted_input_replaces_failed_draft_and_saves(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        self.autosave_patch.stop()
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        initial = {'schema_version': 1, **DEFAULT_CONFIG,
+                   'devices': ['/dev/input/event16', '/dev/input/event17']}
+        backend._config_reply(0, self.reply(initial))
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.setProperty('currentSection', 3)
+        backend._equipment_reply(0, self.reply({
+            'outputs': [], 'adapters': [],
+            'inputs': [{'path': '/dev/input/event16', 'label': 'Mouse'}],
+            'errors': []}))
+        app.processEvents()
+        self.assertIn('/dev/input/event17', window.findChild(QObject, 'retainedInputs').property('text'))
+        self.assertIn('/dev/input/event16', window.findChild(QObject, 'unstableInputs').property('text'))
+
+        requests = []
+        interface = Mock(isValid=Mock(return_value=True))
+        with patch.object(backend, '_service_interface', return_value=interface), \
+                patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                             requests.append((callback, json.loads(args[0])))), \
+                patch.object(backend, 'refresh'):
+            backend.rememberInputDraft('/dev/input/event16\n/dev/input/event17')
+            callback, _ = requests.pop()
+            callback(topcec_gui.QDBusMessage.createError(
+                'net.local.CecActivity.Error', 'No such file: /dev/input/event17'))
+            QMetaObject.invokeMethod(window.findChild(QObject, 'removeUndetectedInputs'), 'clicked')
+            callback, submitted = requests.pop()
+            self.assertEqual(submitted['devices'], ['/dev/input/event16'])
+            callback(self.reply({'accepted': True, 'applied_live': True, 'config': submitted}))
+            self.assertFalse(backend.hasInputDraft())
+            backend._save_pending_inputs()
+            self.assertEqual(requests, [])
+        self.assertEqual(backend.config['devices'], ['/dev/input/event16'])
+        engine.deleteLater()
 
     def test_save_confirmation_errors_and_new_drafts_are_not_discarded(self):
         app = QGuiApplication.instance() or QGuiApplication([])
@@ -713,7 +873,11 @@ class GuiChecks(unittest.TestCase):
             self.assertIsNotNone(card)
         self.assertEqual(window.findChild(QObject, 'serviceStatusLabel').property('text'),
                          'Configuration only,')
-        self.assertEqual(window.findChild(QObject, 'powerStateLabel').property('text'), 'unknown')
+        self.assertEqual(
+            window.findChild(QObject, 'powerStateLabel').property('text'),
+            'No CEC-enabled TV detected')
+        self.assertEqual(
+            window.findChild(QObject, 'serviceStatusLabel').property('lineCount'), 1)
         power_state = window.findChild(QQuickItem, 'powerStateLabel')
         monitoring = window.findChild(QQuickItem, 'monitoringStatusRow')
         service_status = window.findChild(QQuickItem, 'serviceStatusLabel')
@@ -739,8 +903,29 @@ class GuiChecks(unittest.TestCase):
         self.assertTrue(adapter.property('acceptable'))
         self.assertFalse(adapter.property('detected'))
         self.assertFalse(turn_on.property('enabled'))
-        self.assertEqual(service_status.property('text'),
-                         'Monitoring, no CEC adapter selected')
+        self.assertEqual(service_status.property('text'), 'Monitoring,')
+        self.assertEqual(power_state.property('text'), 'No CEC adapter selected')
+        backend._set_equipment(None, 'Equipment detection failed')
+        app.processEvents()
+        self.assertEqual(power_state.property('text'), 'CEC adapter detection unavailable')
+        backend._set_equipment({
+            'outputs': [], 'adapters': [
+                {'path': config['cec_port'], 'label': 'Detected CEC adapter'}],
+            'inputs': [{'path': path, 'label': 'Detected input'}
+                       for path in config['devices']],
+            'errors': [],
+        }, 'Equipment refreshed')
+        app.processEvents()
+        self.assertEqual(power_state.property('text'), 'No display detected')
+        backend._set_equipment({
+            'outputs': [{'path': 'DP-1', 'label': 'Other display'}],
+            'adapters': [{'path': config['cec_port'], 'label': 'Detected CEC adapter'}],
+            'inputs': [{'path': path, 'label': 'Detected input'}
+                       for path in config['devices']],
+            'errors': [],
+        }, 'Equipment refreshed')
+        app.processEvents()
+        self.assertEqual(power_state.property('text'), 'No display selected')
         backend._set_equipment({
             'outputs': [{'path': config['target_output'], 'label': 'Detected display'}],
             'adapters': [{'path': config['cec_port'], 'label': 'Detected CEC adapter'}],
@@ -750,6 +935,7 @@ class GuiChecks(unittest.TestCase):
         }, 'Equipment refreshed')
         app.processEvents()
         self.assertTrue(turn_on.property('enabled'))
+        self.assertEqual(power_state.property('text'), 'turning on')
         backend._power_state = 'unknown'
         backend._service_status = 'configuration-only'
         backend.changed.emit()
@@ -1999,6 +2185,10 @@ class GuiChecks(unittest.TestCase):
         backend.config = {
             **DEFAULT_CONFIG, 'target_output': 'HDMI-A-2', 'cec_port': '/dev/mock-cec',
             'devices': []}
+        backend._service_data = {
+            'installed_apps': [{'id': 'firefox.desktop', 'name': 'Mozilla Firefox'}],
+            'observed_apps': [], 'active_inhibitor_apps': [],
+        }
         backend._set_equipment({
             'outputs': [{'path': 'DP-1', 'label': 'Monitor'},
                         {'path': 'HDMI-A-2', 'label': 'TV'}],
@@ -2017,7 +2207,7 @@ class GuiChecks(unittest.TestCase):
         firefox_audio = firefox_row.findChild(QObject, 'firefoxAudio')
         selector = window.findChild(QObject, 'mouseDisplayChoices')
         self.assertTrue(checkbox.property('checked'))
-        self.assertTrue(firefox_audio.property('checked'))
+        self.assertFalse(firefox_audio.property('checked'))
         QMetaObject.invokeMethod(firefox_audio, 'click')
         self.assertEqual(selector.property('count'), 2)
         legacy_values = json.loads(QQmlExpression(
@@ -2042,7 +2232,7 @@ class GuiChecks(unittest.TestCase):
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
         config = config_from_settings(backend.config, values)
         self.assertFalse(config['consider_input_devices'])
-        self.assertFalse(config['firefox_audio_blocks_standby'])
+        self.assertTrue(config['firefox_audio_blocks_standby'])
         self.assertEqual(config['mouse_outputs'], ['HDMI-A-2', 'DP-1'])
         backend._set_equipment({'outputs': [], 'adapters': [], 'inputs': [], 'errors': []}, '')
         app.processEvents()
@@ -2074,9 +2264,17 @@ class GuiChecks(unittest.TestCase):
                           'idle_inhibition_apps': ['removed.desktop']}
         backend._service_data = {
             'installed_apps': [{'id': 'player.desktop', 'name': 'Video Player'},
-                               {'id': 'editor.desktop', 'name': 'Editor'}],
-            'observed_apps': [{'id': 'archived.desktop', 'name': 'Archived'}],
-            'active_inhibitor_apps': [],
+                               {'id': 'editor.desktop', 'name': 'Editor',
+                                'launcher_group': 'editor.desktop'},
+                               {'id': 'editor-menu.desktop', 'name': 'Editor',
+                                'launcher_group': 'editor.desktop'},
+                               {'id': 'editor-handler.desktop', 'name': 'Editor',
+                                'menu_hidden': True},
+                               {'id': 'archived.desktop', 'name': 'Archived',
+                                'menu_hidden': True}],
+            'observed_apps': [{'id': 'player.desktop', 'name': 'Video Player'},
+                              {'id': 'archived.desktop', 'name': 'Archived'}],
+            'active_inhibitor_apps': [{'id': 'player.desktop', 'name': 'Video Player'}],
             'installed_apps_error': None,
             'inhibitions_error': None,
             'blocking_apps': [{'app': 'Player', 'reason': 'Playing',
@@ -2093,19 +2291,15 @@ class GuiChecks(unittest.TestCase):
                          'Can block screen standby')
         repeater = window.findChild(QObject, 'installedAppsScroll')
         self.assertEqual(repeater.property('count'), 3)
-        backend._service_data['active_inhibitor_apps'] = [
-            {'id': 'player.desktop', 'name': 'Video Player'}]
-        backend.changed.emit()
-        app.processEvents()
-        self.assertEqual(repeater.property('count'), 4)
-        self.assertFalse(window.property('settingsDirty'))
         engine.rootContext().setContextProperty('appChoicesRepeater', repeater)
         def item(index):
             return QQmlExpression(engine.rootContext(), window,
                                   f'appChoicesRepeater.itemAtIndex({index})').evaluate()[0]
-        player = item(0)
+        player = next(item(index) for index in range(repeater.property('count'))
+                      if item(index).objectName() == 'appRow:player.desktop')
+        removed = next(item(index) for index in range(repeater.property('count'))
+                       if item(index).objectName() == 'appRow:removed.desktop')
         self.assertEqual(player.objectName(), 'appRow:player.desktop')
-        removed = item(3)
         self.assertEqual(removed.objectName(), 'appRow:removed.desktop')
         allow = player.findChild(QObject, 'idleApp:player.desktop')
         self.assertEqual(allow.property('text'), 'Allow standby')
@@ -2155,16 +2349,28 @@ class GuiChecks(unittest.TestCase):
         search.setProperty('text', 'editor')
         app.processEvents()
         self.assertEqual(repeater.property('count'), 1)
+        search.setProperty('text', 'editor-menu.desktop')
+        app.processEvents()
+        self.assertEqual(repeater.property('count'), 1)
         editor = item(0)
         self.assertEqual(editor.objectName(), 'appRow:editor.desktop')
         QMetaObject.invokeMethod(editor.findChild(QObject, 'forceApp:editor.desktop'), 'click')
         window.findChild(QObject, 'appSearch').setProperty('text', '')
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         app.processEvents()
-        self.assertEqual(repeater.property('count'), 5)
+        self.assertEqual(repeater.property('count'), 4)
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
-        self.assertEqual(values['forceInhibitionApps'], ['player.desktop', 'editor.desktop'])
+        self.assertEqual(set(values['forceInhibitionApps']),
+                         {'player.desktop', 'editor.desktop', 'editor-menu.desktop'})
+        search.setProperty('text', '')
+        editor = next(item(index) for index in range(repeater.property('count'))
+                      if item(index).objectName().startswith('appRow:editor'))
+        QMetaObject.invokeMethod(editor.findChild(QObject, 'forceApp:editor.desktop'), 'click')
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertEqual(values['forceInhibitionApps'], ['player.desktop'])
+        window.findChild(QObject, 'autoSaveTimer').stop()
         engine.deleteLater()
 
     def test_firefox_detection_failure_is_not_reported_as_no_blockers(self):
@@ -2172,6 +2378,7 @@ class GuiChecks(unittest.TestCase):
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
         backend._service_status = 'running'
+        backend.config['firefox_audio_blocks_standby'] = True
         backend._service_data = {
             'firefox_audio_error': 'AT-SPI did not respond within 5 seconds',
             'blocking_apps': [], 'inhibitions_error': None,
@@ -2195,11 +2402,266 @@ class GuiChecks(unittest.TestCase):
         self.assertTrue(empty.property('visible'))
         engine.deleteLater()
 
+    def test_video_fail_safe_is_not_reported_as_no_blockers(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._service_data = {
+            'fail_safe_reason': 'Firefox video state or display is unknown',
+            'blocking_apps': [], 'inhibitions_error': None,
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        message = window.findChild(QObject, 'standbyBlockStatus')
+        empty = window.findChild(QObject, 'noBlockingApps')
+        self.assertTrue(message.property('visible'))
+        self.assertIn('Firefox video', message.property('text'))
+        self.assertFalse(empty.property('visible'))
+        backend._service_data['fail_safe_reason'] = None
+        backend.changed.emit()
+        app.processEvents()
+        self.assertFalse(message.property('visible'))
+        self.assertTrue(empty.property('visible'))
+        engine.deleteLater()
+
+    def test_chromium_browser_audio_options_are_independent(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        browsers = [{'id': 'chromium.desktop', 'name': 'Chromium'},
+                    {'id': 'google-chrome.desktop', 'name': 'Google Chrome'}]
+        backend._service_data = {'observed_apps': browsers, 'installed_apps': browsers,
+                                 'active_inhibitor_apps': browsers}
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        initial = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertEqual(initial['chromiumAudioBlocksStandby'], [])
+        QQmlExpression(engine.rootContext(), window, 'setChromiumAudio("chromium", true)').evaluate()
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertEqual(values['chromiumAudioBlocksStandby'], ['chromium'])
+        self.assertNotIn('chrome', values['chromiumAudioBlocksStandby'])
+        self.assertEqual(config_from_settings(backend.config, values)
+                         ['chromium_audio_blocks_standby'], ['chromium'])
+        window.findChild(QObject, 'autoSaveTimer').stop()
+        engine.deleteLater()
+
+    def test_detected_chromium_audio_option_shares_its_app_row(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        path = '/app/chromium/chrome'
+        chrome_path = '/app/extra/chrome'
+        backend.config = {**DEFAULT_CONFIG,
+                          'idle_inhibition_apps': ['org.chromium.Chromium.desktop']}
+        backend._service_data = {
+            'installed_apps': [{'id': 'org.chromium.Chromium.desktop', 'name': 'Chromium'},
+                               {'id': 'com.google.Chrome.desktop', 'name': 'Google Chrome'},
+                               {'id': 'org.mozilla.firefox.desktop', 'name': 'Mozilla Firefox'}],
+            'observed_apps': [{'id': path, 'name': path},
+                              {'id': chrome_path, 'name': chrome_path},
+                              {'id': 'firefox.desktop', 'name': 'Mozilla Firefox'}],
+            'active_inhibitor_apps': [{'id': path, 'name': path}],
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        row = self.app_row(engine, window, 0)
+        self.assertEqual(row.objectName(), 'appRow:' + path)
+        self.assertEqual(row.findChild(QObject, 'appName:' + path).property('text'), 'Chromium')
+        checkbox = row.findChild(QObject, 'browserAudio:chromium')
+        self.assertTrue(checkbox.property('visible'))
+        QMetaObject.invokeMethod(checkbox, 'click')
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        self.assertEqual(values['chromiumAudioBlocksStandby'], ['chromium'])
+        video = row.findChild(QObject, 'browserVideo:chromium')
+        self.assertTrue(video.property('visible'))
+        allow = row.findChild(QQuickItem, 'idleApp:' + path)
+        force = row.findChild(QQuickItem, 'forceApp:' + path)
+        audio_item = row.findChild(QQuickItem, 'browserAudio:chromium')
+        video_item = row.findChild(QQuickItem, 'browserVideo:chromium')
+        audio_position = audio_item.mapToItem(row, QPointF(0, 0))
+        video_position = video_item.mapToItem(row, QPointF(0, 0))
+        self.assertGreater(audio_position.y(), allow.mapToItem(row, QPointF(0, 0)).y())
+        self.assertGreater(audio_position.y(), force.mapToItem(row, QPointF(0, 0)).y())
+        self.assertAlmostEqual(video_position.y(), audio_position.y(), delta=1)
+        QMetaObject.invokeMethod(video, 'click')
+        QMetaObject.invokeMethod(checkbox, 'click')
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        config = config_from_settings(backend.config, values)
+        self.assertEqual(config['chromium_video_blocks_standby'], ['chromium'])
+        self.assertEqual(config['chromium_audio_blocks_standby'], [])
+        QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
+        app.processEvents()
+        choices = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(appChoices())').evaluate()[0])
+        chromium_rows = [item for item in choices if item['browserId'] == 'chromium']
+        self.assertEqual(len(chromium_rows), 1)
+        self.assertEqual(set(chromium_rows[0]['groupIds']),
+                         {path, 'org.chromium.Chromium.desktop'})
+        chrome_rows = [item for item in choices if item['name'] == 'Google Chrome']
+        self.assertEqual(len(chrome_rows), 1)
+        self.assertEqual(set(chrome_rows[0]['groupIds']),
+                         {chrome_path, 'com.google.Chrome.desktop'})
+        firefox_rows = [item for item in choices if item['isFirefox']]
+        self.assertEqual(len(firefox_rows), 1)
+        self.assertEqual(set(firefox_rows[0]['groupIds']),
+                         {'firefox.desktop', 'org.mozilla.firefox.desktop'})
+        row = self.app_row(engine, window, 0)
+        allow = row.findChild(QObject, 'idleApp:' + path)
+        self.assertFalse(allow.property('checked'))
+        QMetaObject.invokeMethod(allow, 'click')
+        app.processEvents()
+        self.assertEqual(json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+                         ['idleInhibitionApps'], [])
+        row = self.app_row(engine, window, 0)
+        QMetaObject.invokeMethod(row.findChild(QObject, 'idleApp:' + path), 'click')
+        app.processEvents()
+        self.assertEqual(set(json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+                             ['idleInhibitionApps']),
+                         {path, 'org.chromium.Chromium.desktop'})
+        for path, expected in (('/app/extra/google/chrome/chrome', 'chrome'),
+                               ('/app/brave/brave', 'brave'),
+                               ('/app/edge/msedge', 'edge'),
+                               ('/app/vivaldi/vivaldi-bin', 'vivaldi')):
+            result = QQmlExpression(
+                engine.rootContext(), window,
+                'browserForApp({id: ' + json.dumps(path) + '}).id').evaluate()[0]
+            self.assertEqual(result, expected)
+        window.findChild(QObject, 'autoSaveTimer').stop()
+        engine.deleteLater()
+
+    def test_browser_setup_guides_registration_with_explicit_flatpak_permission(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('width', 780)
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        QMetaObject.invokeMethod(window.findChild(QObject, 'browserSetupToggle'), 'click')
+        browser = window.findChild(QObject, 'setupBrowser')
+        installation = window.findChild(QObject, 'setupInstallation')
+        for control in (browser, installation):
+            self.assertGreater(control.property('width'), 100)
+            self.assertGreaterEqual(control.property('width') + 1,
+                                    control.property('implicitWidth'))
+        browser.setProperty('currentIndex', 0)
+        installation.setProperty('currentIndex', 0)
+        app.processEvents()
+        hardware_help = window.findChild(QObject, 'browserSetupHardwareHelp')
+        self.assertIn('No TV or CEC adapter is needed', hardware_help.property('text'))
+        report_status = window.findChild(QObject, 'browserExtensionReportStatus')
+        self.assertTrue(report_status.property('visible'))
+        self.assertIn('Waiting for a report', report_status.property('text'))
+        backend._service_data = {'browser_extension_reports': {'chromium': True}}
+        backend.changed.emit()
+        app.processEvents()
+        self.assertIn('sending fresh media reports', report_status.property('text'))
+        for control in (browser, installation):
+            self.assertGreaterEqual(control.property('width') + 1,
+                                    control.property('implicitWidth'))
+        requests = []
+        with patch.object(backend, '_service_interface', return_value=Mock(isValid=lambda: True)), \
+                patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                             requests.append((method, callback, json.loads(args[0])))):
+            QMetaObject.invokeMethod(window.findChild(QObject, 'prepareBrowserExtension'), 'click')
+            method, callback, request = requests.pop()
+            self.assertEqual(method, 'SetupBrowser')
+            self.assertEqual(request, {'browser': 'chromium', 'flatpak': True,
+                                       'extension_id': '', 'grant_access': False})
+            callback(self.reply({'extension': '/tmp/extension', 'registered': False,
+                                 'flatpak': True, 'access_granted': False}))
+            self.assertEqual(backend.browserSetupPath, '/tmp/extension')
+            grant = window.findChild(QObject, 'browserGrantAccess')
+            self.assertFalse(grant.property('checked'))
+            extension_id = window.findChild(QObject, 'browserExtensionId')
+            extension_id.setProperty('text', 'a' * 32)
+            QMetaObject.invokeMethod(window.findChild(QObject, 'registerBrowserExtension'), 'click')
+            _, callback, request = requests.pop()
+            self.assertFalse(request['grant_access'])
+            callback(self.reply({'extension': '/tmp/extension', 'registered': True,
+                                 'flatpak': True, 'access_granted': False}))
+            self.assertIn('still needs to be granted', backend.browserSetupMessage)
+            QMetaObject.invokeMethod(grant, 'click')
+            QMetaObject.invokeMethod(window.findChild(QObject, 'registerBrowserExtension'), 'click')
+            _, callback, request = requests.pop()
+            self.assertEqual(request['extension_id'], 'a' * 32)
+            self.assertTrue(request['grant_access'])
+            callback(self.reply({'extension': '/tmp/extension', 'registered': True,
+                                 'flatpak': True, 'access_granted': True}))
+            self.assertIn('restart', backend.browserSetupMessage)
+
+            browser.setProperty('currentIndex', 5)
+            installation.setProperty('currentIndex', 1)
+            QMetaObject.invokeMethod(window.findChild(QObject, 'prepareBrowserExtension'), 'click')
+            method, callback, request = requests.pop()
+            self.assertEqual(method, 'SetupBrowser')
+            self.assertEqual(request, {'browser': 'firefox', 'flatpak': False,
+                                       'extension_id': '', 'grant_access': False})
+            callback(self.reply({'browser': 'firefox', 'extension': '/tmp/firefox-extension',
+                                 'registered': True, 'flatpak': False,
+                                 'access_granted': False}))
+            self.assertIn('Mozilla-signed XPI', backend.browserSetupMessage)
+            self.assertIn('about:debugging', window.findChild(
+                QObject, 'browserSetupInstructions').property('text'))
+            self.assertFalse(window.findChild(QObject, 'browserExtensionId').property('visible'))
+            self.assertFalse(window.findChild(QObject, 'registerBrowserExtension').property('visible'))
+        engine.deleteLater()
+
+    def test_browser_setup_reports_unsupported_host_and_ignores_stale_replies(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        requests = []
+        with patch.object(backend, '_service_interface', return_value=Mock(isValid=lambda: True)), \
+                patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
+                             requests.append(callback)):
+            backend.setupBrowser('chromium', True, '', False)
+            callback = requests.pop()
+            backend.resetBrowserSetup()
+            callback(self.reply({'extension': '/old', 'registered': False,
+                                 'flatpak': True, 'access_granted': False}))
+            self.assertEqual(backend.browserSetupPath, '')
+            backend.setupBrowser('chromium', True, '', False)
+            requests.pop()(topcec_gui.QDBusMessage.createError(
+                'org.freedesktop.DBus.Error.UnknownMethod', 'No such method'))
+            self.assertIn('Update the host backend', backend.browserSetupMessage)
+            self.assertFalse(backend.browserSetupPending)
+
     def test_firefox_mismatch_warning_is_only_shown_in_diagnostics(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
         backend._service_status = 'running'
+        backend.config['firefox_audio_blocks_standby'] = True
         backend._standby_reason = (
             'Automatic standby blocked: KWin windows are missing from AT-SPI; waiting for a match')
         backend._service_data = {
@@ -2228,24 +2690,36 @@ class GuiChecks(unittest.TestCase):
         self.assertIn('Automatic standby is blocked', banner.property('text'))
         self.assertIn('missing from AT-SPI', banner.property('text'))
         self.assertIn('missing from AT-SPI', backend.diagnostics)
+        self.assertIn('accessibility.force_disabled to -1', backend.diagnostics)
+        self.assertTrue(window.findChild(QObject, 'firefoxAccessibilityHelp').property('visible'))
+        backend._service_data['firefox_audio_error'] = None
+        backend._update_diagnostics()
+        backend.changed.emit()
+        self.assertFalse(window.findChild(QObject, 'firefoxAccessibilityHelp').property('visible'))
+        backend._service_data['firefox_audio_error'] = 'Firefox WebExtension reports audio, but mapping is unknown'
+        backend._update_diagnostics()
+        self.assertNotIn('Firefox accessibility:', backend.diagnostics)
+        backend._service_data['firefox_audio_error'] = 'AT-SPI did not respond'
+        backend.config['firefox_audio_blocks_standby'] = False
+        backend._update_diagnostics()
+        self.assertIn('Firefox audio: disabled', backend.diagnostics)
+        self.assertNotIn('Firefox accessibility:', backend.diagnostics)
         engine.deleteLater()
 
-    def test_firefox_audio_row_uses_discovered_identity_or_audio_only_fallback(self):
+    def test_firefox_audio_row_uses_installed_identity(self):
         app = QGuiApplication.instance() or QGuiApplication([])
-        for app_id, retained in (('org.mozilla.firefox.desktop', False),
-                                 ('firefox.desktop', False),
-                                 ('firefox.desktop', True), (None, False)):
-            with self.subTest(app_id=app_id, retained=retained):
+        for app_id in ('org.mozilla.firefox.desktop', 'firefox.desktop'):
+            with self.subTest(app_id=app_id):
                 backend = GuiBackend(dbus_only=True)
                 backend._connection_state = 'connected'
                 backend._service_status = 'running'
                 backend._config_source = 'saved'
                 backend.config = {**DEFAULT_CONFIG, 'devices': [],
-                                  'idle_inhibition_apps': [app_id] if retained else []}
-                firefox = {'id': app_id, 'name': 'Mozilla Firefox'} if app_id else None
+                                  'idle_inhibition_apps': []}
+                firefox = {'id': app_id, 'name': 'Mozilla Firefox'}
                 backend._service_data = {
-                    'installed_apps': [firefox] if firefox and not retained else [],
-                    'observed_apps': [firefox] if firefox and not retained else [],
+                    'installed_apps': [firefox],
+                    'observed_apps': [firefox],
                     'active_inhibitor_apps': [],
                 }
                 engine = QQmlApplicationEngine()
@@ -2263,12 +2737,88 @@ class GuiChecks(unittest.TestCase):
                 audio = row.findChild(QObject, 'firefoxAudio')
                 name = row.findChild(QObject, 'appName:' + row_id)
                 self.assertEqual(audio.property('text'), 'Block standby while playing audio')
-                self.assertEqual(audio.parent(), name.parent())
-                self.assertTrue(audio.property('checked'))
+                self.assertEqual(
+                    audio.parent(), row.findChild(QObject, 'browserMediaOptions:' + row_id))
+                self.assertFalse(audio.property('checked'))
                 self.assertEqual(row.findChild(QObject, 'idleApp:' + row_id).property('visible'),
                                  bool(app_id))
                 engine.deleteLater()
                 app.processEvents()
+
+    def test_firefox_keeps_its_place_when_video_inhibitor_becomes_active(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._config_source = 'saved'
+        firefox = {'id': 'firefox.desktop', 'name': 'Mozilla Firefox'}
+        chromium = {'id': 'chromium.desktop', 'name': 'Chromium'}
+        backend._service_data = {
+            'installed_apps': [firefox, chromium],
+            'observed_apps': [firefox, chromium],
+            'active_inhibitor_apps': [],
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+
+        choices = QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(appChoices())').evaluate()[0]
+        self.assertEqual([item['name'] for item in json.loads(choices)],
+                         ['Chromium', 'Mozilla Firefox'])
+        backend._service_data['active_inhibitor_apps'] = [{'id': 'firefox.desktop'}]
+        backend.changed.emit()
+        app.processEvents()
+        active_choices = QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(appChoices())').evaluate()[0]
+        self.assertEqual([item['name'] for item in json.loads(active_choices)],
+                         ['Chromium', 'Mozilla Firefox'])
+        engine.deleteLater()
+
+    def test_uninstalled_browsers_are_not_shown(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        browser_apps = [
+            {'id': 'org.chromium.Chromium.desktop', 'name': 'Chromium'},
+            {'id': 'google-chrome.desktop', 'name': 'Google Chrome'},
+            {'id': 'brave-browser.desktop', 'name': 'Brave'},
+            {'id': 'microsoft-edge.desktop', 'name': 'Microsoft Edge'},
+            {'id': 'vivaldi.desktop', 'name': 'Vivaldi'},
+            {'id': 'org.mozilla.firefox.desktop', 'name': 'Mozilla Firefox'},
+        ]
+        backend.config = {
+            **DEFAULT_CONFIG,
+            'idle_inhibition_apps': ['org.chromium.Chromium.desktop'],
+            'chromium_audio_blocks_standby': ['chromium'],
+            'chromium_video_blocks_standby': ['chrome'],
+            'firefox_audio_blocks_standby': True,
+            'firefox_video_blocks_standby': True,
+        }
+        backend._service_data = {
+            'installed_apps': [],
+            'observed_apps': browser_apps,
+            'active_inhibitor_apps': browser_apps,
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+
+        app_list = window.findChild(QObject, 'installedAppsScroll')
+        self.assertEqual(app_list.property('count'), 0)
+        QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
+        app.processEvents()
+        self.assertEqual(app_list.property('count'), 0)
+        engine.deleteLater()
 
     def test_app_cards_expand_and_firefox_label_stays_readable(self):
         app = QGuiApplication.instance() or QGuiApplication([])
@@ -2313,10 +2863,18 @@ class GuiChecks(unittest.TestCase):
         app.processEvents()
         self.assertGreaterEqual(name.width(), QFontMetricsF(font).horizontalAdvance(name.property('text')))
         self.assertEqual(name.property('lineCount'), 1)
-        self.assertEqual(name.y(), audio.y())
+        video = row.findChild(QQuickItem, 'firefoxVideo')
+        name_position = name.mapToItem(row, QPointF(0, 0))
+        audio_position = audio.mapToItem(row, QPointF(0, 0))
+        video_position = video.mapToItem(row, QPointF(0, 0))
+        self.assertGreater(audio_position.y(), name_position.y())
+        self.assertAlmostEqual(video_position.y(), audio_position.y(), delta=1)
 
         window.resize(380, 760)
         app.processEvents()
+        audio_position = audio.mapToItem(row, QPointF(0, 0))
+        video_position = video.mapToItem(row, QPointF(0, 0))
+        self.assertGreater(video_position.y(), audio_position.y())
         self.assertLessEqual(name.width(), name.parentItem().width())
         self.assertEqual(name.property('lineCount'), 1)
         self.assertLess(page.width(), 380)
@@ -2355,21 +2913,21 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(window.findChild(QObject, 'installedAppsScroll').property('count'), 0)
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
-        self.assertFalse(values['firefoxAudioBlocksStandby'])
+        self.assertTrue(values['firefoxAudioBlocksStandby'])
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         app.processEvents()
         row = self.app_row(engine, window, 0)
-        self.assertFalse(row.findChild(QObject, 'firefoxAudio').property('checked'))
+        self.assertTrue(row.findChild(QObject, 'firefoxAudio').property('checked'))
         QMetaObject.invokeMethod(row.findChild(QObject, 'firefoxAudio'), 'click')
         search.setProperty('text', '')
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         app.processEvents()
         row = self.app_row(engine, window, 0)
-        self.assertTrue(row.findChild(QObject, 'firefoxAudio').property('checked'))
+        self.assertFalse(row.findChild(QObject, 'firefoxAudio').property('checked'))
         QMetaObject.invokeMethod(window.findChild(QObject, 'autoSaveTimer'), 'stop')
         engine.deleteLater()
 
-    def test_app_controls_share_a_line_when_wide_and_wrap_when_compact(self):
+    def test_browser_media_options_share_a_row_when_space_allows(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
@@ -2394,28 +2952,41 @@ class GuiChecks(unittest.TestCase):
         player_row = self.app_row(engine, window, 1)
         firefox_controls = [firefox_row.findChild(QQuickItem, name) for name in (
             'appName:firefox.desktop', 'idleApp:firefox.desktop',
-            'forceApp:firefox.desktop', 'firefoxAudio')]
+            'forceApp:firefox.desktop', 'firefoxAudio', 'firefoxVideo')]
         player_controls = [player_row.findChild(QQuickItem, name) for name in (
             'appName:player.desktop', 'idleApp:player.desktop', 'forceApp:player.desktop')]
         for width in (1300, 775):
             window.resize(width, 900)
             QTest.qWait(50)
             self.assertEqual(window.findChild(QObject, 'idleTimeoutLabel').property('lineCount'), 1)
+            firefox_positions = [
+                control.mapToItem(firefox_row, QPointF(0, 0)) for control in firefox_controls]
+            player_positions = [
+                control.mapToItem(player_row, QPointF(0, 0)) for control in player_controls]
             for controls in (firefox_controls[:3], player_controls):
                 self.assertEqual(controls[0].property('lineCount'), 1)
                 self.assertTrue(all(control.y() == controls[0].y() for control in controls))
                 for left, right in zip(controls, controls[1:]):
                     self.assertLessEqual(left.x() + left.width(), right.x())
-            for firefox_control, player_control in zip(firefox_controls, player_controls):
-                self.assertEqual(firefox_control.x(), player_control.x())
+            for firefox_position, player_position in zip(firefox_positions, player_positions):
+                self.assertEqual(firefox_position.x(), player_position.x())
+            self.assertEqual(firefox_positions[3].x(), firefox_positions[1].x())
+            self.assertGreater(firefox_positions[3].y(), firefox_positions[2].y())
             if width == 1300:
-                self.assertEqual(firefox_controls[-1].y(), firefox_controls[0].y())
-                self.assertLessEqual(firefox_controls[-2].x() + firefox_controls[-2].width(),
-                                     firefox_controls[-1].x())
+                self.assertAlmostEqual(
+                    firefox_positions[4].y(), firefox_positions[3].y(), delta=1)
+            else:
+                self.assertGreaterEqual(
+                    firefox_positions[4].y(), firefox_positions[3].y())
+            if width == 1300:
+                self.assertEqual(firefox_positions[0].y(), firefox_positions[2].y())
 
         window.resize(380, 760)
         QTest.qWait(50)
-        self.assertGreater(firefox_controls[-1].y(), firefox_controls[0].y())
+        firefox_positions = [
+            control.mapToItem(firefox_row, QPointF(0, 0)) for control in firefox_controls]
+        self.assertEqual(firefox_positions[3].x(), firefox_positions[1].x())
+        self.assertGreater(firefox_positions[3].y(), firefox_positions[2].y())
         for control in firefox_controls + player_controls:
             self.assertLessEqual(control.x() + control.width(), control.parentItem().width() + 1)
             self.assertLessEqual(control.y() + control.height(), control.parentItem().height() + 1)

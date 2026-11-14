@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "topCEC browser media status",
+  "version": "0.1.1",
+  "description": "Reports tab media flags and active window titles to topCEC.",
+  "permissions": ["tabs", "nativeMessaging", "webNavigation"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "all_frames": true,
+    "match_about_blank": true,
+    "js": ["video.js"]
+  }],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

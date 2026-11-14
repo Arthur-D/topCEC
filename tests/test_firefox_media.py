@@ -4,6 +4,7 @@ import io
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import struct
 import sys
@@ -34,17 +35,97 @@ class FirefoxMediaChecks(unittest.TestCase):
     def snapshot(self, windows):
         return json.dumps({'version': 1, 'windows': windows})
 
-    def test_extension_permissions_are_limited_to_tabs_and_native_messaging(self):
+    def test_extension_declares_frame_and_site_access_for_video(self):
         manifest = json.loads(
             (ROOT / 'firefox-extension/manifest.json').read_text(encoding='utf-8'))
-        self.assertEqual(manifest['permissions'], ['tabs', 'nativeMessaging'])
-        self.assertNotIn('host_permissions', manifest)
+        self.assertEqual(manifest['permissions'],
+                         ['tabs', 'nativeMessaging', 'webNavigation', '<all_urls>'])
+        self.assertTrue(manifest['content_scripts'][0]['all_frames'])
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is required for JavaScript tests')
+    def test_video_state_prioritizes_playing_over_inaccessible_frames(self):
+        script = r'''
+const fs = require("fs");
+const vm = require("vm");
+const assert = require("assert");
+let states = [];
+const listener = {addListener() {}};
+const browser = {
+    webNavigation: {getAllFrames: async () => states.map((_, frameId) => ({frameId}))},
+    tabs: {
+        sendMessage: async (_tabId, _message, {frameId}) => {
+            if (states[frameId] === null) throw new Error("inaccessible");
+            return {playing: states[frameId]};
+        },
+        onUpdated: listener, onActivated: listener, onCreated: listener,
+        onRemoved: listener, onAttached: listener, onDetached: listener,
+    },
+    windows: {getAll: async () => [], onCreated: listener, onRemoved: listener},
+    runtime: {
+        connectNative: () => ({onDisconnect: listener, onMessage: listener,
+                               postMessage() {}}),
+        onStartup: listener, onInstalled: listener,
+    },
+};
+const context = vm.createContext({browser, setTimeout, clearTimeout,
+                                  setInterval() {}, console});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), context);
+(async () => {
+    for (const [input, expected] of [
+        [[true, null], true], [[false, null], null], [[false, false], false],
+        [[true, false], true], [[], null],
+    ]) {
+        states = input;
+        assert.strictEqual(await context.videoState(1), expected);
+    }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+'''
+        subprocess.run(['node', '-e', script, str(ROOT / 'firefox-extension/background.js')],
+                       check=True, capture_output=True, text=True)
+
+    def test_video_only_uses_all_tabs_and_blocks_unknown_on_target_display(self):
+        self.mapping.snapshot(json.dumps([
+            {'title': 'TV video — Mozilla Firefox', 'output': 'HDMI-A-2'},
+        ]), 10)
+        windows = [{
+            'window_id': 3, 'active_title': 'TV video',
+            'tabs': [{'audible': True, 'muted': False, 'video': False},
+                     {'audible': False, 'muted': True, 'video': True}],
+        }]
+        self.assertTrue(self.provider.update(self.snapshot(windows), 11))
+        self.assertEqual(self.provider.video_state(self.mapping, 12, 'HDMI-A-2', 15),
+                         (True, False))
+        self.assertEqual(self.provider.video_state(self.mapping, 12, 'DP-1', 15),
+                         (False, False))
+        windows[0]['tabs'][1]['video'] = None
+        self.assertTrue(self.provider.update(self.snapshot(windows), 11))
+        self.assertEqual(self.provider.video_state(self.mapping, 12, 'HDMI-A-2', 15),
+                         (False, True))
+        windows[0]['tabs'][1]['video'] = False
+        self.assertTrue(self.provider.update(self.snapshot(windows), 11))
+        self.assertEqual(self.provider.video_state(self.mapping, 12, 'HDMI-A-2', 15),
+                         (False, False))
+        del windows[0]['tabs'][1]['video']
+        self.assertTrue(self.provider.update(self.snapshot(windows), 11))
+        self.assertEqual(self.provider.video_state(self.mapping, 12, 'HDMI-A-2', 15),
+                         (False, True))
+
+    def test_video_requires_complete_window_mapping_and_only_relevant_extension(self):
+        self.assertEqual(self.provider.video_state(self.mapping, 12, 'unrelated', 15),
+                         (False, False))
+        self.assertIsNone(self.provider.video_state(self.mapping, 12, 'HDMI-A-2', 15))
+        self.provider.update(self.snapshot([{
+            'window_id': 3, 'active_title': 'TV video',
+            'tabs': [{'audible': False, 'muted': False, 'video': False}],
+        }]), 11)
+        self.assertEqual(self.provider.video_state(self.mapping, 12, 'HDMI-A-2', 15),
+                         (False, True))
 
     def test_audible_unmuted_tab_uses_its_correlated_window_display(self):
         self.assertTrue(self.provider.update(self.snapshot([{
             'window_id': 3,
             'active_title': 'TV video',
-            'tabs': [{'audible': True, 'muted': False}],
+            'tabs': [{'audible': True, 'muted': False, 'video': True}],
         }]), 11))
         self.assertEqual(self.provider.audio_state(
             self.mapping, 12, 'HDMI-A-2', 15), (True, False))
@@ -121,7 +202,7 @@ class FirefoxMediaChecks(unittest.TestCase):
             'windows': [{
                 'window_id': 3,
                 'active_title': 'TV video',
-                'tabs': [{'audible': True, 'muted': False}],
+                'tabs': [{'audible': True, 'muted': False, 'video': True}],
             }],
         }
         source = io.BytesIO()
@@ -166,7 +247,7 @@ class FirefoxMediaChecks(unittest.TestCase):
                 capture_output=True, text=True)
             with zipfile.ZipFile(archive_path) as archive:
                 self.assertEqual(
-                    set(archive.namelist()), {'manifest.json', 'background.js'})
+                    set(archive.namelist()), {'manifest.json', 'background.js', 'video.js'})
                 manifest = json.loads(archive.read('manifest.json'))
                 self.assertEqual(
                     manifest['browser_specific_settings']['gecko']['id'],
@@ -199,12 +280,15 @@ class FirefoxMediaChecks(unittest.TestCase):
                 manifest['allowed_extensions'], ['topcec-media@topcec.local'])
             self.assertTrue(os.access(manifest['path'], os.X_OK))
             self.assertTrue((app / 'firefox-extension/background.js').is_file())
+            with zipfile.ZipFile(app / 'topcec-firefox-media.zip') as archive:
+                self.assertEqual(set(archive.namelist()), {'manifest.json', 'background.js', 'video.js'})
             extra = app / 'preserve-me'
             extra.write_text('custom', encoding='utf-8')
             subprocess.run(
                 ['bash', str(ROOT / 'packaging/uninstall-user.sh')],
                 check=True, env=environment, capture_output=True, text=True)
             self.assertFalse((manifest_dir / 'net.local.topcec.media.json').exists())
+            self.assertFalse((app / 'topcec-firefox-media.zip').exists())
             self.assertEqual(extra.read_text(encoding='utf-8'), 'custom')
 
 

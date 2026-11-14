@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>net.local.topcec</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>topCEC</name>
+  <summary>Manage TV power with HDMI-CEC on KDE Plasma</summary>
+  <description>
+    <p>Put one HDMI-CEC television on standby after inactivity and wake it when you return.</p>
+    <p>Choose which displays, input devices, and apps keep the TV awake. The Flatpak requires the topCEC host service, installed separately on the desktop.</p>
+  </description>
+  <launchable type="desktop-id">net.local.topcec.desktop</launchable>
+  <url type="homepage">https://github.com/Arthur-D/topCEC</url>
+  <url type="bugtracker">https://github.com/Arthur-D/topCEC/issues</url>
+  <developer id="io.github.arthur-d">
+    <name>topCEC contributors</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-14"/>
+  </releases>
+</component>

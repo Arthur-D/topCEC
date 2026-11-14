@@ -16,28 +16,56 @@ import equipment
 
 class EquipmentChecks(unittest.TestCase):
     def test_installed_apps_include_hidden_entries_and_deduplicate_ids(self):
-        def entry(identity, name):
-            return SimpleNamespace(get_id=lambda: identity, get_display_name=lambda: name)
+        def entry(identity, name, visible=True):
+            return SimpleNamespace(get_id=lambda: identity, get_display_name=lambda: name,
+                                   should_show=lambda: visible)
         gio = SimpleNamespace(AppInfo=SimpleNamespace(get_all=lambda: [
             entry('one.desktop', 'One'), entry('one.desktop', 'Duplicate'),
-            entry('hidden.desktop', 'Hidden'), entry(None, 'No ID')]))
+            entry('hidden.desktop', 'Hidden', visible=False), entry(None, 'No ID')]))
         with patch.dict(sys.modules, {'gi.repository': SimpleNamespace(Gio=gio)}):
             self.assertEqual(equipment.discover_apps(), [
-                {'id': 'hidden.desktop', 'name': 'Hidden'},
+                {'id': 'hidden.desktop', 'name': 'Hidden', 'menu_hidden': True},
                 {'id': 'one.desktop', 'name': 'One'}])
 
     def test_discovered_apps_expose_startup_window_class(self):
         app = SimpleNamespace(get_id=lambda: 'player.desktop',
                              get_display_name=lambda: 'Player',
+                             should_show=lambda: True,
                              get_startup_wm_class=lambda: 'PlayerWindow')
         gio = SimpleNamespace(AppInfo=SimpleNamespace(get_all=lambda: [app]))
         with patch.dict(sys.modules, {'gi.repository': SimpleNamespace(Gio=gio)}):
             self.assertEqual(equipment.discover_apps(), [
                 {'id': 'player.desktop', 'name': 'Player', 'window_class': 'PlayerWindow'}])
 
+    def test_equivalent_launchers_share_a_group_and_keep_their_desktop_ids(self):
+        def entry(identity, command='webapp-manager', **properties):
+            return SimpleNamespace(
+                get_id=lambda: identity, get_display_name=lambda: 'Web Apps',
+                should_show=lambda: True,
+                get_commandline=lambda: command, get_string=properties.get,
+                get_boolean=lambda key: properties.get(key, False))
+
+        gio = SimpleNamespace(AppInfo=SimpleNamespace(get_all=lambda: [
+            entry('webapp-manager.desktop', Categories='Network;'),
+            entry('webapp-manager-2.desktop'),
+            entry('other.desktop', 'other-app'),
+            entry('profile.desktop', 'webapp-manager --profile work'),
+            entry('terminal.desktop', Terminal=True),
+            entry('dbus.desktop', DBusActivatable=True),
+        ]))
+        with patch.dict(sys.modules, {'gi.repository': SimpleNamespace(Gio=gio)}):
+            groups = {app['id']: app.get('launcher_group') for app in equipment.discover_apps()}
+        self.assertEqual(groups, {
+            'webapp-manager.desktop': 'webapp-manager-2.desktop',
+            'webapp-manager-2.desktop': 'webapp-manager-2.desktop',
+            'other.desktop': None, 'profile.desktop': None,
+            'terminal.desktop': None, 'dbus.desktop': None,
+        })
+
     def test_discovered_steam_ids_come_from_launchers_or_desktop_ids(self):
         def entry(identity, command):
             return SimpleNamespace(get_id=lambda: identity, get_display_name=lambda: identity,
+                                   should_show=lambda: True,
                                    get_commandline=lambda: command)
         gio = SimpleNamespace(AppInfo=SimpleNamespace(get_all=lambda: [
             entry('game.desktop', 'steam "steam://rungameid/553850"'),

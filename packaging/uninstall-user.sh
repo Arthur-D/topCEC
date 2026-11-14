@@ -45,14 +45,19 @@ PY
     fi
 fi
 for file in \
-    activity_policy.py cec_power_state.py configuration.py equipment.py firefox_media.py standby_apps.py \
-    native_messaging.py providers.py firefox-native-host.py \
+    activity_policy.py cec_power_state.py configuration.py equipment.py firefox_media.py chromium_media.py standby_apps.py \
+    native_messaging.py providers.py firefox-native-host.py chromium-native-host.py \
     monitor.py start.py cec-kde-settings.py cec-power-command.py \
     topcec_gui.py activity.js firefox.js topcec.qml; do
     rm -f -- "$APP_DIR/cec-tv/$file"
 done
 rm -f -- "$APP_DIR/firefox-extension/manifest.json" \
-    "$APP_DIR/firefox-extension/background.js"
+    "$APP_DIR/firefox-extension/background.js" "$APP_DIR/firefox-extension/video.js"
+rm -f -- "$APP_DIR/topcec-firefox-media.zip"
+rm -f -- "$APP_DIR/chromium-extension/manifest.json" \
+    "$APP_DIR/chromium-extension/background.js" "$APP_DIR/chromium-extension/video.js" \
+    "$APP_DIR/packaging/setup-chromium-extension.py"
+rmdir -- "$APP_DIR/chromium-extension" "$APP_DIR/packaging" 2>/dev/null || true
 rmdir -- "$APP_DIR/firefox-extension" 2>/dev/null || true
 if rmdir -- "$APP_DIR/cec-tv" 2>/dev/null; then
     if ! rmdir -- "$APP_DIR" 2>/dev/null; then

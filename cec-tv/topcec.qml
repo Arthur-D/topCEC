@@ -20,6 +20,9 @@ Kirigami.ApplicationWindow {
     readonly property var sectionNames: ["Overview", "Display", "Standby", "Input", "Diagnostics"]
     property bool settingsDirty: false
     property string submittedSettings: ""
+    readonly property bool settingsSavePaused: settingsDirty && topcec.settingsEnabled
+        && submittedSettings.length > 0
+        && JSON.stringify(settingsValues()) === submittedSettings
     property var axisDraft: ({})
     property var mouseOutputsDraft: []
     property bool mouseOutputsLegacy: false
@@ -28,7 +31,10 @@ Kirigami.ApplicationWindow {
     property var idleExceptionsDraft: []
     property var forceAppsDraft: []
     property var retainedAppIds: []
-    property bool firefoxAudioEnabled: true
+    property bool firefoxAudioEnabled: false
+    property var chromiumAudioDraft: []
+    property bool firefoxVideoEnabled: false
+    property var chromiumVideoDraft: []
     property real defaultAxisDeadzone: 0
     property real defaultRzDeadzone: 0
     onSettingsDirtyChanged: {
@@ -152,6 +158,9 @@ Kirigami.ApplicationWindow {
             mouseOutputs: mouseOutputsLegacy ? null : mouseOutputsDraft,
             muteLabels: labelsField.text,
             firefoxAudioBlocksStandby: firefoxAudioEnabled,
+            chromiumAudioBlocksStandby: chromiumAudioDraft,
+            firefoxVideoBlocksStandby: firefoxVideoEnabled,
+            chromiumVideoBlocksStandby: chromiumVideoDraft,
             idleInhibitionApps: idleAppsDraft,
             idleInhibitionExceptions: idleExceptionsDraft,
             forceInhibitionApps: forceAppsDraft,
@@ -177,6 +186,10 @@ Kirigami.ApplicationWindow {
 
     function unresolvedInputs() {
         return inputPaths().filter(path => !inputDetected(path))
+    }
+
+    function unstableInputs() {
+        return savedInputPaths().split("\n").filter(path => /^\/dev\/input\/event\d+$/.test(path))
     }
 
     function inputSelectionSummary() {
@@ -289,7 +302,10 @@ Kirigami.ApplicationWindow {
         if (!settingsDirty || !topcec.settingsEnabled || !equipmentReady)
             return
         let values = settingsValues()
-        submittedSettings = JSON.stringify(values)
+        let snapshot = JSON.stringify(values)
+        if (snapshot === submittedSettings)
+            return
+        submittedSettings = snapshot
         values.targetOutput = outputField.valueToSave
         values.adapter = adapterField.valueToSave
         values.devices = savedInputPaths()
@@ -407,6 +423,23 @@ Kirigami.ApplicationWindow {
     readonly property bool serviceHealthy: topcec.backendAvailable
         && topcec.serviceStatus === "running"
     readonly property bool cecAdapterSelected: adapterField.detected
+    function powerStateText() {
+        if (topcec.serviceStatus === "configuration-only"
+                && topcec.powerState === "unknown")
+            return "No CEC-enabled TV detected"
+        if (root.serviceHealthy) {
+            if (!root.cecAdapterSelected)
+                return adapterField.availabilityKnown
+                    ? "No CEC adapter selected" : "CEC adapter detection unavailable"
+            if (!outputField.detected) {
+                if (!outputField.availabilityKnown)
+                    return "Display detection unavailable"
+                return outputField.equipment.length
+                    ? "No display selected" : "No display detected"
+            }
+        }
+        return topcec.powerState.replace(/_/g, " ")
+    }
     readonly property bool monitoringWarning: topcec.backendAvailable
         && (topcec.serviceStatus === "configuration-only" || root.standbyBlocked)
     readonly property string monitoringWarningText: root.standbyBlocked
@@ -463,9 +496,12 @@ Kirigami.ApplicationWindow {
 
     function saveStatusText() {
         if (!topcec.settingsEnabled)
-            return "Connect to the host service to save settings."
+            return topcec.backendAvailable ? "Saving changes..."
+                : "Connect to the host service to save settings."
         if (!root.equipmentReady)
             return "Choose a display and CEC adapter."
+        if (root.settingsSavePaused)
+            return "Changes not saved. Automatic retry paused; edit settings or retry."
         if (root.settingsDirty)
             return "Saving changes..."
         if (topcec.actionMessage.length)
@@ -646,6 +682,9 @@ Kirigami.ApplicationWindow {
         devicesField.text = topcec.deviceList()
         labelsField.text = topcec.muteLabelList()
         firefoxAudioEnabled = topcec.setting("firefox_audio_blocks_standby")
+        chromiumAudioDraft = Array.from(topcec.setting("chromium_audio_blocks_standby") || [])
+        firefoxVideoEnabled = topcec.setting("firefox_video_blocks_standby") || false
+        chromiumVideoDraft = Array.from(topcec.setting("chromium_video_blocks_standby") || [])
         idleAppsDraft = Array.from(topcec.setting("idle_inhibition_apps") || [])
         idleExceptionsDraft = Array.from(topcec.setting("idle_inhibition_exceptions") || [])
         forceAppsDraft = Array.from(topcec.setting("force_inhibition_apps") || [])
@@ -661,44 +700,123 @@ Kirigami.ApplicationWindow {
                 "org.mozilla.firefoxdeveloperedition", "org.mozilla.firefox-beta"].includes(key)
     }
 
-    function firefoxApp() {
-        let retained = retainedAppIds.find(id => isFirefoxApp(id))
-        return topcec.installedApps.find(app => isFirefoxApp(app.id))
-            || topcec.observedApps.find(app => isFirefoxApp(app.id))
-            || (retained ? {id: retained, name: retained + " (not installed)"} : null)
-            || {id: "__firefox_audio__", name: "Mozilla Firefox", audioOnly: true}
+    property var chromiumBrowsers: [
+        {id: "chromium", name: "Chromium", extensionsUrl: "chrome://extensions", aliases: ["chromium", "chromium-browser", "org.chromium.chromium"]},
+        {id: "chrome", name: "Google Chrome", extensionsUrl: "chrome://extensions", aliases: ["google-chrome", "google-chrome-stable", "com.google.chrome"]},
+        {id: "brave", name: "Brave", extensionsUrl: "brave://extensions", aliases: ["brave", "brave-browser", "brave-browser-stable", "com.brave.browser"]},
+        {id: "edge", name: "Microsoft Edge", extensionsUrl: "edge://extensions", aliases: ["msedge", "microsoft-edge", "microsoft-edge-stable", "com.microsoft.edge"]},
+        {id: "vivaldi", name: "Vivaldi", extensionsUrl: "vivaldi://extensions", aliases: ["vivaldi", "vivaldi-bin", "vivaldi-stable", "com.vivaldi.vivaldi"]}
+    ]
+    readonly property var setupBrowsers: chromiumBrowsers.concat([
+        {id: "firefox", name: "Mozilla Firefox", isFirefox: true}
+    ])
+
+    function browserForApp(app) {
+        let keys = [app.id || "", app.window_class || ""].map(
+            value => value.toLowerCase().replace(/\.desktop$/, ""))
+        for (let browser of chromiumBrowsers) {
+            if (keys.some(key => browser.aliases.includes(key)))
+                return browser
+        }
+        let path = keys[0]
+        if (path.startsWith("/")) {
+            let executable = path.substring(path.lastIndexOf("/") + 1)
+            for (let browser of chromiumBrowsers) {
+                if (browser.aliases.includes(executable))
+                    return browser
+            }
+        }
+        if (path.startsWith("/") && path.endsWith("/chrome")) {
+            if (path.includes("/chromium/")) return chromiumBrowsers[0]
+            if (path === "/app/extra/chrome" || path.includes("/google/chrome/"))
+                return chromiumBrowsers[1]
+        }
+        return null
+    }
+
+    function browserApp(browserId) {
+        return topcec.observedApps.find(app => root.browserForApp(app)?.id === browserId)
+            || topcec.installedApps.find(app => root.browserForApp(app)?.id === browserId)
+            || null
+    }
+
+    function browserIsInstalled(app, installedBrowserIds, firefoxInstalled) {
+        let browser = browserForApp(app)
+        return browser ? installedBrowserIds.has(browser.id)
+            : !isFirefoxApp(app.id) || firefoxInstalled
+    }
+
+    function setChromiumAudio(browserId, enabled) {
+        let choices = chromiumAudioDraft.filter(id => id !== browserId)
+        if (enabled)
+            choices.push(browserId)
+        chromiumAudioDraft = choices
     }
 
     function appChoices() {
-        let apps = topcec.observedApps.slice()
-        let firefox = firefoxApp()
-        if (!apps.some(app => app.id === firefox.id))
+        let installedApps = topcec.installedApps
+        let installedBrowserIds = new Set(installedApps.map(app => browserForApp(app)?.id)
+            .filter(Boolean))
+        let firefox = installedApps.find(app => isFirefoxApp(app.id)) || null
+        let apps = topcec.observedApps.filter(app =>
+            browserIsInstalled(app, installedBrowserIds, !!firefox))
+        let launcherGroups = new Set(apps.map(app => app.launcher_group).filter(Boolean))
+        for (let app of installedApps) {
+            if (app.launcher_group && retainedAppIds.includes(app.id))
+                launcherGroups.add(app.launcher_group)
+        }
+        if (firefox && !apps.some(app => app.id === firefox.id))
             apps.push(firefox)
-        if (showAllApps.checked) {
-            for (let app of topcec.installedApps)
-                if (!apps.some(item => item.id === app.id))
-                    apps.push(app)
+        for (let app of installedApps) {
+            if (!app.menu_hidden
+                    && (showAllApps.checked || browserForApp(app) || isFirefoxApp(app.id)
+                    || launcherGroups.has(app.launcher_group))
+                    && !apps.some(item => item.id === app.id))
+                apps.push(app)
         }
         for (let id of retainedAppIds) {
             if (!apps.some(app => app.id === id)) {
-                let installed = topcec.installedApps.find(app => app.id === id)
-                apps.push(installed || {id: id, name: id + " (not installed)"})
+                let installed = installedApps.find(app => app.id === id)
+                let app = installed || {id: id, name: id + " (not installed)"}
+                if (browserIsInstalled(app, installedBrowserIds, !!firefox))
+                    apps.push(app)
             }
         }
         let query = appSearch.text.trim().toLowerCase()
         if (!showAllApps.checked) {
             for (let id of topcec.activeInhibitorApps) {
                 if (!apps.some(app => app.id === id)) {
-                    let installed = topcec.installedApps.find(app => app.id === id)
-                    apps.push(installed || {id: id, name: id})
+                    let installed = installedApps.find(app => app.id === id)
+                    let app = installed || {id: id, name: id}
+                    if (browserIsInstalled(app, installedBrowserIds, !!firefox))
+                        apps.push(app)
                 }
             }
         }
-        return apps.filter(app => !query || ((showAllApps.checked || topcec.activeInhibitorApps.includes(app.id))
-            && (app.name + " " + app.id).toLowerCase().includes(query)))
-            .sort((a, b) => Number(topcec.activeInhibitorApps.includes(b.id))
-                - Number(topcec.activeInhibitorApps.includes(a.id))
-                || a.name.localeCompare(b.name))
+        let grouped = []
+        for (let app of apps) {
+            let browser = browserForApp(app)
+            let browserId = app.browserId || browser?.id || ""
+            let firefoxMatch = isFirefoxApp(app.id)
+            let key = browserId ? "browser:" + browserId : firefoxMatch ? "firefox"
+                : "app:" + (app.launcher_group || app.id)
+            let existing = grouped.find(item => item.groupKey === key)
+            if (existing) {
+                if (!existing.groupIds.includes(app.id))
+                    existing.groupIds.push(app.id)
+                continue
+            }
+            let primary = browserId ? browserApp(browserId) : (firefoxMatch ? firefox : null)
+            grouped.push({id: primary?.id || app.id,
+                          name: browserId ? chromiumBrowsers.find(item => item.id === browserId).name
+                              : (firefoxMatch ? primary.name : app.name),
+                          groupIds: [app.id], browserId: browserId,
+                          isFirefox: firefoxMatch, groupKey: key})
+        }
+        return grouped.filter(app => !query || ((showAllApps.checked
+            || app.groupIds.some(id => topcec.activeInhibitorApps.includes(id)))
+            && (app.name + " " + app.groupIds.join(" ")).toLowerCase().includes(query)))
+            .sort((a, b) => a.name.localeCompare(b.name))
     }
 
     function selectedMouseDisplays() {
@@ -740,6 +858,23 @@ Kirigami.ApplicationWindow {
         root.markSettingsDirty()
     }
 
+    function setAppGroup(ids, enabled, force) {
+        let current = force ? forceAppsDraft : idleAppsDraft
+        let updated = current.filter(id => !ids.includes(id))
+        if (enabled)
+            updated.push(...ids)
+        if (force)
+            forceAppsDraft = updated
+        else {
+            idleAppsDraft = updated
+            if (topcec.automaticIdleInhibition) {
+                let exceptions = idleExceptionsDraft.filter(id => !ids.includes(id))
+                idleExceptionsDraft = enabled ? exceptions : [...exceptions, ...ids]
+            }
+        }
+        root.markSettingsDirty()
+    }
+
     Component.onCompleted: loadSettings()
     Connections {
         target: topcec
@@ -756,6 +891,7 @@ Kirigami.ApplicationWindow {
             if (root.submittedSettings && JSON.stringify(root.settingsValues()) !== root.submittedSettings)
                 return
             root.settingsDirty = false
+            root.submittedSettings = ""
             root.loadSettings()
         }
     }
@@ -828,6 +964,17 @@ Kirigami.ApplicationWindow {
                     Layout.fillWidth: true
                     verticalAlignment: TextEdit.AlignVCenter
                     text: root.saveStatusText()
+                }
+                Controls.Button {
+                    objectName: "retrySettingsButton"
+                    text: "Retry saving"
+                    icon.name: "view-refresh"
+                    visible: root.settingsSavePaused
+                    enabled: topcec.settingsEnabled && root.equipmentReady
+                    onClicked: {
+                        root.submittedSettings = ""
+                        root.applySettings()
+                    }
                 }
             }
         }
@@ -946,19 +1093,7 @@ Kirigami.ApplicationWindow {
                         SelectableLabel {
                             Layout.fillWidth: true
                             wrapMode: Text.Wrap
-                            text: "3. Before first start, configure the correct display, CEC adapter, and input devices with the native host GUI. Once the service is started, you can configure it here even if input initialization fails:"
-                        }
-                        Controls.TextArea {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 34
-                            readOnly: true
-                            selectByMouse: true
-                            wrapMode: TextEdit.NoWrap
-                            text: "~/.local/bin/topcec-gui"
-                        }
-                        SelectableLabel {
-                            Layout.fillWidth: true
-                            text: "4. Enable and start the user service:"
+                            text: "3. Start the host service. CEC stays off until you configure a TV display and adapter:"
                         }
                         Controls.TextArea {
                             Layout.fillWidth: true
@@ -971,7 +1106,7 @@ Kirigami.ApplicationWindow {
                         SelectableLabel {
                             Layout.fillWidth: true
                             wrapMode: Text.Wrap
-                            text: "5. Return here. The GUI reconnects when the service appears; you can also retry now."
+                            text: "4. Return here to configure your display and adapter. Use Retry Connection if needed."
                         }
                         RowLayout {
                             CopyableButton {
@@ -1037,9 +1172,9 @@ Kirigami.ApplicationWindow {
                                     spacing: Kirigami.Units.smallSpacing
                                     SelectableLabel {
                                         objectName: "serviceStatusLabel"
-                                        text: root.serviceHealthy && !root.cecAdapterSelected
-                                            ? "Monitoring, no CEC adapter selected"
-                                            : root.headerStatus + ","
+                                        Layout.minimumWidth: implicitWidth
+                                        wrapMode: TextEdit.NoWrap
+                                        text: root.headerStatus + ","
                                         color: root.serviceHealthy
                                             ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.textColor
                                     }
@@ -1047,7 +1182,7 @@ Kirigami.ApplicationWindow {
                                         objectName: "powerStateLabel"
                                         Layout.fillWidth: true
                                         font.bold: true
-                                        text: topcec.powerState.replace(/_/g, " ")
+                                        text: root.powerStateText()
                                     }
                                 }
                             }
@@ -1364,6 +1499,32 @@ Kirigami.ApplicationWindow {
                                 text: root.inputSelectionSummary()
                             }
                         }
+                        SelectableLabel {
+                            objectName: "retainedInputs"
+                            Layout.fillWidth: true
+                            visible: root.unresolvedInputs().length > 0
+                            text: "Unlisted input paths\n"
+                                + root.unresolvedInputs().map(path => root.retainedValue(path)).join("\n")
+                                + "\nReconnect the devices or remove these paths if they are no longer needed."
+                        }
+                        CopyableButton {
+                            objectName: "removeUndetectedInputs"
+                            text: "Remove unlisted inputs"
+                            visible: root.unresolvedInputs().length > 0
+                            onClicked: {
+                                devicesField.text = root.inputPaths().filter(path => root.inputDetected(path)).join("\n")
+                                topcec.rememberInputDraft(root.savedInputPaths())
+                                root.markSettingsDirty()
+                            }
+                        }
+                        SelectableLabel {
+                            objectName: "unstableInputs"
+                            Layout.fillWidth: true
+                            visible: root.unstableInputs().length > 0
+                            text: "Some selected devices only have /dev/input/event paths. "
+                                + "These can change after reconnecting or restarting; check your selection if saving fails.\n"
+                                + root.unstableInputs().join("\n")
+                        }
                         SurfaceFrame {
                             objectName: "inputFormCard"
                             Layout.fillWidth: true
@@ -1455,22 +1616,6 @@ Kirigami.ApplicationWindow {
                                     enabled: root.inputPaths().length > 0
                                     onClicked: topcec.copyText(root.inputPaths().join("\n"))
                                 }
-                            }
-                        }
-                        SelectableLabel {
-                            objectName: "retainedInputs"
-                            Layout.fillWidth: true
-                            visible: root.unresolvedInputs().length > 0
-                            text: "Unlisted input paths\n"
-                                + root.unresolvedInputs().map(path => root.retainedValue(path)).join("\n")
-                        }
-                        CopyableButton {
-                            objectName: "removeUndetectedInputs"
-                            text: "Remove unlisted inputs"
-                            visible: root.unresolvedInputs().length > 0
-                            onClicked: {
-                                devicesField.text = root.inputPaths().filter(path => root.inputDetected(path)).join("\n")
-                                root.markSettingsDirty()
                             }
                         }
                         DisclosureButton {
@@ -1584,17 +1729,13 @@ Kirigami.ApplicationWindow {
                                     readonly property real policyWidth: allowStandby.implicitWidth
                                         + forceStandby.implicitWidth + columnSpacing
                                     readonly property real minimumNameWidth: Kirigami.Units.gridUnit * 6
-                                    readonly property real inlinePolicyWidth: modelData.audioOnly
-                                        ? 0 : policyWidth + columnSpacing
-                                    readonly property bool stackName: width < minimumNameWidth + inlinePolicyWidth
+                                    readonly property real policyRowWidth: policyWidth + columnSpacing
+                                    readonly property bool stackName: width < minimumNameWidth + policyRowWidth
                                     readonly property bool stackPolicies: width < policyWidth
-                                    readonly property bool inlineAudio: !stackName
-                                        && width >= minimumNameWidth + inlinePolicyWidth
-                                            + firefoxAudioOption.implicitWidth + columnSpacing
+                                    readonly property bool browserAudio: modelData.browserId.length > 0
                                     readonly property real nameWidth: stackName ? width
                                         : Math.min(Kirigami.Units.gridUnit * 10,
-                                            width - inlinePolicyWidth
-                                            - (inlineAudio ? firefoxAudioOption.implicitWidth + columnSpacing : 0))
+                                            width - policyRowWidth)
 
                                     SelectableLabel {
                                         objectName: "appName:" + modelData.id
@@ -1615,14 +1756,14 @@ Kirigami.ApplicationWindow {
                                         Layout.column: appRow.stackName ? 0 : 1
                                         Layout.maximumWidth: implicitWidth
                                         Layout.alignment: Qt.AlignTop | Qt.AlignLeft
-                                        visible: !modelData.audioOnly
                                         text: "Allow standby"
                                         Accessible.name: modelData.name + " allow standby"
-                                        checked: root.idleExceptionsDraft.includes(modelData.id)
-                                            || (!root.idleAppsDraft.includes(modelData.id)
-                                                && (!topcec.automaticIdleInhibition
-                                                    || !topcec.activeInhibitorApps.includes(modelData.id)))
-                                        onClicked: root.setIdleApp(modelData.id, !checked)
+                                        checked: !modelData.groupIds.some(id =>
+                                            !root.idleExceptionsDraft.includes(id)
+                                            && (root.idleAppsDraft.includes(id)
+                                                || (topcec.automaticIdleInhibition
+                                                    && topcec.activeInhibitorApps.includes(id))))
+                                        onClicked: root.setAppGroup(modelData.groupIds, !checked, false)
                                     }
                                     CopyableCheckBox {
                                         id: forceStandby
@@ -1631,27 +1772,56 @@ Kirigami.ApplicationWindow {
                                         Layout.column: appRow.stackPolicies ? 0 : (appRow.stackName ? 1 : 2)
                                         Layout.maximumWidth: implicitWidth
                                         Layout.alignment: Qt.AlignTop | Qt.AlignLeft
-                                        visible: !modelData.audioOnly
                                         text: "Force block standby"
                                         Accessible.name: modelData.name + " force block standby"
-                                        checked: root.forceAppsDraft.includes(modelData.id)
-                                        onClicked: root.setForceApp(modelData.id, checked)
+                                        checked: modelData.groupIds.some(id => root.forceAppsDraft.includes(id))
+                                        onClicked: root.setAppGroup(modelData.groupIds, checked, true)
                                     }
-                                    CopyableCheckBox {
-                                        id: firefoxAudioOption
-                                        objectName: visible ? "firefoxAudio" : ""
-                                        Layout.row: appRow.inlineAudio ? 0 : (appRow.stackPolicies ? 3 : 2)
-                                        Layout.column: appRow.inlineAudio ? 3 : 0
-                                        Layout.columnSpan: appRow.inlineAudio ? 1 : 4
-                                        Layout.maximumWidth: implicitWidth
-                                        Layout.alignment: Qt.AlignTop | Qt.AlignLeft
-                                        visible: modelData.id === root.firefoxApp().id
-                                        text: "Block standby while playing audio"
-                                        Accessible.name: modelData.name + " block standby while playing audio"
-                                        checked: root.firefoxAudioEnabled
-                                        onClicked: {
-                                            root.firefoxAudioEnabled = checked
-                                            root.markSettingsDirty()
+                                    Flow {
+                                        objectName: "browserMediaOptions:" + modelData.id
+                                        Layout.row: appRow.stackPolicies ? 3 : 2
+                                        Layout.column: appRow.stackName ? 0 : 1
+                                        Layout.columnSpan: 4
+                                        Layout.fillWidth: true
+                                        spacing: Kirigami.Units.smallSpacing
+                                        CopyableCheckBox {
+                                            id: browserAudioControl
+                                            objectName: modelData.isFirefox ? "firefoxAudio"
+                                                : (appRow.browserAudio ? "browserAudio:" + modelData.browserId : "")
+                                            visible: modelData.isFirefox || appRow.browserAudio
+                                            text: "Block standby while playing audio"
+                                            Accessible.name: modelData.name + " block standby while playing audio"
+                                            checked: appRow.browserAudio
+                                                ? root.chromiumAudioDraft.includes(modelData.browserId)
+                                                : root.firefoxAudioEnabled
+                                            onClicked: {
+                                                if (appRow.browserAudio)
+                                                    root.setChromiumAudio(modelData.browserId, checked)
+                                                else
+                                                    root.firefoxAudioEnabled = checked
+                                                root.markSettingsDirty()
+                                            }
+                                        }
+                                        CopyableCheckBox {
+                                            id: browserVideoControl
+                                            objectName: modelData.isFirefox ? "firefoxVideo"
+                                                : (appRow.browserAudio ? "browserVideo:" + modelData.browserId : "")
+                                            visible: modelData.isFirefox || appRow.browserAudio
+                                            text: "Block standby while playing video"
+                                            Accessible.name: modelData.name + " block standby while playing video"
+                                            checked: appRow.browserAudio
+                                                ? root.chromiumVideoDraft.includes(modelData.browserId)
+                                                : root.firefoxVideoEnabled
+                                            onClicked: {
+                                                if (appRow.browserAudio) {
+                                                    let choices = root.chromiumVideoDraft.filter(id => id !== modelData.browserId)
+                                                    if (checked) choices.push(modelData.browserId)
+                                                    root.chromiumVideoDraft = choices
+                                                } else {
+                                                    root.firefoxVideoEnabled = checked
+                                                }
+                                                root.markSettingsDirty()
+                                            }
                                         }
                                     }
                                     Item {
@@ -1661,6 +1831,166 @@ Kirigami.ApplicationWindow {
                                         Layout.fillWidth: true
                                     }
                                 }
+                            }
+                        }
+                    }
+                    DisclosureButton {
+                        id: browserSetupToggle
+                        objectName: "browserSetupToggle"
+                        visible: root.currentSection === 2
+                        text: "Set up a browser extension"
+                    }
+                    SurfaceFrame {
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2 && browserSetupToggle.checked
+                        ColumnLayout {
+                            width: parent.width
+                            SelectableLabel {
+                                Layout.fillWidth: true
+                                text: "Choose your browser and installation type. Firefox uses an optional add-on."
+                            }
+                            SelectableLabel {
+                                objectName: "browserSetupHardwareHelp"
+                                Layout.fillWidth: true
+                                text: "No TV or CEC adapter is needed to configure or test the extension. Keep CEC disabled while testing."
+                            }
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+                                Controls.ComboBox {
+                                    id: setupBrowser
+                                    objectName: "setupBrowser"
+                                    model: root.setupBrowsers
+                                    textRole: "name"
+                                    currentIndex: -1
+                                    displayText: currentIndex < 0 ? "Select browser" : currentText
+                                    width: Math.max(implicitWidth, Kirigami.Units.gridUnit * 9)
+                                    implicitWidth: Math.max(implicitContentWidth,
+                                        contentItem.implicitWidth) + leftPadding + rightPadding
+                                        + indicator.width + spacing
+                                    enabled: !topcec.browserSetupPending
+                                    Accessible.name: "Browser"
+                                    onCurrentIndexChanged: {
+                                        setupExtensionId.text = ""
+                                        setupGrantAccess.checked = false
+                                        topcec.resetBrowserSetup()
+                                    }
+                                }
+                                Controls.ComboBox {
+                                    id: setupInstallation
+                                    objectName: "setupInstallation"
+                                    model: ["Flatpak", "Native"]
+                                    currentIndex: -1
+                                    displayText: currentIndex < 0 ? "Installation type" : currentText
+                                    width: Math.max(implicitWidth, Kirigami.Units.gridUnit * 9)
+                                    implicitWidth: Math.max(implicitContentWidth,
+                                        contentItem.implicitWidth) + leftPadding + rightPadding
+                                        + indicator.width + spacing
+                                    enabled: !topcec.browserSetupPending
+                                    Accessible.name: "Browser installation type"
+                                    onCurrentIndexChanged: {
+                                        setupExtensionId.text = ""
+                                        setupGrantAccess.checked = false
+                                        topcec.resetBrowserSetup()
+                                    }
+                                }
+                                Controls.Button {
+                                    objectName: "prepareBrowserExtension"
+                                    text: "Prepare extension"
+                                    enabled: setupBrowser.currentIndex >= 0
+                                        && setupInstallation.currentIndex >= 0
+                                        && !topcec.browserSetupPending
+                                    onClicked: topcec.setupBrowser(
+                                        root.setupBrowsers[setupBrowser.currentIndex].id,
+                                        setupInstallation.currentIndex === 0, "", false)
+                                }
+                            }
+                            SelectableLabel {
+                                objectName: "browserSetupMessage"
+                                Layout.fillWidth: true
+                                visible: topcec.browserSetupMessage.length > 0
+                                text: topcec.browserSetupMessage
+                            }
+                            SelectableLabel {
+                                objectName: "browserExtensionReportStatus"
+                                Layout.fillWidth: true
+                                visible: topcec.backendAvailable && setupBrowser.currentIndex >= 0
+                                text: {
+                                    if (setupBrowser.currentIndex < 0)
+                                        return ""
+                                    let browser = root.setupBrowsers[setupBrowser.currentIndex]
+                                    let reports = topcec.browserExtensionReports
+                                    if (!browser)
+                                        return ""
+                                    return reports[browser.id] === true
+                                        ? "Extension is sending fresh media reports."
+                                        : "Waiting for a report. Load and enable the extension, then restart the browser."
+                                }
+                            }
+                            SelectableLabel {
+                                objectName: "browserSetupInstructions"
+                                Layout.fillWidth: true
+                                visible: topcec.browserSetupPath.length > 0
+                                text: {
+                                    if (setupBrowser.currentIndex < 0)
+                                        return ""
+                                    let browser = root.setupBrowsers[setupBrowser.currentIndex]
+                                    if (browser.isFirefox)
+                                        return "In Firefox 140 or newer, open "
+                                            + "about:debugging#/runtime/this-firefox, choose "
+                                            + "Load Temporary Add-on, and select manifest.json "
+                                            + "from this folder:"
+                                    return "Open " + browser.extensionsUrl
+                                        + " in your browser, enable Developer mode, and load "
+                                        + "unpacked from this folder:"
+                                }
+                            }
+                            SelectableLabel {
+                                objectName: "browserSetupPath"
+                                Layout.fillWidth: true
+                                visible: topcec.browserSetupPath.length > 0
+                                text: topcec.browserSetupPath
+                            }
+                            Controls.Button {
+                                objectName: "copyBrowserSetupPath"
+                                visible: topcec.browserSetupPath.length > 0
+                                text: "Copy folder path"
+                                icon.name: "edit-copy"
+                                onClicked: topcec.copyText(topcec.browserSetupPath)
+                            }
+                            Controls.TextField {
+                                id: setupExtensionId
+                                objectName: "browserExtensionId"
+                                Layout.fillWidth: true
+                                visible: topcec.browserSetupPath.length > 0
+                                    && setupBrowser.currentIndex >= 0
+                                    && !root.setupBrowsers[setupBrowser.currentIndex].isFirefox
+                                placeholderText: "Paste the 32-letter extension ID shown by the browser"
+                                Accessible.name: "Browser extension ID"
+                                enabled: !topcec.browserSetupPending
+                            }
+                            CopyableCheckBox {
+                                id: setupGrantAccess
+                                objectName: "browserGrantAccess"
+                                visible: topcec.browserSetupPath.length > 0
+                                    && setupBrowser.currentIndex >= 0
+                                    && !root.setupBrowsers[setupBrowser.currentIndex].isFirefox
+                                    && setupInstallation.currentIndex === 0
+                                enabled: !topcec.browserSetupPending
+                                text: "Allow this Flatpak browser to send media status to topCEC"
+                            }
+                            Controls.Button {
+                                objectName: "registerBrowserExtension"
+                                visible: topcec.browserSetupPath.length > 0
+                                    && setupBrowser.currentIndex >= 0
+                                    && !root.setupBrowsers[setupBrowser.currentIndex].isFirefox
+                                text: "Register native host"
+                                enabled: !topcec.browserSetupPending
+                                    && /^[a-p]{32}$/.test(setupExtensionId.text.trim())
+                                onClicked: topcec.setupBrowser(
+                                    root.setupBrowsers[setupBrowser.currentIndex].id,
+                                    setupInstallation.currentIndex === 0,
+                                    setupExtensionId.text.trim(), setupGrantAccess.checked)
                             }
                         }
                     }
@@ -1713,16 +2043,30 @@ Kirigami.ApplicationWindow {
                         text: topcec.firefoxAudioStatusMessage
                     }
                     SelectableLabel {
+                        objectName: "chromiumAudioStatus"
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2 && topcec.chromiumAudioStatusMessage.length > 0
+                        text: topcec.chromiumAudioStatusMessage
+                    }
+                    SelectableLabel {
                         Layout.fillWidth: true
                         visible: root.currentSection === 2 && topcec.inhibitionsMessage.length > 0
                         text: topcec.inhibitionsMessage
+                    }
+                    SelectableLabel {
+                        objectName: "standbyBlockStatus"
+                        Layout.fillWidth: true
+                        visible: root.currentSection === 2 && topcec.standbyBlockMessage.length > 0
+                        text: topcec.standbyBlockMessage
                     }
                     SelectableLabel {
                         objectName: "noBlockingApps"
                         Layout.fillWidth: true
                         visible: root.currentSection === 2 && !topcec.firefoxPlaybackActive
                             && (!root.firefoxAudioEnabled || topcec.firefoxAudioStatusMessage.length === 0)
+                            && topcec.chromiumAudioStatusMessage.length === 0
                             && topcec.blockingApps.length === 0 && topcec.inhibitionsMessage.length === 0
+                            && topcec.standbyBlockMessage.length === 0
                         text: "No apps are currently blocking standby."
                     }
                     Repeater {
@@ -1814,6 +2158,12 @@ Kirigami.ApplicationWindow {
                             Layout.fillWidth: true
                             visible: topcec.actionMessage.length > 0
                             text: topcec.actionMessage
+                        }
+                        SelectableLabel {
+                            objectName: "firefoxAccessibilityHelp"
+                            Layout.fillWidth: true
+                            visible: topcec.firefoxAccessibilityHelp.length > 0
+                            text: topcec.firefoxAccessibilityHelp
                         }
                         Flow {
                             objectName: "simulationActions"
