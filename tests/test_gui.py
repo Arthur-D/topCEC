@@ -2494,6 +2494,15 @@ class GuiChecks(unittest.TestCase):
         browser.setProperty('currentIndex', 0)
         installation.setProperty('currentIndex', 0)
         app.processEvents()
+        hardware_help = window.findChild(QObject, 'browserSetupHardwareHelp')
+        self.assertIn('No TV or CEC adapter is needed', hardware_help.property('text'))
+        report_status = window.findChild(QObject, 'browserExtensionReportStatus')
+        self.assertTrue(report_status.property('visible'))
+        self.assertIn('Waiting for a report', report_status.property('text'))
+        backend._service_data = {'browser_extension_reports': {'chromium': True}}
+        backend.changed.emit()
+        app.processEvents()
+        self.assertIn('sending fresh media reports', report_status.property('text'))
         for control in (browser, installation):
             self.assertGreaterEqual(control.property('width') + 1,
                                     control.property('implicitWidth'))

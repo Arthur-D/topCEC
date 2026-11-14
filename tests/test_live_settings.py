@@ -857,6 +857,43 @@ class LiveSettingsChecks(unittest.TestCase):
 
             self.run_service(path, scenario, initial={'firefox_audio_blocks_standby': True})
 
+    def test_browser_extension_reports_are_visible_without_cec_hardware(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                initial = json.loads(context.receiver.GetStatus())
+                self.assertFalse(initial['cec_enabled'])
+                self.assertFalse(initial['browser_extension_reports']['firefox'])
+                self.assertFalse(initial['browser_extension_reports']['chromium'])
+
+                firefox_snapshot = {
+                    'version': 1,
+                    'windows': [{
+                        'window_id': 1, 'active_title': 'Test page',
+                        'tabs': [{'audible': False, 'muted': False, 'video': False}],
+                    }],
+                }
+                context.receiver.Report(
+                    'Firefox-media-snapshot: ' + json.dumps(firefox_snapshot))
+                context.browser_receiver.Report(json.dumps({
+                    'version': 1, 'browser': 'chromium', 'instance': 'a' * 32,
+                    'windows': firefox_snapshot['windows'],
+                }))
+                connected = json.loads(context.receiver.GetStatus())
+                self.assertTrue(connected['browser_extension_reports']['firefox'])
+                self.assertTrue(connected['browser_extension_reports']['chromium'])
+                self.assertFalse(connected['browser_extension_reports']['chrome'])
+
+                context.now = 16
+                stale = json.loads(context.receiver.GetStatus())
+                self.assertFalse(stale['browser_extension_reports']['firefox'])
+                self.assertFalse(stale['browser_extension_reports']['chromium'])
+
+            self.run_service(path, scenario, initial={
+                'cec_enabled': False, 'cec_port': '', 'devices': [],
+            })
+
     def test_cec_adapter_probe_opens_nonblocking_and_never_sends_commands(self):
         with patch.object(monitor.os, 'open', return_value=42) as opened, \
                 patch.object(monitor.os, 'fstat', return_value=SimpleNamespace(st_mode=0o20660)), \

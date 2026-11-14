@@ -120,6 +120,12 @@ as an unpacked extension. Copy the ID back into topCEC and select
 **Register native host**. For a Flatpak browser, check the box granting access
 to the browser-media D-Bus service and fully restart the browser.
 
+No TV or CEC adapter is needed to configure or test the extension. Keep CEC
+disabled while testing; the setup panel reports when it receives fresh media
+snapshots from the selected browser. After loading and enabling the extension,
+restart the browser to verify that reports reach the host without sending TV
+commands.
+
 For command-line setup after a user installation:
 
 ```sh

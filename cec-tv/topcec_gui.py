@@ -452,6 +452,11 @@ class GuiBackend(QObject):
     def browserSetupPending(self):
         return self._browser_setup_pending
 
+    @Property('QVariant', notify=changed)
+    def browserExtensionReports(self):
+        reports = self._service_data.get('browser_extension_reports')
+        return reports if isinstance(reports, dict) else {}
+
     @Slot()
     def resetBrowserSetup(self):
         self._browser_setup_generation += 1

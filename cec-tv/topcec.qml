@@ -1817,6 +1817,11 @@ Kirigami.ApplicationWindow {
                                 Layout.fillWidth: true
                                 text: "Choose your browser and installation type. Firefox uses an optional add-on."
                             }
+                            SelectableLabel {
+                                objectName: "browserSetupHardwareHelp"
+                                Layout.fillWidth: true
+                                text: "No TV or CEC adapter is needed to configure or test the extension. Keep CEC disabled while testing."
+                            }
                             Flow {
                                 Layout.fillWidth: true
                                 spacing: Kirigami.Units.smallSpacing
@@ -1871,6 +1876,22 @@ Kirigami.ApplicationWindow {
                                 Layout.fillWidth: true
                                 visible: topcec.browserSetupMessage.length > 0
                                 text: topcec.browserSetupMessage
+                            }
+                            SelectableLabel {
+                                objectName: "browserExtensionReportStatus"
+                                Layout.fillWidth: true
+                                visible: topcec.backendAvailable && setupBrowser.currentIndex >= 0
+                                text: {
+                                    if (setupBrowser.currentIndex < 0)
+                                        return ""
+                                    let browser = root.setupBrowsers[setupBrowser.currentIndex]
+                                    let reports = topcec.browserExtensionReports
+                                    if (!browser)
+                                        return ""
+                                    return reports[browser.id] === true
+                                        ? "Extension is sending fresh media reports."
+                                        : "Waiting for a report. Load and enable the extension, then restart the browser."
+                                }
                             }
                             SelectableLabel {
                                 objectName: "browserSetupInstructions"
