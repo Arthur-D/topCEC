@@ -151,20 +151,40 @@ audible playback cannot be uniquely associated with a display, standby remains
 blocked. PipeWire stream state is not a replacement by itself: it identifies
 application audio streams, not the producing tab or display.
 
-Install the user-level native host registration with
-`bash packaging/install-firefox-native-host.sh` (also run by
-`install-user.sh`). Installation also creates the unsigned signing package
-`~/.local/share/topcec/topcec-firefox-media.zip`. Load the extension from
-`~/.local/share/topcec/firefox-extension/manifest.json` temporarily through
-Firefox's `about:debugging` during development. For normal Firefox releases,
-submit the ZIP for signing through [Mozilla Add-ons Developer Hub](https://addons.mozilla.org/developers/)
-and install the signed `.xpi` returned by Mozilla. To create a separate ZIP
-without installing topCEC, run `bash packaging/build-firefox-extension.sh`
-(output defaults to `dist/`).
-Firefox Flatpak native messaging is not claimed as
-supported: its sandbox may prevent launching the host executable outside its
-filesystem, so use the WebExtension path only with a Firefox installation
-whose native-messaging support is confirmed. AT-SPI remains the safe fallback.
+The extension requires desktop Firefox 140 or later, which shows the data
+disclosure at installation. Active tab titles and audio flags stay on the device.
+The extension is disabled in private windows.
+
+#### Build and sign
+
+1. Run `bash packaging/build-firefox-extension.sh` to create
+   `dist/topcec-firefox-media.zip`.
+2. In the [Mozilla Add-ons Developer Hub](https://addons.mozilla.org/developers/),
+   submit the ZIP using **On your own** for an unlisted, self-distributed
+   add-on. In the submission notes, explain that the extension uses native
+   messaging to send active tab titles and audible/muted flags to the local
+   topCEC app for TV standby detection.
+3. Download the signed `.xpi` from the Developer Hub when it is available.
+
+#### Install
+
+1. Register the user-level native host with
+   `bash packaging/install-firefox-native-host.sh`. The topCEC
+   `packaging/install-user.sh` installer also does this.
+2. In Firefox, open `about:addons`, choose **Install Add-on From File…** from
+   the gear menu, and select the signed `.xpi`.
+
+For temporary development testing, go to `about:debugging#/runtime/this-firefox`,
+click **Load Temporary Add-on…**, and select `firefox-extension/manifest.json`.
+Firefox removes temporary add-ons on restart.
+
+The Firefox Flatpak can install the signed XPI. For communication with topCEC,
+use Firefox 157 or later with a working native-messaging proxy on the host and
+D-Bus access to `org.freedesktop.NativeMessagingProxy` from the Flatpak.
+In `about:config`, set
+`widget.use-xdg-desktop-portal.native-messaging-proxy` to `2` (auto-detect)
+if it is disabled, then restart Firefox. AT-SPI remains available when the
+bridge is unavailable.
 
 ### Chromium-based browser media detection
 
