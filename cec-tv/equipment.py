@@ -107,6 +107,8 @@ def discover_apps():
         name = app.get_display_name()
         if identity and name and identity not in apps:
             row = {'id': identity, 'name': name}
+            if not app.should_show():
+                row['menu_hidden'] = True
             get_window_class = getattr(app, 'get_startup_wm_class', None)
             window_class = get_window_class() if get_window_class else None
             if window_class:

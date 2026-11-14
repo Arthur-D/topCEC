@@ -739,7 +739,8 @@ Kirigami.ApplicationWindow {
         if (!apps.some(app => app.id === firefox.id))
             apps.push(firefox)
         for (let app of installedApps) {
-            if ((showAllApps.checked || browserForApp(app) || isFirefoxApp(app.id)
+            if (!app.menu_hidden
+                    && (showAllApps.checked || browserForApp(app) || isFirefoxApp(app.id)
                     || launcherGroups.has(app.launcher_group))
                     && !apps.some(item => item.id === app.id))
                 apps.push(app)
