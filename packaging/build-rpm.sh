@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${TOPCEC_VERSION:-0.1.0}"
+VERSION="$(awk '$1 == "Version:" {print $2; exit}' "$SOURCE_DIR/packaging/topcec.spec")"
 OUTPUT_DIR="${TOPCEC_RPM_OUTPUT_DIR:-$SOURCE_DIR/dist}"
 if ! command -v rpmbuild >/dev/null 2>&1; then
     printf 'rpmbuild is required to build the RPM; no package was installed.\n' >&2
@@ -26,7 +26,7 @@ for file in \
     start.py topcec_gui.py topcec.qml net.local.topcec.svg; do
     install -m 0644 "$SOURCE_DIR/cec-tv/$file" "$ARCHIVE_ROOT/cec-tv/$file"
 done
-for file in LICENSE README.md PROVENANCE.md; do
+for file in LICENSE README.md PACKAGING.md RELEASE-AUDIT.md PROVENANCE.md; do
     install -m 0644 "$SOURCE_DIR/$file" "$ARCHIVE_ROOT/$file"
 done
 for file in topcec.service topcec-gui topcec-gui.desktop \
@@ -45,7 +45,6 @@ tar -C "$WORK_DIR" -czf "$WORK_DIR/SOURCES/topcec-$VERSION.tar.gz" \
 cp "$SOURCE_DIR/packaging/topcec.spec" "$WORK_DIR/SPECS/topcec.spec"
 rpmbuild -ba "$WORK_DIR/SPECS/topcec.spec" \
     --define "_topdir $WORK_DIR" \
-    --define "_topcec_version $VERSION" \
     --define "_sourcedir $WORK_DIR/SOURCES"
 mapfile -d '' -t RPM_FILES < <(
     find "$WORK_DIR/RPMS" "$WORK_DIR/SRPMS" -type f -name '*.rpm' -print0)
