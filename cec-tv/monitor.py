@@ -28,7 +28,8 @@ from configuration import (
     DEFAULT_CONFIG, SCHEMA_VERSION, default_config_path, load_config, merge_cli, save_config,
     validate_config, mouse_outputs,
 )
-from firefox_media import FirefoxWebExtensionProvider
+from firefox_media import (PIP_CAPTION, FirefoxPiPScan, FirefoxWebExtensionProvider,
+                           is_firefox_executable, scan_firefox_pip)
 from chromium_media import BROWSERS, ChromiumMedia
 from standby_apps import (InhibitionHistory, PlasmaInhibitions, decode_windows,
                           forced_inhibitions, matching_inhibitions, observed_apps)
@@ -468,12 +469,6 @@ class EvdevActivityProvider:
         return None
 
 
-def is_firefox_executable(path):
-    executable = Path(path)
-    return (executable.name in ("firefox", "firefox-bin")
-            and executable.parent.name == "firefox")
-
-
 def firefox_window_snapshot(payload, read_exe=None):
     """Resolve KWin PIDs on the host; never infer browser identity from titles."""
     if read_exe is None:
@@ -488,7 +483,10 @@ def firefox_window_snapshot(payload, read_exe=None):
                 or not isinstance(row.get("output"), str)):
             raise ValueError("Invalid window identity")
         if is_firefox_executable(read_exe(row["pid"])):
-            result.append({"title": row["title"], "output": row["output"]})
+            window = {"title": row["title"], "output": row["output"]}
+            if "size" in row:
+                window.update(pid=row["pid"], size=row["size"])
+            result.append(window)
     return json.dumps(result)
 
 
@@ -499,6 +497,7 @@ class Mapping:
         self.snapshot_stamp = None
         self.snapshot_counts = Counter()
         self.snapshot_error = None
+        self.windows = []
 
     def report(self, output, title, now):
         if self.snapshot_stamp is not None:
@@ -522,6 +521,7 @@ class Mapping:
             return False
         self.reports = {(row['title'], row['output']): now for row in rows}
         self.snapshot_counts = Counter(row['title'] for row in rows)
+        self.windows = rows
         self.snapshot_stamp = now
         self.snapshot_error = None
         return True
@@ -750,6 +750,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         media_provider = FirefoxMediaProvider()
     mapping = Mapping(args.mapping_ttl)
     webextension_media = FirefoxWebExtensionProvider()
+    firefox_pip = FirefoxPiPScan()
     chromium_media = ChromiumMedia()
     match_diagnostics = MatchDiagnostics()
     selector = selectors.DefaultSelector()
@@ -1404,9 +1405,17 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 runtime_config['force_inhibition_apps'], equipment_snapshot.get('apps') or [],
                 app_windows, app_windows_stamp is not None
                 and now - app_windows_stamp <= mapping.ttl, media_outputs))
-            if runtime_config['firefox_video_blocks_standby'] and media_outputs:
+            video_enabled = runtime_config['firefox_video_blocks_standby'] and media_outputs
+            pip_windows = []
+            if video_enabled and mapping.health(now, required=True) is None:
+                if (len(mapping.windows) > len(webextension_media.windows or [])
+                        or any(window['title'] == PIP_CAPTION for window in mapping.windows)):
+                    pip_windows = mapping.windows
+            pip_players = firefox_pip.poll(now, pip_windows)
+            if video_enabled:
                 video_states = [
-                    webextension_media.video_state(mapping, now, output, mapping.ttl)
+                    webextension_media.video_state(
+                        mapping, now, output, mapping.ttl, pip_players)
                     for output in media_outputs
                 ]
                 if any(state is None for state in video_states):
@@ -1547,6 +1556,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     except KeyboardInterrupt:
         pass
     finally:
+        firefox_pip.close()
         if equipment_worker is not None:
             if equipment_worker.poll() is None:
                 equipment_worker.kill()
@@ -2368,7 +2378,14 @@ def main():
                         help='Block standby without fresh Firefox live-bridge reports')
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--atspi-scan', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--atspi-pip-scan', nargs='+', type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.atspi_pip_scan:
+        try:
+            print(json.dumps(scan_firefox_pip(args.atspi_pip_scan)))
+            return 0
+        except Exception:
+            return 1
     try:
         config = load_config(args.config) if args.config else {
             'schema_version': 1, **DEFAULT_CONFIG}

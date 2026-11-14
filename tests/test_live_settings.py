@@ -432,10 +432,14 @@ class LiveSettingsChecks(unittest.TestCase):
                                     for item in status['blocking_apps']))
                 snapshot['windows'][0]['tabs'].append(
                     {'audible': False, 'muted': False, 'video': None})
+                receiver.Report('Firefox-snapshot: ' + json.dumps([
+                    {'title': 'Video — Mozilla Firefox', 'output': 'TV'},
+                    {'title': 'Unreported window — Mozilla Firefox', 'output': 'TV'},
+                ]))
                 receiver.Report('Firefox-media-snapshot: ' + json.dumps(snapshot))
                 self.assertTrue(context.callbacks[100]())
                 status = json.loads(receiver.GetStatus())
-                self.assertIn('unknown', status['fail_safe_reason'])
+                self.assertIn('Mozilla Firefox — Video', status['fail_safe_reason'])
                 self.assertTrue(any(item['reason'] == 'Video'
                                     for item in status['blocking_apps']))
                 snapshot['windows'][0]['tabs'].pop()

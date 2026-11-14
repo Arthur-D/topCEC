@@ -18,8 +18,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'cec-tv'))
 
-from firefox_media import FirefoxWebExtensionProvider
-from monitor import Mapping
+from firefox_media import FirefoxWebExtensionProvider, _pip_controls
+from monitor import Mapping, firefox_window_snapshot
 from native_messaging import MAX_MESSAGE_SIZE, read_message, write_message
 
 
@@ -55,7 +55,8 @@ const browser = {
     tabs: {
         sendMessage: async (_tabId, _message, {frameId}) => {
             if (states[frameId] === null) throw new Error("inaccessible");
-            return {playing: states[frameId]};
+            const count = states[frameId];
+            return {playing: count > 0, count};
         },
         onUpdated: listener, onActivated: listener, onCreated: listener,
         onRemoved: listener, onAttached: listener, onDetached: listener,
@@ -72,12 +73,17 @@ const context = vm.createContext({browser, setTimeout, clearTimeout,
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), context);
 (async () => {
     for (const [input, expected] of [
-        [[true, null], true], [[false, null], null], [[false, false], false],
-        [[true, false], true], [[], null],
+        [[2, null], {video: true}], [[0, null], {video: null}],
+        [[0, 0], {video: false, playing_videos: 0}],
+        [[1, 2], {video: true, playing_videos: 3}], [[], {video: null}],
     ]) {
         states = input;
-        assert.strictEqual(await context.videoState(1), expected);
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(await context.videoState({id: 1}))),
+                               expected);
     }
+    const discarded = await context.videoState({id: 1, discarded: true});
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(discarded)),
+                           {video: false, playing_videos: 0});
 })().catch(error => { console.error(error); process.exitCode = 1; });
 '''
         subprocess.run(['node', '-e', script, str(ROOT / 'firefox-extension/background.js')],
@@ -120,6 +126,88 @@ vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), context);
         }]), 11)
         self.assertEqual(self.provider.video_state(self.mapping, 12, 'HDMI-A-2', 15),
                          (False, True))
+
+    def test_confirmed_video_survives_unreported_windows_and_unknown_tabs(self):
+        self.mapping.snapshot(json.dumps([
+            {'title': 'Unreported window — Mozilla Firefox', 'output': 'HDMI-A-2'},
+            {'title': 'TV video — Mozilla Firefox', 'output': 'HDMI-A-2'},
+        ]), 10)
+        window = {
+            'window_id': 3, 'active_title': 'TV video',
+            'tabs': [{'audible': False, 'muted': True, 'video': True},
+                     {'audible': False, 'muted': False, 'video': None}],
+        }
+        self.provider.update(self.snapshot([window]), 11)
+        self.assertEqual(self.provider.video_state(self.mapping, 12, 'HDMI-A-2', 15),
+                         (True, False))
+        window['tabs'][0]['video'] = False
+        self.provider.update(self.snapshot([window]), 13)
+        self.assertEqual(self.provider.video_state(self.mapping, 14, 'HDMI-A-2', 15),
+                         (False, True))
+
+    def test_video_keeps_duplicate_window_titles_ambiguous(self):
+        row = {'title': 'TV video — Mozilla Firefox', 'output': 'HDMI-A-2'}
+        self.mapping.snapshot(json.dumps([row, row]), 10)
+        self.provider.update(self.snapshot([{
+            'window_id': 3, 'active_title': 'TV video',
+            'tabs': [{'audible': False, 'muted': True, 'video': True}],
+        }]), 11)
+        self.assertEqual(self.provider.video_state(self.mapping, 12, 'HDMI-A-2', 15),
+                         (False, True))
+
+    def test_native_pip_follows_the_playing_player_and_releases_on_pause(self):
+        desktop = [
+            {'title': 'Player tab — Mozilla Firefox', 'output': 'eDP-1',
+             'pid': 42, 'size': [1200, 900]},
+            {'title': 'Picture-in-Picture', 'output': 'eDP-1',
+             'pid': 42, 'size': [320, 180]},
+            {'title': 'Picture-in-Picture', 'output': 'HDMI-A-2',
+             'pid': 42, 'size': [640, 360]},
+        ]
+        players = [{'title': row['title'], 'pid': 42, 'size': row['size'],
+                    'playing': row['output'] == 'HDMI-A-2'}
+                   for row in desktop[1:]]
+        tab = {'audible': False, 'muted': True, 'video': True, 'playing_videos': 1}
+        media = [{'window_id': 1, 'active_title': 'Player tab', 'tabs': [tab]}]
+
+        def observe():
+            snapshot = firefox_window_snapshot(
+                json.dumps(desktop), read_exe=lambda _: '/usr/lib/firefox/firefox')
+            self.mapping.snapshot(snapshot, 10)
+            self.assertTrue(self.provider.update(self.snapshot(media), 10))
+            return tuple(self.provider.video_state(self.mapping, 11, display, 15, players)
+                         for display in ('eDP-1', 'HDMI-A-2'))
+
+        self.assertEqual(observe(), ((False, False), (True, False)))
+        # Identical titles and sizes leave either output as a possible match.
+        desktop[1]['size'] = players[0]['size'] = [640, 360]
+        self.assertEqual(observe(), ((False, True), (False, True)))
+        desktop[2]['output'] = 'eDP-1'
+        self.assertEqual(observe(), ((True, False), (False, False)))
+        desktop[2]['output'] = 'HDMI-A-2'
+        players[1]['playing'] = False
+        tab.update(video=False, playing_videos=0)
+        self.assertEqual(observe(), ((False, False), (False, False)))
+        # Ordinary inline playback still blocks its browser display.
+        tab.update(video=True, playing_videos=1)
+        self.assertEqual(observe(), ((True, False), (False, False)))
+        players.clear()
+        self.assertEqual(observe(), ((False, True), (False, True)))
+
+    def test_pip_controls_uses_native_ids_and_class_instead_of_localized_labels(self):
+        def node(attributes, *children, role='section'):
+            return SimpleNamespace(getAttributes=lambda: attributes,
+                                   getRoleName=lambda: role, childCount=len(children),
+                                   getChildAtIndex=children.__getitem__)
+
+        buttons = [node(['id:unpip'], role='push button'),
+                   node(['id:playpause'], role='push button')]
+        playing = node([], node(['id:controls', 'class:playing'], *buttons))
+        paused = node([], node(['id:controls'], *buttons))
+        self.assertIs(_pip_controls(playing), True)
+        self.assertIs(_pip_controls(paused), False)
+        self.assertIsNone(_pip_controls(node([], playing, role='document web')))
+        self.assertIsNone(_pip_controls(node(['id:controls'], buttons[1])))
 
     def test_audible_unmuted_tab_uses_its_correlated_window_display(self):
         self.assertTrue(self.provider.update(self.snapshot([{
