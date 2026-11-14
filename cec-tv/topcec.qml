@@ -1846,6 +1846,7 @@ Kirigami.ApplicationWindow {
                                     textRole: "name"
                                     currentIndex: -1
                                     displayText: currentIndex < 0 ? "Select browser" : currentText
+                                    width: Math.max(implicitWidth, Kirigami.Units.gridUnit * 9)
                                     implicitWidth: Math.max(implicitContentWidth,
                                         contentItem.implicitWidth) + leftPadding + rightPadding
                                         + indicator.width + spacing
@@ -1863,6 +1864,7 @@ Kirigami.ApplicationWindow {
                                     model: ["Flatpak", "Native"]
                                     currentIndex: -1
                                     displayText: currentIndex < 0 ? "Installation type" : currentText
+                                    width: Math.max(implicitWidth, Kirigami.Units.gridUnit * 9)
                                     implicitWidth: Math.max(implicitContentWidth,
                                         contentItem.implicitWidth) + leftPadding + rightPadding
                                         + indicator.width + spacing
