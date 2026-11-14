@@ -193,6 +193,19 @@ def service_setup():
                 assert 'Invalid browser setup' in str(error)
             else:
                 raise AssertionError('Invalid extension ID accepted')
+            request.update(browser='firefox', flatpak=False, extension_id='', grant_access=False)
+            result = json.loads(service.SetupBrowser(json.dumps(request), timeout=10))
+            assert result['browser'] == 'firefox' and result['registered']
+            assert not result['flatpak'] and not result['access_granted']
+            assert Path(result['extension'], 'manifest.json').is_file()
+            assert Path(result['extension'], 'background.js').is_file()
+            request['extension_id'] = 'a' * 32
+            try:
+                service.SetupBrowser(json.dumps(request), timeout=10)
+            except dbus.DBusException as error:
+                assert 'Firefox does not use' in str(error)
+            else:
+                raise AssertionError('Firefox accepted a Chromium extension ID')
         finally:
             monitor.terminate()
             monitor.communicate(timeout=5)

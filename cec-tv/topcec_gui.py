@@ -505,7 +505,16 @@ class GuiBackend(QObject):
                 self._browser_setup_message = 'Browser setup failed: ' + str(error)
             else:
                 self._browser_setup = result
-                if not result['registered']:
+                if result.get('browser') == 'firefox':
+                    self._browser_setup_message = (
+                        'The Firefox native host is installed with topCEC. Load the add-on '
+                        'temporarily from the folder below; Firefox removes temporary add-ons '
+                        'when it closes. A Mozilla-signed XPI is required for permanent '
+                        'installation.')
+                    if result['flatpak']:
+                        self._browser_setup_message += (
+                            ' Firefox Flatpak also needs native-messaging proxy support.')
+                elif not result['registered']:
                     self._browser_setup_message = (
                         'Load the extension from the folder below, then paste its extension ID.')
                 elif result['flatpak'] and not result['access_granted']:

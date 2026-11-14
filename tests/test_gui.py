@@ -2377,11 +2377,18 @@ class GuiChecks(unittest.TestCase):
         engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
         window = engine.rootObjects()[0]
         window.show()
+        window.setProperty('width', 780)
         window.setProperty('currentSection', 2)
         app.processEvents()
         QMetaObject.invokeMethod(window.findChild(QObject, 'browserSetupToggle'), 'click')
-        window.findChild(QObject, 'setupBrowser').setProperty('currentIndex', 0)
-        window.findChild(QObject, 'setupInstallation').setProperty('currentIndex', 0)
+        browser = window.findChild(QObject, 'setupBrowser')
+        installation = window.findChild(QObject, 'setupInstallation')
+        browser.setProperty('currentIndex', 0)
+        installation.setProperty('currentIndex', 0)
+        app.processEvents()
+        for control in (browser, installation):
+            self.assertGreaterEqual(control.property('width') + 1,
+                                    control.property('implicitWidth'))
         requests = []
         with patch.object(backend, '_service_interface', return_value=Mock(isValid=lambda: True)), \
                 patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
@@ -2412,6 +2419,22 @@ class GuiChecks(unittest.TestCase):
             callback(self.reply({'extension': '/tmp/extension', 'registered': True,
                                  'flatpak': True, 'access_granted': True}))
             self.assertIn('restart', backend.browserSetupMessage)
+
+            browser.setProperty('currentIndex', 5)
+            installation.setProperty('currentIndex', 1)
+            QMetaObject.invokeMethod(window.findChild(QObject, 'prepareBrowserExtension'), 'click')
+            method, callback, request = requests.pop()
+            self.assertEqual(method, 'SetupBrowser')
+            self.assertEqual(request, {'browser': 'firefox', 'flatpak': False,
+                                       'extension_id': '', 'grant_access': False})
+            callback(self.reply({'browser': 'firefox', 'extension': '/tmp/firefox-extension',
+                                 'registered': True, 'flatpak': False,
+                                 'access_granted': False}))
+            self.assertIn('Mozilla-signed XPI', backend.browserSetupMessage)
+            self.assertIn('about:debugging', window.findChild(
+                QObject, 'browserSetupInstructions').property('text'))
+            self.assertFalse(window.findChild(QObject, 'browserExtensionId').property('visible'))
+            self.assertFalse(window.findChild(QObject, 'registerBrowserExtension').property('visible'))
         engine.deleteLater()
 
     def test_browser_setup_reports_unsupported_host_and_ignores_stale_replies(self):
