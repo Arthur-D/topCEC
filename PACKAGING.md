@@ -69,6 +69,14 @@ are excluded. The user installer and RPM register the native host. From source
 you can register it separately with
 `bash packaging/install-firefox-native-host.sh`.
 
+The optional add-on can also be loaded temporarily from topCEC's **Standby** page:
+open **Set up a browser extension**, select **Mozilla Firefox** and an
+installation type, then select **Prepare extension**. In Firefox, open
+`about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and
+select `manifest.json` from the displayed folder. Firefox removes temporary
+add-ons when it closes; a Mozilla-signed XPI is required for persistent
+installation. For Firefox Flatpak, native messaging also requires proxy support.
+
 To prepare the optional add-on for distribution:
 
 1. Run `bash packaging/build-firefox-extension.sh`.

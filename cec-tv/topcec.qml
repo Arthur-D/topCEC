@@ -690,6 +690,9 @@ Kirigami.ApplicationWindow {
         {id: "edge", name: "Microsoft Edge", extensionsUrl: "edge://extensions", aliases: ["msedge", "microsoft-edge", "microsoft-edge-stable", "com.microsoft.edge"]},
         {id: "vivaldi", name: "Vivaldi", extensionsUrl: "vivaldi://extensions", aliases: ["vivaldi", "vivaldi-bin", "vivaldi-stable", "com.vivaldi.vivaldi"]}
     ]
+    readonly property var setupBrowsers: chromiumBrowsers.concat([
+        {id: "firefox", name: "Mozilla Firefox", isFirefox: true}
+    ])
 
     function browserForApp(app) {
         let keys = [app.id || "", app.window_class || ""].map(
@@ -1767,7 +1770,7 @@ Kirigami.ApplicationWindow {
                             width: parent.width
                             SelectableLabel {
                                 Layout.fillWidth: true
-                                text: "Choose your Chromium-based browser and installation type. Firefox uses its own optional extension."
+                                text: "Choose your browser and installation type. Firefox uses an optional add-on."
                             }
                             Flow {
                                 Layout.fillWidth: true
@@ -1775,10 +1778,13 @@ Kirigami.ApplicationWindow {
                                 Controls.ComboBox {
                                     id: setupBrowser
                                     objectName: "setupBrowser"
-                                    model: root.chromiumBrowsers
+                                    model: root.setupBrowsers
                                     textRole: "name"
                                     currentIndex: -1
                                     displayText: currentIndex < 0 ? "Select browser" : currentText
+                                    implicitWidth: Math.max(implicitContentWidth,
+                                        contentItem.implicitWidth) + leftPadding + rightPadding
+                                        + indicator.width + spacing
                                     enabled: !topcec.browserSetupPending
                                     Accessible.name: "Browser"
                                     onCurrentIndexChanged: {
@@ -1793,6 +1799,9 @@ Kirigami.ApplicationWindow {
                                     model: ["Flatpak", "Native"]
                                     currentIndex: -1
                                     displayText: currentIndex < 0 ? "Installation type" : currentText
+                                    implicitWidth: Math.max(implicitContentWidth,
+                                        contentItem.implicitWidth) + leftPadding + rightPadding
+                                        + indicator.width + spacing
                                     enabled: !topcec.browserSetupPending
                                     Accessible.name: "Browser installation type"
                                     onCurrentIndexChanged: {
@@ -1808,7 +1817,7 @@ Kirigami.ApplicationWindow {
                                         && setupInstallation.currentIndex >= 0
                                         && !topcec.browserSetupPending
                                     onClicked: topcec.setupBrowser(
-                                        root.chromiumBrowsers[setupBrowser.currentIndex].id,
+                                        root.setupBrowsers[setupBrowser.currentIndex].id,
                                         setupInstallation.currentIndex === 0, "", false)
                                 }
                             }
@@ -1819,11 +1828,22 @@ Kirigami.ApplicationWindow {
                                 text: topcec.browserSetupMessage
                             }
                             SelectableLabel {
+                                objectName: "browserSetupInstructions"
                                 Layout.fillWidth: true
                                 visible: topcec.browserSetupPath.length > 0
-                                text: setupBrowser.currentIndex < 0 ? "" : "Open "
-                                    + root.chromiumBrowsers[setupBrowser.currentIndex].extensionsUrl
-                                    + " in your browser, enable Developer mode, and load unpacked from this folder:"
+                                text: {
+                                    if (setupBrowser.currentIndex < 0)
+                                        return ""
+                                    let browser = root.setupBrowsers[setupBrowser.currentIndex]
+                                    if (browser.isFirefox)
+                                        return "In Firefox 140 or newer, open "
+                                            + "about:debugging#/runtime/this-firefox, choose "
+                                            + "Load Temporary Add-on, and select manifest.json "
+                                            + "from this folder:"
+                                    return "Open " + browser.extensionsUrl
+                                        + " in your browser, enable Developer mode, and load "
+                                        + "unpacked from this folder:"
+                                }
                             }
                             SelectableLabel {
                                 objectName: "browserSetupPath"
@@ -1843,6 +1863,8 @@ Kirigami.ApplicationWindow {
                                 objectName: "browserExtensionId"
                                 Layout.fillWidth: true
                                 visible: topcec.browserSetupPath.length > 0
+                                    && setupBrowser.currentIndex >= 0
+                                    && !root.setupBrowsers[setupBrowser.currentIndex].isFirefox
                                 placeholderText: "Paste the 32-letter extension ID shown by the browser"
                                 Accessible.name: "Browser extension ID"
                                 enabled: !topcec.browserSetupPending
@@ -1851,6 +1873,8 @@ Kirigami.ApplicationWindow {
                                 id: setupGrantAccess
                                 objectName: "browserGrantAccess"
                                 visible: topcec.browserSetupPath.length > 0
+                                    && setupBrowser.currentIndex >= 0
+                                    && !root.setupBrowsers[setupBrowser.currentIndex].isFirefox
                                     && setupInstallation.currentIndex === 0
                                 enabled: !topcec.browserSetupPending
                                 text: "Allow this Flatpak browser to send media status to topCEC"
@@ -1858,11 +1882,13 @@ Kirigami.ApplicationWindow {
                             Controls.Button {
                                 objectName: "registerBrowserExtension"
                                 visible: topcec.browserSetupPath.length > 0
+                                    && setupBrowser.currentIndex >= 0
+                                    && !root.setupBrowsers[setupBrowser.currentIndex].isFirefox
                                 text: "Register native host"
                                 enabled: !topcec.browserSetupPending
                                     && /^[a-p]{32}$/.test(setupExtensionId.text.trim())
                                 onClicked: topcec.setupBrowser(
-                                    root.chromiumBrowsers[setupBrowser.currentIndex].id,
+                                    root.setupBrowsers[setupBrowser.currentIndex].id,
                                     setupInstallation.currentIndex === 0,
                                     setupExtensionId.text.trim(), setupGrantAccess.checked)
                             }

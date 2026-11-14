@@ -52,12 +52,25 @@ def browser_setup(request):
         raise ValueError('Invalid browser setup request')
     browser, flatpak = request['browser'], request['flatpak']
     extension_id, grant_access = request['extension_id'], request['grant_access']
-    if (not isinstance(browser, str) or browser not in BROWSERS
+    if (not isinstance(browser, str) or (browser not in BROWSERS and browser != 'firefox')
             or type(flatpak) is not bool or type(grant_access) is not bool
             or not isinstance(extension_id, str)
             or (extension_id and not re.fullmatch('[a-p]{32}', extension_id))
             or (grant_access and (not flatpak or not extension_id))):
         raise ValueError('Invalid browser setup options or extension ID')
+    if browser == 'firefox':
+        if extension_id or grant_access:
+            raise ValueError('Firefox does not use a Chromium extension ID or Flatpak grant')
+        extension = Path(__file__).resolve().parent.parent / 'firefox-extension'
+        if not extension.is_dir():
+            extension = Path('/usr/share/topcec/firefox-extension')
+        if not all((extension / name).is_file()
+                   for name in ('manifest.json', 'background.js')):
+            raise RuntimeError('Firefox extension files are not installed; update topCEC.')
+        return {
+            'browser': browser, 'extension': str(extension), 'flatpak': flatpak,
+            'registered': True, 'access_granted': False,
+        }
     script = Path(__file__).resolve().parent.parent / 'packaging/setup-chromium-extension.py'
     if not script.is_file():
         script = Path('/usr/share/topcec/packaging/setup-chromium-extension.py')
