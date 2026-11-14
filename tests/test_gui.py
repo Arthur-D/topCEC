@@ -131,6 +131,10 @@ class GuiChecks(unittest.TestCase):
         backend.config = {
             **DEFAULT_CONFIG, 'target_output': 'HDMI-A-2', 'cec_port': '/dev/mock-cec',
             'devices': [], 'consider_input_devices': False}
+        backend._service_data = {
+            'installed_apps': [{'id': 'firefox.desktop', 'name': 'Mozilla Firefox'}],
+            'observed_apps': [], 'active_inhibitor_apps': [],
+        }
         backend._set_equipment({
             'outputs': [{'path': 'HDMI-A-2', 'label': 'TV'},
                         {'path': 'DP-1', 'label': 'Monitor'}],
@@ -2047,6 +2051,10 @@ class GuiChecks(unittest.TestCase):
         backend.config = {
             **DEFAULT_CONFIG, 'target_output': 'HDMI-A-2', 'cec_port': '/dev/mock-cec',
             'devices': []}
+        backend._service_data = {
+            'installed_apps': [{'id': 'firefox.desktop', 'name': 'Mozilla Firefox'}],
+            'observed_apps': [], 'active_inhibitor_apps': [],
+        }
         backend._set_equipment({
             'outputs': [{'path': 'DP-1', 'label': 'Monitor'},
                         {'path': 'HDMI-A-2', 'label': 'TV'}],
@@ -2148,14 +2156,14 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(window.findChild(QObject, 'canBlockStandbyHeading').property('text'),
                          'Can block screen standby')
         repeater = window.findChild(QObject, 'installedAppsScroll')
-        self.assertEqual(repeater.property('count'), 4)
+        self.assertEqual(repeater.property('count'), 3)
         engine.rootContext().setContextProperty('appChoicesRepeater', repeater)
         def item(index):
             return QQmlExpression(engine.rootContext(), window,
                                   f'appChoicesRepeater.itemAtIndex({index})').evaluate()[0]
         player = item(0)
         self.assertEqual(player.objectName(), 'appRow:player.desktop')
-        removed = item(3)
+        removed = item(2)
         self.assertEqual(removed.objectName(), 'appRow:removed.desktop')
         allow = player.findChild(QObject, 'idleApp:player.desktop')
         self.assertEqual(allow.property('text'), 'Allow standby')
@@ -2209,7 +2217,7 @@ class GuiChecks(unittest.TestCase):
         window.findChild(QObject, 'appSearch').setProperty('text', '')
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         app.processEvents()
-        self.assertEqual(repeater.property('count'), 5)
+        self.assertEqual(repeater.property('count'), 4)
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
         self.assertEqual(set(values['forceInhibitionApps']),
@@ -2318,6 +2326,13 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(values['chromiumAudioBlocksStandby'], ['chromium'])
         video = row.findChild(QObject, 'browserVideo:chromium')
         self.assertTrue(video.property('visible'))
+        allow = row.findChild(QQuickItem, 'idleApp:' + path)
+        force = row.findChild(QQuickItem, 'forceApp:' + path)
+        audio_item = row.findChild(QQuickItem, 'browserAudio:chromium')
+        video_item = row.findChild(QQuickItem, 'browserVideo:chromium')
+        self.assertGreater(audio_item.y(), allow.y())
+        self.assertGreater(audio_item.y(), force.y())
+        self.assertGreater(video_item.y(), audio_item.y())
         QMetaObject.invokeMethod(video, 'click')
         QMetaObject.invokeMethod(checkbox, 'click')
         values = json.loads(QQmlExpression(
@@ -2507,22 +2522,20 @@ class GuiChecks(unittest.TestCase):
         self.assertNotIn('Firefox accessibility:', backend.diagnostics)
         engine.deleteLater()
 
-    def test_firefox_audio_row_uses_discovered_identity_or_audio_only_fallback(self):
+    def test_firefox_audio_row_uses_installed_identity(self):
         app = QGuiApplication.instance() or QGuiApplication([])
-        for app_id, retained in (('org.mozilla.firefox.desktop', False),
-                                 ('firefox.desktop', False),
-                                 ('firefox.desktop', True), (None, False)):
-            with self.subTest(app_id=app_id, retained=retained):
+        for app_id in ('org.mozilla.firefox.desktop', 'firefox.desktop'):
+            with self.subTest(app_id=app_id):
                 backend = GuiBackend(dbus_only=True)
                 backend._connection_state = 'connected'
                 backend._service_status = 'running'
                 backend._config_source = 'saved'
                 backend.config = {**DEFAULT_CONFIG, 'devices': [],
-                                  'idle_inhibition_apps': [app_id] if retained else []}
-                firefox = {'id': app_id, 'name': 'Mozilla Firefox'} if app_id else None
+                                  'idle_inhibition_apps': []}
+                firefox = {'id': app_id, 'name': 'Mozilla Firefox'}
                 backend._service_data = {
-                    'installed_apps': [firefox] if firefox and not retained else [],
-                    'observed_apps': [firefox] if firefox and not retained else [],
+                    'installed_apps': [firefox],
+                    'observed_apps': [firefox],
                     'active_inhibitor_apps': [],
                 }
                 engine = QQmlApplicationEngine()
@@ -2546,6 +2559,47 @@ class GuiChecks(unittest.TestCase):
                                  bool(app_id))
                 engine.deleteLater()
                 app.processEvents()
+
+    def test_uninstalled_browsers_are_not_shown(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        browser_apps = [
+            {'id': 'org.chromium.Chromium.desktop', 'name': 'Chromium'},
+            {'id': 'google-chrome.desktop', 'name': 'Google Chrome'},
+            {'id': 'brave-browser.desktop', 'name': 'Brave'},
+            {'id': 'microsoft-edge.desktop', 'name': 'Microsoft Edge'},
+            {'id': 'vivaldi.desktop', 'name': 'Vivaldi'},
+            {'id': 'org.mozilla.firefox.desktop', 'name': 'Mozilla Firefox'},
+        ]
+        backend.config = {
+            **DEFAULT_CONFIG,
+            'idle_inhibition_apps': ['org.chromium.Chromium.desktop'],
+            'chromium_audio_blocks_standby': ['chromium'],
+            'chromium_video_blocks_standby': ['chrome'],
+            'firefox_audio_blocks_standby': True,
+            'firefox_video_blocks_standby': True,
+        }
+        backend._service_data = {
+            'installed_apps': [],
+            'observed_apps': browser_apps,
+            'active_inhibitor_apps': browser_apps,
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+
+        app_list = window.findChild(QObject, 'installedAppsScroll')
+        self.assertEqual(app_list.property('count'), 0)
+        QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
+        app.processEvents()
+        self.assertEqual(app_list.property('count'), 0)
+        engine.deleteLater()
 
     def test_app_cards_expand_and_firefox_label_stays_readable(self):
         app = QGuiApplication.instance() or QGuiApplication([])
@@ -2590,7 +2644,9 @@ class GuiChecks(unittest.TestCase):
         app.processEvents()
         self.assertGreaterEqual(name.width(), QFontMetricsF(font).horizontalAdvance(name.property('text')))
         self.assertEqual(name.property('lineCount'), 1)
-        self.assertEqual(name.y(), audio.y())
+        video = row.findChild(QQuickItem, 'firefoxVideo')
+        self.assertGreater(audio.y(), name.y())
+        self.assertGreater(video.y(), audio.y())
 
         window.resize(380, 760)
         app.processEvents()
@@ -2646,7 +2702,7 @@ class GuiChecks(unittest.TestCase):
         QMetaObject.invokeMethod(window.findChild(QObject, 'autoSaveTimer'), 'stop')
         engine.deleteLater()
 
-    def test_app_controls_share_a_line_when_wide_and_wrap_when_compact(self):
+    def test_browser_media_options_have_own_lines_at_all_widths(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
@@ -2671,7 +2727,7 @@ class GuiChecks(unittest.TestCase):
         player_row = self.app_row(engine, window, 1)
         firefox_controls = [firefox_row.findChild(QQuickItem, name) for name in (
             'appName:firefox.desktop', 'idleApp:firefox.desktop',
-            'forceApp:firefox.desktop', 'firefoxAudio')]
+            'forceApp:firefox.desktop', 'firefoxAudio', 'firefoxVideo')]
         player_controls = [player_row.findChild(QQuickItem, name) for name in (
             'appName:player.desktop', 'idleApp:player.desktop', 'forceApp:player.desktop')]
         for width in (1300, 775):
@@ -2685,14 +2741,14 @@ class GuiChecks(unittest.TestCase):
                     self.assertLessEqual(left.x() + left.width(), right.x())
             for firefox_control, player_control in zip(firefox_controls, player_controls):
                 self.assertEqual(firefox_control.x(), player_control.x())
+            self.assertGreater(firefox_controls[3].y(), firefox_controls[2].y())
+            self.assertGreater(firefox_controls[4].y(), firefox_controls[3].y())
             if width == 1300:
-                self.assertEqual(firefox_controls[-1].y(), firefox_controls[0].y())
-                self.assertLessEqual(firefox_controls[-2].x() + firefox_controls[-2].width(),
-                                     firefox_controls[-1].x())
+                self.assertEqual(firefox_controls[0].y(), firefox_controls[2].y())
 
         window.resize(380, 760)
         QTest.qWait(50)
-        self.assertGreater(firefox_controls[-1].y(), firefox_controls[0].y())
+        self.assertGreater(firefox_controls[3].y(), firefox_controls[2].y())
         for control in firefox_controls + player_controls:
             self.assertLessEqual(control.x() + control.width(), control.parentItem().width() + 1)
             self.assertLessEqual(control.y() + control.height(), control.parentItem().height() + 1)

@@ -681,14 +681,6 @@ Kirigami.ApplicationWindow {
                 "org.mozilla.firefoxdeveloperedition", "org.mozilla.firefox-beta"].includes(key)
     }
 
-    function firefoxApp() {
-        let retained = retainedAppIds.find(id => isFirefoxApp(id))
-        return topcec.installedApps.find(app => isFirefoxApp(app.id))
-            || topcec.observedApps.find(app => isFirefoxApp(app.id))
-            || (retained ? {id: retained, name: retained + " (not installed)"} : null)
-            || {id: "__firefox_audio__", name: "Mozilla Firefox", audioOnly: true}
-    }
-
     property var chromiumBrowsers: [
         {id: "chromium", name: "Chromium", extensionsUrl: "chrome://extensions", aliases: ["chromium", "chromium-browser", "org.chromium.chromium"]},
         {id: "chrome", name: "Google Chrome", extensionsUrl: "chrome://extensions", aliases: ["google-chrome", "google-chrome-stable", "com.google.chrome"]},
@@ -729,6 +721,12 @@ Kirigami.ApplicationWindow {
             || null
     }
 
+    function browserIsInstalled(app, installedBrowserIds, firefoxInstalled) {
+        let browser = browserForApp(app)
+        return browser ? installedBrowserIds.has(browser.id)
+            : !isFirefoxApp(app.id) || firefoxInstalled
+    }
+
     function setChromiumAudio(browserId, enabled) {
         let choices = chromiumAudioDraft.filter(id => id !== browserId)
         if (enabled)
@@ -737,15 +735,18 @@ Kirigami.ApplicationWindow {
     }
 
     function appChoices() {
-        let apps = topcec.observedApps.slice()
         let installedApps = topcec.installedApps
+        let installedBrowserIds = new Set(installedApps.map(app => browserForApp(app)?.id)
+            .filter(Boolean))
+        let firefox = installedApps.find(app => isFirefoxApp(app.id)) || null
+        let apps = topcec.observedApps.filter(app =>
+            browserIsInstalled(app, installedBrowserIds, !!firefox))
         let launcherGroups = new Set(apps.map(app => app.launcher_group).filter(Boolean))
         for (let app of installedApps) {
             if (app.launcher_group && retainedAppIds.includes(app.id))
                 launcherGroups.add(app.launcher_group)
         }
-        let firefox = firefoxApp()
-        if (!apps.some(app => app.id === firefox.id))
+        if (firefox && !apps.some(app => app.id === firefox.id))
             apps.push(firefox)
         for (let app of installedApps) {
             if (!app.menu_hidden
@@ -757,7 +758,9 @@ Kirigami.ApplicationWindow {
         for (let id of retainedAppIds) {
             if (!apps.some(app => app.id === id)) {
                 let installed = installedApps.find(app => app.id === id)
-                apps.push(installed || {id: id, name: id + " (not installed)"})
+                let app = installed || {id: id, name: id + " (not installed)"}
+                if (browserIsInstalled(app, installedBrowserIds, !!firefox))
+                    apps.push(app)
             }
         }
         let query = appSearch.text.trim().toLowerCase()
@@ -765,38 +768,31 @@ Kirigami.ApplicationWindow {
             for (let id of topcec.activeInhibitorApps) {
                 if (!apps.some(app => app.id === id)) {
                     let installed = installedApps.find(app => app.id === id)
-                    apps.push(installed || {id: id, name: id})
+                    let app = installed || {id: id, name: id}
+                    if (browserIsInstalled(app, installedBrowserIds, !!firefox))
+                        apps.push(app)
                 }
             }
-        }
-        for (let browser of chromiumBrowsers) {
-            if ((showAllApps.checked || chromiumAudioDraft.includes(browser.id))
-                    && !apps.some(app => browserForApp(app)?.id === browser.id))
-                apps.push({id: "__browser_audio__:" + browser.id, name: browser.name,
-                           audioOnly: true, browserId: browser.id})
         }
         let grouped = []
         for (let app of apps) {
             let browser = browserForApp(app)
             let browserId = app.browserId || browser?.id || ""
-            let firefoxMatch = app.id === "__firefox_audio__" || isFirefoxApp(app.id)
+            let firefoxMatch = isFirefoxApp(app.id)
             let key = browserId ? "browser:" + browserId : firefoxMatch ? "firefox"
                 : "app:" + (app.launcher_group || app.id)
             let existing = grouped.find(item => item.groupKey === key)
             if (existing) {
                 if (!existing.groupIds.includes(app.id))
                     existing.groupIds.push(app.id)
-                if (!app.audioOnly)
-                    existing.audioOnly = false
                 continue
             }
             let primary = browserId ? browserApp(browserId) : (firefoxMatch ? firefox : null)
             grouped.push({id: primary?.id || app.id,
                           name: browserId ? chromiumBrowsers.find(item => item.id === browserId).name
-                                  + (app.audioOnly ? " (not detected)" : "")
                               : (firefoxMatch ? primary.name : app.name),
-                          audioOnly: !!app.audioOnly, groupIds: [app.id],
-                          browserId: browserId, isFirefox: firefoxMatch, groupKey: key})
+                          groupIds: [app.id], browserId: browserId,
+                          isFirefox: firefoxMatch, groupKey: key})
         }
         return grouped.filter(app => !query || ((showAllApps.checked
             || app.groupIds.some(id => topcec.activeInhibitorApps.includes(id)))
@@ -1679,18 +1675,13 @@ Kirigami.ApplicationWindow {
                                     readonly property real policyWidth: allowStandby.implicitWidth
                                         + forceStandby.implicitWidth + columnSpacing
                                     readonly property real minimumNameWidth: Kirigami.Units.gridUnit * 6
-                                    readonly property real inlinePolicyWidth: modelData.audioOnly
-                                        ? 0 : policyWidth + columnSpacing
-                                    readonly property bool stackName: width < minimumNameWidth + inlinePolicyWidth
+                                    readonly property real policyRowWidth: policyWidth + columnSpacing
+                                    readonly property bool stackName: width < minimumNameWidth + policyRowWidth
                                     readonly property bool stackPolicies: width < policyWidth
                                     readonly property bool browserAudio: modelData.browserId.length > 0
-                                    readonly property bool inlineAudio: !stackName
-                                        && width >= minimumNameWidth + inlinePolicyWidth
-                                            + audioOption.implicitWidth + columnSpacing
                                     readonly property real nameWidth: stackName ? width
                                         : Math.min(Kirigami.Units.gridUnit * 10,
-                                            width - inlinePolicyWidth
-                                            - (inlineAudio ? audioOption.implicitWidth + columnSpacing : 0))
+                                            width - policyRowWidth)
 
                                     SelectableLabel {
                                         objectName: "appName:" + modelData.id
@@ -1711,7 +1702,6 @@ Kirigami.ApplicationWindow {
                                         Layout.column: appRow.stackName ? 0 : 1
                                         Layout.maximumWidth: implicitWidth
                                         Layout.alignment: Qt.AlignTop | Qt.AlignLeft
-                                        visible: !modelData.audioOnly
                                         text: "Allow standby"
                                         Accessible.name: modelData.name + " allow standby"
                                         checked: !modelData.groupIds.some(id => root.idleAppsDraft.includes(id))
@@ -1724,19 +1714,17 @@ Kirigami.ApplicationWindow {
                                         Layout.column: appRow.stackPolicies ? 0 : (appRow.stackName ? 1 : 2)
                                         Layout.maximumWidth: implicitWidth
                                         Layout.alignment: Qt.AlignTop | Qt.AlignLeft
-                                        visible: !modelData.audioOnly
                                         text: "Force block standby"
                                         Accessible.name: modelData.name + " force block standby"
                                         checked: modelData.groupIds.some(id => root.forceAppsDraft.includes(id))
                                         onClicked: root.setAppGroup(modelData.groupIds, checked, true)
                                     }
                                     CopyableCheckBox {
-                                        id: audioOption
                                         objectName: modelData.isFirefox ? "firefoxAudio"
                                             : (appRow.browserAudio ? "browserAudio:" + modelData.browserId : "")
-                                        Layout.row: appRow.inlineAudio ? 0 : (appRow.stackPolicies ? 3 : 2)
-                                        Layout.column: appRow.inlineAudio ? 3 : 0
-                                        Layout.columnSpan: appRow.inlineAudio ? 1 : 4
+                                        Layout.row: appRow.stackPolicies ? 3 : 2
+                                        Layout.column: 0
+                                        Layout.columnSpan: 4
                                         Layout.maximumWidth: implicitWidth
                                         Layout.alignment: Qt.AlignTop | Qt.AlignLeft
                                         visible: modelData.isFirefox || appRow.browserAudio
@@ -1756,7 +1744,7 @@ Kirigami.ApplicationWindow {
                                     CopyableCheckBox {
                                         objectName: modelData.isFirefox ? "firefoxVideo"
                                             : (appRow.browserAudio ? "browserVideo:" + modelData.browserId : "")
-                                        Layout.row: appRow.inlineAudio ? 1 : (appRow.stackPolicies ? 4 : 3)
+                                        Layout.row: appRow.stackPolicies ? 4 : 3
                                         Layout.column: 0
                                         Layout.columnSpan: 4
                                         Layout.maximumWidth: implicitWidth
