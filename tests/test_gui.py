@@ -743,7 +743,8 @@ class GuiChecks(unittest.TestCase):
             self.assertIsNotNone(card)
         self.assertEqual(window.findChild(QObject, 'serviceStatusLabel').property('text'),
                          'Configuration only,')
-        self.assertEqual(window.findChild(QObject, 'powerStateLabel').property('text'), 'unknown')
+        self.assertEqual(
+            window.findChild(QObject, 'powerStateLabel').property('text'), 'Configuration only')
         power_state = window.findChild(QQuickItem, 'powerStateLabel')
         monitoring = window.findChild(QQuickItem, 'monitoringStatusRow')
         service_status = window.findChild(QQuickItem, 'serviceStatusLabel')
@@ -2330,9 +2331,11 @@ class GuiChecks(unittest.TestCase):
         force = row.findChild(QQuickItem, 'forceApp:' + path)
         audio_item = row.findChild(QQuickItem, 'browserAudio:chromium')
         video_item = row.findChild(QQuickItem, 'browserVideo:chromium')
-        self.assertGreater(audio_item.y(), allow.y())
-        self.assertGreater(audio_item.y(), force.y())
-        self.assertGreater(video_item.y(), audio_item.y())
+        audio_position = audio_item.mapToItem(row, QPointF(0, 0))
+        video_position = video_item.mapToItem(row, QPointF(0, 0))
+        self.assertGreater(audio_position.y(), allow.mapToItem(row, QPointF(0, 0)).y())
+        self.assertGreater(audio_position.y(), force.mapToItem(row, QPointF(0, 0)).y())
+        self.assertAlmostEqual(video_position.y(), audio_position.y(), delta=1)
         QMetaObject.invokeMethod(video, 'click')
         QMetaObject.invokeMethod(checkbox, 'click')
         values = json.loads(QQmlExpression(
@@ -2553,7 +2556,8 @@ class GuiChecks(unittest.TestCase):
                 audio = row.findChild(QObject, 'firefoxAudio')
                 name = row.findChild(QObject, 'appName:' + row_id)
                 self.assertEqual(audio.property('text'), 'Block standby while playing audio')
-                self.assertEqual(audio.parent(), name.parent())
+                self.assertEqual(
+                    audio.parent(), row.findChild(QObject, 'browserMediaOptions:' + row_id))
                 self.assertFalse(audio.property('checked'))
                 self.assertEqual(row.findChild(QObject, 'idleApp:' + row_id).property('visible'),
                                  bool(app_id))
@@ -2645,11 +2649,17 @@ class GuiChecks(unittest.TestCase):
         self.assertGreaterEqual(name.width(), QFontMetricsF(font).horizontalAdvance(name.property('text')))
         self.assertEqual(name.property('lineCount'), 1)
         video = row.findChild(QQuickItem, 'firefoxVideo')
-        self.assertGreater(audio.y(), name.y())
-        self.assertGreater(video.y(), audio.y())
+        name_position = name.mapToItem(row, QPointF(0, 0))
+        audio_position = audio.mapToItem(row, QPointF(0, 0))
+        video_position = video.mapToItem(row, QPointF(0, 0))
+        self.assertGreater(audio_position.y(), name_position.y())
+        self.assertAlmostEqual(video_position.y(), audio_position.y(), delta=1)
 
         window.resize(380, 760)
         app.processEvents()
+        audio_position = audio.mapToItem(row, QPointF(0, 0))
+        video_position = video.mapToItem(row, QPointF(0, 0))
+        self.assertGreater(video_position.y(), audio_position.y())
         self.assertLessEqual(name.width(), name.parentItem().width())
         self.assertEqual(name.property('lineCount'), 1)
         self.assertLess(page.width(), 380)
@@ -2702,7 +2712,7 @@ class GuiChecks(unittest.TestCase):
         QMetaObject.invokeMethod(window.findChild(QObject, 'autoSaveTimer'), 'stop')
         engine.deleteLater()
 
-    def test_browser_media_options_have_own_lines_at_all_widths(self):
+    def test_browser_media_options_share_a_row_when_space_allows(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
@@ -2734,21 +2744,32 @@ class GuiChecks(unittest.TestCase):
             window.resize(width, 900)
             QTest.qWait(50)
             self.assertEqual(window.findChild(QObject, 'idleTimeoutLabel').property('lineCount'), 1)
+            firefox_positions = [
+                control.mapToItem(firefox_row, QPointF(0, 0)) for control in firefox_controls]
+            player_positions = [
+                control.mapToItem(player_row, QPointF(0, 0)) for control in player_controls]
             for controls in (firefox_controls[:3], player_controls):
                 self.assertEqual(controls[0].property('lineCount'), 1)
                 self.assertTrue(all(control.y() == controls[0].y() for control in controls))
                 for left, right in zip(controls, controls[1:]):
                     self.assertLessEqual(left.x() + left.width(), right.x())
-            for firefox_control, player_control in zip(firefox_controls, player_controls):
-                self.assertEqual(firefox_control.x(), player_control.x())
-            self.assertGreater(firefox_controls[3].y(), firefox_controls[2].y())
-            self.assertGreater(firefox_controls[4].y(), firefox_controls[3].y())
+            for firefox_position, player_position in zip(firefox_positions, player_positions):
+                self.assertEqual(firefox_position.x(), player_position.x())
+            self.assertGreater(firefox_positions[3].y(), firefox_positions[2].y())
             if width == 1300:
-                self.assertEqual(firefox_controls[0].y(), firefox_controls[2].y())
+                self.assertAlmostEqual(
+                    firefox_positions[4].y(), firefox_positions[3].y(), delta=1)
+            else:
+                self.assertGreaterEqual(
+                    firefox_positions[4].y(), firefox_positions[3].y())
+            if width == 1300:
+                self.assertEqual(firefox_positions[0].y(), firefox_positions[2].y())
 
         window.resize(380, 760)
         QTest.qWait(50)
-        self.assertGreater(firefox_controls[3].y(), firefox_controls[2].y())
+        firefox_positions = [
+            control.mapToItem(firefox_row, QPointF(0, 0)) for control in firefox_controls]
+        self.assertGreater(firefox_positions[3].y(), firefox_positions[2].y())
         for control in firefox_controls + player_controls:
             self.assertLessEqual(control.x() + control.width(), control.parentItem().width() + 1)
             self.assertLessEqual(control.y() + control.height(), control.parentItem().height() + 1)
