@@ -404,6 +404,79 @@ class LiveSettingsChecks(unittest.TestCase):
                                  return_value=ChromiumMedia(read_exe=lambda _: '/usr/bin/unrelated')):
                 self.run_service(path, scenario)
 
+    def test_video_only_settings_apply_live_and_reject_unknown_video(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                receiver = context.receiver
+                self.apply(receiver, firefox_video_blocks_standby=True,
+                           mouse_outputs=['TV'])
+                receiver.Report('Firefox-snapshot: ' + json.dumps([
+                    {'title': 'Video — Mozilla Firefox', 'output': 'TV'}]))
+                receiver.Report('Fokus: TV')
+                snapshot = {'version': 1, 'windows': [{
+                    'window_id': 1, 'active_title': 'Video',
+                    'tabs': [{'audible': True, 'muted': False, 'video': False}],
+                }]}
+                receiver.Report('Firefox-media-snapshot: ' + json.dumps(snapshot))
+                self.assertTrue(context.callbacks[100]())
+                status = json.loads(receiver.GetStatus())
+                self.assertIsNone(status['fail_safe_reason'])
+                snapshot['windows'][0]['tabs'][0].update(
+                    audible=False, muted=True, video=True)
+                receiver.Report('Firefox-media-snapshot: ' + json.dumps(snapshot))
+                self.assertTrue(context.callbacks[100]())
+                status = json.loads(receiver.GetStatus())
+                self.assertTrue(any(item['reason'] == 'Video'
+                                    for item in status['blocking_apps']))
+                snapshot['windows'][0]['tabs'][0]['video'] = None
+                receiver.Report('Firefox-media-snapshot: ' + json.dumps(snapshot))
+                self.assertTrue(context.callbacks[100]())
+                self.assertIn('unknown', json.loads(receiver.GetStatus())['fail_safe_reason'])
+                self.apply(receiver, firefox_video_blocks_standby=False)
+                self.assertTrue(context.callbacks[100]())
+                self.assertIsNone(json.loads(receiver.GetStatus())['fail_safe_reason'])
+
+            self.run_service(path, scenario)
+
+    def test_chromium_video_only_blocks_playback_and_unknown_without_audio(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                receiver = context.receiver
+                self.apply(receiver, chromium_video_blocks_standby=['chromium'],
+                           mouse_outputs=['TV'])
+                receiver.Report('Desktop-snapshot: ' + json.dumps([
+                    {'pid': 42, 'desktop': 'chromium', 'class': 'chromium',
+                     'title': 'Video - Chromium', 'output': 'TV'}]))
+                receiver.Report('Fokus: TV')
+                snapshot = {'browser': 'chromium', 'instance': 'a' * 32, 'version': 1,
+                            'windows': [{'window_id': 1, 'active_title': 'Video',
+                                         'tabs': [{'audible': True, 'muted': False,
+                                                   'video': False}]}]}
+                context.browser_receiver.Report(json.dumps(snapshot))
+                self.assertTrue(context.callbacks[100]())
+                self.assertIsNone(json.loads(receiver.GetStatus())['fail_safe_reason'])
+                snapshot['windows'][0]['tabs'][0].update(
+                    audible=False, muted=True, video=True)
+                context.browser_receiver.Report(json.dumps(snapshot))
+                self.assertTrue(context.callbacks[100]())
+                status = json.loads(receiver.GetStatus())
+                self.assertTrue(any(item['reason'] == 'Video'
+                                    for item in status['blocking_apps']))
+                snapshot['windows'][0]['tabs'][0]['video'] = None
+                context.browser_receiver.Report(json.dumps(snapshot))
+                self.assertTrue(context.callbacks[100]())
+                status = json.loads(receiver.GetStatus())
+                self.assertIn('unknown', status['chromium_video_errors']['chromium'])
+
+            with patch.object(monitor, 'firefox_window_snapshot', return_value='[]'), \
+                    patch.object(monitor, 'ChromiumMedia',
+                                 return_value=ChromiumMedia(read_exe=lambda _: '/usr/bin/unrelated')):
+                self.run_service(path, scenario)
+
     def test_multiple_mouse_displays_and_empty_selection_apply_live(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'config.json'

@@ -52,10 +52,11 @@ for file in \
     rm -f -- "$APP_DIR/cec-tv/$file"
 done
 rm -f -- "$APP_DIR/firefox-extension/manifest.json" \
-    "$APP_DIR/firefox-extension/background.js"
+    "$APP_DIR/firefox-extension/background.js" "$APP_DIR/firefox-extension/video.js"
 rm -f -- "$APP_DIR/topcec-firefox-media.zip"
 rm -f -- "$APP_DIR/chromium-extension/manifest.json" \
-    "$APP_DIR/chromium-extension/background.js" "$APP_DIR/packaging/setup-chromium-extension.py"
+    "$APP_DIR/chromium-extension/background.js" "$APP_DIR/chromium-extension/video.js" \
+    "$APP_DIR/packaging/setup-chromium-extension.py"
 rmdir -- "$APP_DIR/chromium-extension" "$APP_DIR/packaging" 2>/dev/null || true
 rmdir -- "$APP_DIR/firefox-extension" 2>/dev/null || true
 if rmdir -- "$APP_DIR/cec-tv" 2>/dev/null; then

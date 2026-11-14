@@ -33,7 +33,7 @@ for file in topcec.service topcec-gui topcec-gui.desktop \
     net.local.topcec.media.json setup-chromium-extension.py; do
     install -m 0644 "$SOURCE_DIR/packaging/$file" "$ARCHIVE_ROOT/packaging/$file"
 done
-for file in manifest.json background.js; do
+for file in manifest.json background.js video.js; do
     install -m 0644 "$SOURCE_DIR/firefox-extension/$file" \
         "$ARCHIVE_ROOT/firefox-extension/$file"
     install -m 0644 "$SOURCE_DIR/chromium-extension/$file" \

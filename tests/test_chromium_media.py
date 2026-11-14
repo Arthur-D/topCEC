@@ -54,6 +54,22 @@ class ChromiumMediaChecks(unittest.TestCase):
         self.desktop([self.window('chromium', 'Video - Chromium', 'TV')], now=30)
         self.assertIn('stale', self.media.state('chromium', ['TV'], 30, 15)[1])
 
+    def test_video_mode_distinguishes_audio_and_unknown_frames(self):
+        self.desktop([self.window('chromium', 'Video - Chromium', 'TV')])
+        report = {'browser': 'chromium', 'instance': 'a' * 32, 'version': 1,
+                  'windows': [{'window_id': 1, 'active_title': 'Video',
+                               'tabs': [{'audible': True, 'muted': False, 'video': False},
+                                        {'audible': False, 'muted': True, 'video': True}]}]}
+        self.media.update(json.dumps(report), 10)
+        self.assertEqual(self.media.state('chromium', ['TV'], 11, 15, video=True), (True, None))
+        report['windows'][0]['tabs'][1]['video'] = False
+        self.media.update(json.dumps(report), 11)
+        self.assertEqual(self.media.state('chromium', ['TV'], 11, 15, video=True), (False, None))
+        report['windows'][0]['tabs'][1]['video'] = None
+        self.media.update(json.dumps(report), 11)
+        self.assertIn('unknown', self.media.state('chromium', ['TV'], 11, 15, video=True)[1])
+        self.assertEqual(self.media.state('chromium', ['other'], 11, 15, video=True), (False, None))
+
     def test_browser_only_on_another_display_needs_no_extension(self):
         self.desktop([self.window('chromium', 'Video - Chromium', 'other')])
         self.assertEqual(self.media.state('chromium', ['TV'], 11, 15), (False, None))

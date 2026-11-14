@@ -17,6 +17,7 @@ install -m 0755 "$SOURCE_DIR/cec-tv/firefox-native-host.py" \
     "$HOST_DIR/firefox-native-host.py"
 install -m 0644 "$SOURCE_DIR/firefox-extension/manifest.json" "$EXTENSION_DIR/"
 install -m 0644 "$SOURCE_DIR/firefox-extension/background.js" "$EXTENSION_DIR/"
+install -m 0644 "$SOURCE_DIR/firefox-extension/video.js" "$EXTENSION_DIR/"
 TOPCEC_FIREFOX_EXTENSION_OUTPUT="$APP_DIR/topcec-firefox-media.zip" \
     bash "$SOURCE_DIR/packaging/build-firefox-extension.sh"
 python3 - "$MANIFEST" "$HOST_DIR/firefox-native-host.py" <<'PY'

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Strict, hardware-independent Firefox WebExtension media snapshots."""
 import json
+from collections import Counter
 
 
 class FirefoxWebExtensionProvider:
@@ -43,11 +44,14 @@ class FirefoxWebExtensionProvider:
             for tab in tabs:
                 if (not isinstance(tab, dict)
                         or type(tab.get('audible')) is not bool
-                        or type(tab.get('muted')) is not bool):
+                        or type(tab.get('muted')) is not bool
+                        or (tab.get('video') is not None
+                            and type(tab['video']) is not bool)):
                     raise ValueError('Invalid Firefox media tab fields')
                 checked_tabs.append({
                     'audible': tab['audible'],
                     'muted': tab['muted'],
+                    'video': tab.get('video'),
                 })
             result.append({
                 'window_id': window_id,
@@ -83,3 +87,38 @@ class FirefoxWebExtensionProvider:
             elif output == target_output:
                 audible_tv = True
         return audible_tv, uncertain
+
+    def video_state(self, mapping, now, target_output, ttl):
+        if mapping.health(now, required=True):
+            return False, True
+        if not any(output in (target_output, '', 'unknown', 'ingen')
+                   for (_title, output), stamp in mapping.reports.items()
+                   if now - stamp <= mapping.ttl):
+            return False, False
+        if self.windows is None or self.stamp is None or now - self.stamp > ttl:
+            return None
+        captions = [mapping._normalized_firefox_caption(title).strip()
+                    for (title, _output), stamp in mapping.reports.items()
+                    if now - stamp <= mapping.ttl]
+        titles = [window['active_title'].strip() for window in self.windows]
+        if (Counter(captions) != Counter(titles)
+                or any(not title or count != 1
+                       for title, count in Counter(titles).items())
+                or any(count != 1 for count in mapping.snapshot_counts.values())):
+            return False, True
+        playing = False
+        uncertain = False
+        for window in self.windows:
+            states = [tab['video'] for tab in window['tabs']]
+            if not states:
+                uncertain = True
+                continue
+            if not any(state is not False for state in states):
+                continue
+            output = mapping.browser_window_output(window['active_title'], now)
+            if output is None:
+                uncertain = True
+            elif output == target_output:
+                playing |= any(state is True for state in states)
+                uncertain |= any(state is None for state in states)
+        return playing, uncertain

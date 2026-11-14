@@ -44,7 +44,7 @@ def main():
         config = Path(os.environ.get('XDG_CONFIG_HOME', home / '.config'))
     extension = data / 'extension'
     extension.mkdir(parents=True, exist_ok=True)
-    for name in ('manifest.json', 'background.js'):
+    for name in ('manifest.json', 'background.js', 'video.js'):
         shutil.copyfile(source / 'chromium-extension' / name, extension / name)
     host = data / 'chromium-native-host.py'
     shutil.copyfile(source / 'cec-tv' / 'chromium-native-host.py', host)

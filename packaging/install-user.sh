@@ -26,7 +26,8 @@ for file in \
 done
 install -d "$APP_DIR/chromium-extension" "$APP_DIR/packaging"
 install -m 0644 "$SOURCE_DIR/chromium-extension/manifest.json" \
-    "$SOURCE_DIR/chromium-extension/background.js" "$APP_DIR/chromium-extension/"
+    "$SOURCE_DIR/chromium-extension/background.js" \
+    "$SOURCE_DIR/chromium-extension/video.js" "$APP_DIR/chromium-extension/"
 install -m 0755 "$SOURCE_DIR/packaging/setup-chromium-extension.py" "$APP_DIR/packaging/"
 TOPCEC_HOME="$HOME_DIR" TOPCEC_APP_DIR="$APP_DIR" \
     bash "$SOURCE_DIR/packaging/install-firefox-native-host.sh"

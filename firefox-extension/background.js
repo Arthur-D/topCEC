@@ -1,11 +1,42 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-/* Only audible/muted flags and active tab titles are sent to the local host. */
+/* Only media flags and active tab titles are sent to the local host. */
 const NATIVE_HOST = "net.local.topcec.media";
 const SNAPSHOT_INTERVAL_MS = 2000;
 const RETRY_INTERVAL_MS = 2000;
 let nativePort = null;
 let retryTimer = null;
 let snapshotTimer = null;
+let snapshotSequence = 0;
+
+async function withinTimeout(promise) {
+    let timer;
+    try {
+        return await Promise.race([promise, new Promise((resolve) => {
+            timer = setTimeout(() => resolve(null), 1000);
+        })]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function videoState(tabId) {
+    try {
+        const frames = await withinTimeout(browser.webNavigation.getAllFrames({tabId}));
+        if (!frames || !frames.length) return null;
+        const states = await Promise.all(frames.map(async (frame) => {
+            try {
+                const result = await withinTimeout(browser.tabs.sendMessage(
+                    tabId, "topcec-video-state", {frameId: frame.frameId}));
+                return typeof result?.playing === "boolean" ? result.playing : null;
+            } catch (_error) {
+                return null;
+            }
+        }));
+        return states.includes(null) ? null : states.some(Boolean);
+    } catch (_error) {
+        return null;
+    }
+}
 
 function connect() {
     if (nativePort) {
@@ -40,6 +71,7 @@ function scheduleReconnect() {
 }
 
 async function publishSnapshot() {
+    const sequence = ++snapshotSequence;
     if (!connect()) {
         return;
     }
@@ -50,20 +82,21 @@ async function publishSnapshot() {
         });
         const snapshot = {
             version: 1,
-            windows: windows.map((window) => {
+            windows: await Promise.all(windows.map(async (window) => {
                 const tabs = window.tabs || [];
                 const activeTab = tabs.find((tab) => tab.active);
                 return {
                     window_id: window.id,
                     active_title: activeTab ? (activeTab.title || "") : "",
-                    tabs: tabs.map((tab) => ({
+                    tabs: await Promise.all(tabs.map(async (tab) => ({
                         audible: tab.audible === true,
-                        muted: tab.mutedInfo ? tab.mutedInfo.muted === true : false
-                    }))
+                        muted: tab.mutedInfo ? tab.mutedInfo.muted === true : false,
+                        video: await videoState(tab.id)
+                    })))
                 };
-            })
+            }))
         };
-        if (nativePort) {
+        if (nativePort && sequence === snapshotSequence) {
             nativePort.postMessage(snapshot);
         }
     } catch (error) {

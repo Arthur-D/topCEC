@@ -784,6 +784,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             args, 'firefox_audio_blocks_standby',
             DEFAULT_CONFIG['firefox_audio_blocks_standby']),
         'chromium_audio_blocks_standby': getattr(args, 'chromium_audio_blocks_standby', []),
+        'firefox_video_blocks_standby': getattr(args, 'firefox_video_blocks_standby', False),
+        'chromium_video_blocks_standby': getattr(args, 'chromium_video_blocks_standby', []),
         'idle_inhibition_apps': getattr(args, 'idle_inhibition_apps', []),
         'force_inhibition_apps': getattr(args, 'force_inhibition_apps', []),
         'cec_enabled': bool(args.cec),
@@ -1375,7 +1377,21 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 runtime_config['force_inhibition_apps'], equipment_snapshot.get('apps') or [],
                 app_windows, app_windows_stamp is not None
                 and now - app_windows_stamp <= mapping.ttl, media_outputs))
+            if runtime_config['firefox_video_blocks_standby'] and media_outputs:
+                video_states = [
+                    webextension_media.video_state(mapping, now, output, mapping.ttl)
+                    for output in media_outputs
+                ]
+                if any(state is None for state in video_states):
+                    reason = reason or 'Firefox video extension is unavailable or stale'
+                elif any(state[1] for state in video_states):
+                    reason = reason or 'Firefox video state or display is unknown'
+                elif any(state[0] for state in video_states):
+                    blocking_apps.append({
+                        'app': 'Mozilla Firefox', 'reason': 'Video',
+                        'identityUnknown': False, 'locationUnknown': False})
             browser_errors = {}
+            browser_video_errors = {}
             for browser in runtime_config['chromium_audio_blocks_standby']:
                 if not media_outputs:
                     continue
@@ -1387,6 +1403,18 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 elif playing:
                     blocking_apps.append({
                         'app': BROWSERS[browser][0], 'reason': 'Audio',
+                        'identityUnknown': False, 'locationUnknown': False})
+            for browser in runtime_config['chromium_video_blocks_standby']:
+                if not media_outputs:
+                    continue
+                playing, error = chromium_media.state(
+                    browser, media_outputs, now, mapping.ttl, video=True)
+                if error:
+                    browser_video_errors[browser] = error
+                    reason = reason or (BROWSERS[browser][0] + ' video: ' + error)
+                elif playing:
+                    blocking_apps.append({
+                        'app': BROWSERS[browser][0], 'reason': 'Video',
                         'identityUnknown': False, 'locationUnknown': False})
             if media_outputs and runtime_config['idle_inhibition_apps'] and inhibition_error:
                 reason = reason or inhibition_error
@@ -1447,6 +1475,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 'playback_active': audible,
                 'firefox_audio_error': firefox_audio_error,
                 'chromium_audio_errors': browser_errors,
+                'chromium_video_errors': browser_video_errors,
                 'blocking_apps': blocking_apps,
                 'inhibitions_error': inhibition_error,
                 'scan_status': (scan_error if runtime_config['firefox_audio_blocks_standby']
@@ -2328,6 +2357,8 @@ def main():
     args.mouse_outputs = config['mouse_outputs']
     args.firefox_audio_blocks_standby = config['firefox_audio_blocks_standby']
     args.chromium_audio_blocks_standby = config['chromium_audio_blocks_standby']
+    args.firefox_video_blocks_standby = config['firefox_video_blocks_standby']
+    args.chromium_video_blocks_standby = config['chromium_video_blocks_standby']
     args.idle_inhibition_apps = config['idle_inhibition_apps']
     args.force_inhibition_apps = config['force_inhibition_apps']
     args.mute_label = config['mute_labels']

@@ -103,6 +103,10 @@ def config_from_settings(current, values):
             'firefoxAudioBlocksStandby', current['firefox_audio_blocks_standby']),
         'chromium_audio_blocks_standby': values.get(
             'chromiumAudioBlocksStandby', current['chromium_audio_blocks_standby']),
+        'firefox_video_blocks_standby': values.get(
+            'firefoxVideoBlocksStandby', current['firefox_video_blocks_standby']),
+        'chromium_video_blocks_standby': values.get(
+            'chromiumVideoBlocksStandby', current['chromium_video_blocks_standby']),
         'idle_inhibition_apps': values.get(
             'idleInhibitionApps', current['idle_inhibition_apps']),
         'force_inhibition_apps': values.get(
@@ -134,6 +138,7 @@ class GuiBackend(QObject):
         self.config_path = Path(config_path) if config_path else default_config_path()
         self.config = {'schema_version': 1, **DEFAULT_CONFIG}
         self._chromium_audio_supported = None
+        self._browser_video_supported = None
         self._browser_setup = {}
         self._browser_setup_message = ''
         self._browser_setup_pending = False
@@ -875,6 +880,9 @@ class GuiBackend(QObject):
         self._config_source = source
         self.config = config
         self._chromium_audio_supported = 'chromium_audio_blocks_standby' in raw_config
+        self._browser_video_supported = (
+            'firefox_video_blocks_standby' in raw_config
+            and 'chromium_video_blocks_standby' in raw_config)
         self.outputs = list(dict.fromkeys(
             ([config['target_output']] if config['target_output'] else []) + self.outputs))
         self.adapters = list(dict.fromkeys(
@@ -932,6 +940,10 @@ class GuiBackend(QObject):
                     'load the unpacked extension, and rerun setup with its extension ID. '
                     'For Flatpak, run the printed browser-media D-Bus override and '
                     'fully quit and restart the browser.')
+        errors = self._service_data.get('chromium_video_errors')
+        if isinstance(errors, dict):
+            for browser, error in sorted(errors.items()):
+                diagnostic_items.append(f'{browser} video: {error}')
         self._diagnostics = '\n'.join(diagnostic_items)
 
     def _equipment_reply(self, generation, reply):
@@ -1081,7 +1093,8 @@ class GuiBackend(QObject):
             # Older hosts returned the complete configuration without its version.
             optional = {'consider_input_devices', 'mouse_output', 'mouse_outputs',
                         'firefox_audio_blocks_standby', 'idle_inhibition_apps',
-                        'force_inhibition_apps', 'chromium_audio_blocks_standby'}
+                        'force_inhibition_apps', 'chromium_audio_blocks_standby',
+                        'firefox_video_blocks_standby', 'chromium_video_blocks_standby'}
             if (isinstance(config, dict) and set(DEFAULT_CONFIG) - optional <= set(config)
                     and set(config) <= set(DEFAULT_CONFIG)):
                 config = {'schema_version': SCHEMA_VERSION, **config}
@@ -1140,6 +1153,14 @@ class GuiBackend(QObject):
                 payload = {'schema_version': 1, **validated}
                 if not payload['device_axis_deadzones']:
                     del payload['device_axis_deadzones']
+                if self._browser_video_supported is False:
+                    if (payload['firefox_video_blocks_standby']
+                            or payload['chromium_video_blocks_standby']):
+                        raise RuntimeError(
+                            'Browser video detection requires an updated host backend. '
+                            'Update it and restart topcec.service.')
+                    del payload['firefox_video_blocks_standby']
+                    del payload['chromium_video_blocks_standby']
                 if self._chromium_audio_supported is False:
                     if payload['chromium_audio_blocks_standby']:
                         raise RuntimeError(
