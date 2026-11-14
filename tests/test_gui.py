@@ -2534,6 +2534,10 @@ class GuiChecks(unittest.TestCase):
         QMetaObject.invokeMethod(window.findChild(QObject, 'browserSetupToggle'), 'click')
         browser = window.findChild(QObject, 'setupBrowser')
         installation = window.findChild(QObject, 'setupInstallation')
+        for control in (browser, installation):
+            self.assertGreater(control.property('width'), 100)
+            self.assertGreaterEqual(control.property('width') + 1,
+                                    control.property('implicitWidth'))
         browser.setProperty('currentIndex', 0)
         installation.setProperty('currentIndex', 0)
         app.processEvents()
