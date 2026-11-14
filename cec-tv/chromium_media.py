@@ -130,7 +130,7 @@ class ChromiumMedia:
         self.snapshots[browser, instance] = (windows, now)
         self.source_errors.pop((browser, instance), None)
 
-    def state(self, browser, outputs, now, ttl):
+    def state(self, browser, outputs, now, ttl, video=False):
         if self.windows is None or self.stamp is None or now - self.stamp > ttl:
             return False, 'Desktop window status is unavailable or stale'
         if any(output in (*outputs, '', 'unknown', 'ingen') for output in self.unknown):
@@ -141,7 +141,7 @@ class ChromiumMedia:
             return False, None
         if any(kind == browser and now - stamp <= ttl
                for (kind, _), (_, stamp) in self.source_errors.items()):
-            return False, 'Browser extension sent invalid audio data'
+            return False, 'Browser extension sent invalid media data'
         snapshots = [item for (kind, _), (items, stamp) in self.snapshots.items()
                      if kind == browser and now - stamp <= ttl for item in items]
         if not snapshots:
@@ -156,10 +156,16 @@ class ChromiumMedia:
             return False, 'Browser windows cannot be uniquely matched to extension data'
         by_title = {normalized_title(browser, window['title']): window for window in windows}
         for snapshot in snapshots:
-            if any(tab['audible'] and not tab['muted'] for tab in snapshot['tabs']):
-                output = by_title[snapshot['active_title'].strip()]['output']
+            output = by_title[snapshot['active_title'].strip()]['output']
+            tabs = snapshot['tabs']
+            active = (any(tab['video'] is True for tab in tabs) if video else
+                      any(tab['audible'] and not tab['muted'] for tab in tabs))
+            unknown = video and any(tab['video'] is None for tab in tabs)
+            if active or unknown:
                 if output in ('', 'unknown', 'ingen'):
-                    return False, 'Browser audio display is unknown'
+                    return False, 'Browser media display is unknown'
                 if output in outputs:
+                    if unknown:
+                        return False, 'Browser video state is unknown'
                     return True, None
         return False, None

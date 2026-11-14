@@ -2,6 +2,37 @@
 const HOST = "net.local.topcec.media";
 let port = null;
 let retry = null;
+let snapshotSequence = 0;
+
+async function withinTimeout(promise) {
+    let timer;
+    try {
+        return await Promise.race([promise, new Promise(resolve => {
+            timer = setTimeout(() => resolve(null), 1000);
+        })]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function videoState(tabId) {
+    try {
+        const frames = await withinTimeout(chrome.webNavigation.getAllFrames({tabId}));
+        if (!frames || !frames.length) return null;
+        const states = await Promise.all(frames.map(async frame => {
+            try {
+                const result = await withinTimeout(chrome.tabs.sendMessage(
+                    tabId, "topcec-video-state", {frameId: frame.frameId}));
+                return typeof result?.playing === "boolean" ? result.playing : null;
+            } catch (_error) {
+                return null;
+            }
+        }));
+        return states.includes(null) ? null : states.some(Boolean);
+    } catch (_error) {
+        return null;
+    }
+}
 
 function connect() {
     if (port) return true;
@@ -31,32 +62,33 @@ function schedule() {
     }, 2000);
 }
 
-function publish() {
+async function publish() {
+    const sequence = ++snapshotSequence;
     if (!connect()) return;
-    chrome.windows.getAll({populate: true, windowTypes: ["normal"]}, windows => {
-        if (chrome.runtime.lastError) {
-            console.error("topCEC cannot read browser windows:", chrome.runtime.lastError.message);
-            schedule();
-            return;
-        }
+    try {
+        const windows = await chrome.windows.getAll({populate: true, windowTypes: ["normal"]});
         const snapshot = {
             version: 1,
-            windows: windows.map(window => {
+            windows: await Promise.all(windows.map(async window => {
                 const tabs = window.tabs || [];
                 const active = tabs.find(tab => tab.active);
                 return {
                     window_id: window.id,
                     active_title: active ? (active.title || "") : "",
-                    tabs: tabs.map(tab => ({
+                    tabs: await Promise.all(tabs.map(async tab => ({
                         audible: typeof tab.audible === "boolean" ? tab.audible : null,
                         muted: typeof tab.mutedInfo?.muted === "boolean"
-                            ? tab.mutedInfo.muted : null
-                    }))
+                            ? tab.mutedInfo.muted : null,
+                        video: await videoState(tab.id)
+                    })))
                 };
-            })
+            }))
         };
-        if (port) port.postMessage(snapshot);
-    });
+        if (port && sequence === snapshotSequence) port.postMessage(snapshot);
+    } catch (error) {
+        console.error("topCEC cannot read browser windows:", error);
+        schedule();
+    }
 }
 
 chrome.tabs.onUpdated.addListener((_id, change) => {

@@ -29,6 +29,8 @@ Kirigami.ApplicationWindow {
     property var retainedAppIds: []
     property bool firefoxAudioEnabled: false
     property var chromiumAudioDraft: []
+    property bool firefoxVideoEnabled: false
+    property var chromiumVideoDraft: []
     property real defaultAxisDeadzone: 0
     property real defaultRzDeadzone: 0
     onSettingsDirtyChanged: {
@@ -153,6 +155,8 @@ Kirigami.ApplicationWindow {
             muteLabels: labelsField.text,
             firefoxAudioBlocksStandby: firefoxAudioEnabled,
             chromiumAudioBlocksStandby: chromiumAudioDraft,
+            firefoxVideoBlocksStandby: firefoxVideoEnabled,
+            chromiumVideoBlocksStandby: chromiumVideoDraft,
             idleInhibitionApps: idleAppsDraft,
             forceInhibitionApps: forceAppsDraft,
             axisDeadzone: defaultAxisDeadzone,
@@ -661,6 +665,8 @@ Kirigami.ApplicationWindow {
         labelsField.text = topcec.muteLabelList()
         firefoxAudioEnabled = topcec.setting("firefox_audio_blocks_standby")
         chromiumAudioDraft = Array.from(topcec.setting("chromium_audio_blocks_standby") || [])
+        firefoxVideoEnabled = topcec.setting("firefox_video_blocks_standby") || false
+        chromiumVideoDraft = Array.from(topcec.setting("chromium_video_blocks_standby") || [])
         idleAppsDraft = Array.from(topcec.setting("idle_inhibition_apps") || [])
         forceAppsDraft = Array.from(topcec.setting("force_inhibition_apps") || [])
         retainedAppIds = [...new Set([...idleAppsDraft, ...forceAppsDraft])]
@@ -1741,6 +1747,30 @@ Kirigami.ApplicationWindow {
                                                 root.setChromiumAudio(modelData.browserId, checked)
                                             else
                                                 root.firefoxAudioEnabled = checked
+                                            root.markSettingsDirty()
+                                        }
+                                    }
+                                    CopyableCheckBox {
+                                        objectName: modelData.isFirefox ? "firefoxVideo"
+                                            : (appRow.browserAudio ? "browserVideo:" + modelData.browserId : "")
+                                        Layout.row: appRow.inlineAudio ? 1 : (appRow.stackPolicies ? 4 : 3)
+                                        Layout.column: 0
+                                        Layout.columnSpan: 4
+                                        Layout.maximumWidth: implicitWidth
+                                        visible: modelData.isFirefox || appRow.browserAudio
+                                        text: "Block standby while playing video"
+                                        Accessible.name: modelData.name + " block standby while playing video"
+                                        checked: appRow.browserAudio
+                                            ? root.chromiumVideoDraft.includes(modelData.browserId)
+                                            : root.firefoxVideoEnabled
+                                        onClicked: {
+                                            if (appRow.browserAudio) {
+                                                let choices = root.chromiumVideoDraft.filter(id => id !== modelData.browserId)
+                                                if (checked) choices.push(modelData.browserId)
+                                                root.chromiumVideoDraft = choices
+                                            } else {
+                                                root.firefoxVideoEnabled = checked
+                                            }
                                             root.markSettingsDirty()
                                         }
                                     }

@@ -57,9 +57,20 @@ the Git updater.
 
 Enable **Block standby while playing audio** separately for each browser in
 **Standby**. When enabled, missing or ambiguous media information can prevent
-standby. The extensions send active tab titles and per-tab audible/muted flags
-locally to topCEC so it can match playback with a KWin display. They do not send
-URLs or page contents.
+standby. **Block standby while playing video** is a separate option; turn audio
+off for video-only monitoring. It detects playing HTML video, including muted
+video, in any tab of the browser window. An inaccessible tab or frame makes
+video status unknown and blocks standby on its display. Firefox video monitoring
+requires the extension whenever a Firefox window is on a selected display; its
+AT-SPI fallback detects audio only.
+
+The extensions require access to sites and their frames to inspect video
+elements. Browser-restricted pages and inaccessible frames cannot be inspected;
+video inside closed shadow roots or non-HTML players may not be detected.
+The extensions send active tab titles and per-tab audio and video flags locally
+to topCEC so it can match playback with a KWin display. They do not send URLs
+or page contents. Reload existing tabs after installing or updating an extension.
+Existing installations must accept the new site-access permissions when updating.
 
 ### Firefox
 

@@ -2316,6 +2316,15 @@ class GuiChecks(unittest.TestCase):
         values = json.loads(QQmlExpression(
             engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
         self.assertEqual(values['chromiumAudioBlocksStandby'], ['chromium'])
+        video = row.findChild(QObject, 'browserVideo:chromium')
+        self.assertTrue(video.property('visible'))
+        QMetaObject.invokeMethod(video, 'click')
+        QMetaObject.invokeMethod(checkbox, 'click')
+        values = json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+        config = config_from_settings(backend.config, values)
+        self.assertEqual(config['chromium_video_blocks_standby'], ['chromium'])
+        self.assertEqual(config['chromium_audio_blocks_standby'], [])
         QMetaObject.invokeMethod(window.findChild(QObject, 'showAllApps'), 'click')
         app.processEvents()
         choices = json.loads(QQmlExpression(

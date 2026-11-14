@@ -72,13 +72,13 @@ install -d %{buildroot}%{_prefix}/lib/mozilla/native-messaging-hosts
 install -m 0644 packaging/net.local.topcec.media.json \
     %{buildroot}%{_prefix}/lib/mozilla/native-messaging-hosts/net.local.topcec.media.json
 install -d %{buildroot}%{_datadir}/topcec/firefox-extension
-install -m 0644 firefox-extension/manifest.json firefox-extension/background.js \
+install -m 0644 firefox-extension/manifest.json firefox-extension/background.js firefox-extension/video.js \
     %{buildroot}%{_datadir}/topcec/firefox-extension/
 (cd firefox-extension && python3 -m zipfile -c \
-    %{buildroot}%{_datadir}/topcec/topcec-firefox-media.zip manifest.json background.js)
+    %{buildroot}%{_datadir}/topcec/topcec-firefox-media.zip manifest.json background.js video.js)
 install -d %{buildroot}%{_datadir}/topcec/chromium-extension \
     %{buildroot}%{_datadir}/topcec/packaging %{buildroot}%{_datadir}/topcec/cec-tv
-install -m 0644 chromium-extension/manifest.json chromium-extension/background.js \
+install -m 0644 chromium-extension/manifest.json chromium-extension/background.js chromium-extension/video.js \
     %{buildroot}%{_datadir}/topcec/chromium-extension/
 install -m 0755 packaging/setup-chromium-extension.py \
     %{buildroot}%{_datadir}/topcec/packaging/
@@ -134,6 +134,7 @@ install -D -m 0644 cec-tv/net.local.topcec.svg \
 %dir %{_datadir}/topcec
 %{_datadir}/topcec/firefox-extension/manifest.json
 %{_datadir}/topcec/firefox-extension/background.js
+%{_datadir}/topcec/firefox-extension/video.js
 %{_datadir}/topcec/topcec-firefox-media.zip
 %{_datadir}/topcec/chromium-extension/
 %{_datadir}/topcec/packaging/
