@@ -57,6 +57,27 @@ after it connects and has no direct access to CEC or input devices. Use **Retry
 Connection** after starting or updating the host. If the desktop menu opens the
 native GUI instead, use `flatpak run net.local.topcec` explicitly.
 
+To update an existing checkout, reinstall the host files, restart the service,
+build/install the user Flatpak, and launch it, run:
+
+```sh
+./packaging/update-user.sh
+```
+
+The updater requires a clean checkout. Commit or stash local changes first.
+It pulls the current branch's upstream and merges diverging histories, keeping
+existing commits. If Git stops for a conflict, the updater aborts its merge
+before installation. Merge the upstream branch manually and rerun the updater.
+It uses native
+`flatpak-builder` when available, otherwise `flathub-build` from the
+`org.flatpak.Builder` Flatpak, and downloads missing build dependencies from
+the host user's Flathub remote. It installs the built app through the host's
+Flatpak command. From Toolbx it forwards
+to the desktop host using `host-spawn`. A failed step stops the update; if the
+Flatpak build fails, the host service has already been updated. After a successful
+build it closes any running topCEC Flatpak and launches the installed version.
+The script stays attached to the GUI until it exits.
+
 ## Standby settings
 
 - **Timeout:** By default, topCEC follows Plasma's AC display timeout. If it
@@ -66,12 +87,13 @@ native GUI instead, use `flatpak run net.local.topcec` explicitly.
 - **Input:** The input device toggle ignores selected devices without clearing
   the list. You can set per-device, per-axis deadzones for controllers. Mouse
   movement is independent and counts only on the displays selected in **Standby**.
-- **Apps:** Turn off **Allow standby** for an app to honor its Plasma screen
-  inhibition requests. Use **Force block standby** if a window on a selected
-  display should count even without an inhibition request. Browser audio is a
-  separate option, off by default. See [browser setup](PACKAGING.md#browser-media).
-  Stale or ambiguous data can keep the TV awake. Check **Currently blocking
-  standby** and **Diagnostics** for the reason.
+- **Apps:** A Plasma screen-idle request blocks TV standby by default when the
+  app is on a selected display. Check **Allow standby** to save an exception
+  for that app. This setting only affects topCEC. Use **Force block standby**
+  to keep the TV awake while an app has a window on a selected display.
+  See [browser setup](PACKAGING.md#browser-media) for browser audio and video
+  options. Stale or ambiguous data can keep the TV awake. Check **Currently
+  blocking standby** and **Diagnostics** for the reason.
 
 Settings save automatically after a short pause. A running host applies the
 changes without restarting. An offline native GUI saves for the next start.

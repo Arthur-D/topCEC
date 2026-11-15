@@ -32,7 +32,8 @@ from firefox_media import (PIP_CAPTION, FirefoxPiPScan, FirefoxWebExtensionProvi
                            is_firefox_executable, scan_firefox_pip)
 from chromium_media import BROWSERS, ChromiumMedia
 from standby_apps import (InhibitionHistory, PlasmaInhibitions, decode_windows,
-                          forced_inhibitions, matching_inhibitions, observed_apps)
+                          forced_inhibitions, is_screen_inhibition, matching_inhibitions,
+                          observed_apps)
 from providers import ActivityProvider as ActivityProviderContract
 from providers import CecBackend, MediaProvider as MediaProviderContract
 
@@ -469,6 +470,32 @@ class EvdevActivityProvider:
         return None
 
 
+def is_firefox_accessible_process(pid, read_exe):
+    executable = read_exe(pid)
+    if is_firefox_executable(executable):
+        return True
+    if Path(executable).name != 'xdg-dbus-proxy':
+        return False
+
+    # Flatpak's accessibility bus reports the proxy's PID. On cgroup v2,
+    # Flatpak puts its proxy and the browser in the same per-instance scope.
+    for line in Path(f'/proc/{pid}/cgroup').read_text().splitlines():
+        prefix = '0::/'
+        if not line.startswith(prefix):
+            continue
+        scope = Path(line[len(prefix):])
+        if not re.fullmatch(r'app-flatpak-org\.mozilla\.firefox-\d+\.scope', scope.name):
+            continue
+        members = (Path('/sys/fs/cgroup') / scope / 'cgroup.procs').read_text().split()
+        for member in members:
+            try:
+                if is_firefox_executable(read_exe(int(member))):
+                    return True
+            except FileNotFoundError:
+                continue  # A sandbox process can exit during enumeration.
+    return False
+
+
 def firefox_window_snapshot(payload, read_exe=None):
     """Resolve KWin PIDs on the host; never infer browser identity from titles."""
     if read_exe is None:
@@ -697,7 +724,7 @@ def scan_atspi(mute_labels, read_exe=None):
         pid = app.get_process_id()
         if type(pid) is not int or pid <= 0:
             raise RuntimeError('AT-SPI application process identity is unavailable')
-        if not is_firefox_executable(read_exe(pid)):
+        if not is_firefox_accessible_process(pid, read_exe):
             continue
         found = False
         for child_index in range(app.childCount):
@@ -802,6 +829,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'firefox_video_blocks_standby': getattr(args, 'firefox_video_blocks_standby', False),
         'chromium_video_blocks_standby': getattr(args, 'chromium_video_blocks_standby', []),
         'idle_inhibition_apps': getattr(args, 'idle_inhibition_apps', []),
+        'idle_inhibition_exceptions': getattr(args, 'idle_inhibition_exceptions', []),
         'force_inhibition_apps': getattr(args, 'force_inhibition_apps', []),
         'cec_enabled': bool(args.cec),
         'cec_port': args.cec_port,
@@ -1109,7 +1137,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     inhibition_history.names, equipment_snapshot.get('apps') or []),
                 'active_inhibitor_apps': observed_apps(
                     [request['app'] for request in plasma_inhibitions.requests
-                     if request['kind'] == 'idle' and request['app'].strip()
+                     if is_screen_inhibition(request) and request['app'].strip()
                      and plasma_inhibitions.health(time.monotonic()) is None],
                     equipment_snapshot.get('apps') or []),
                 'inhibition_history_error': inhibition_history.error,
@@ -1150,7 +1178,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         @dbus.service.method('net.local.CecActivity', in_signature='s', out_signature='s')
         def ApplySettings(self, serialized_config):
             try:
-                config = validate_config(json.loads(str(serialized_config)))
+                requested = json.loads(str(serialized_config))
+                if isinstance(requested, dict):
+                    requested.setdefault('idle_inhibition_exceptions',
+                                         runtime_config['idle_inhibition_exceptions'])
+                config = validate_config(requested)
                 if config.get('cec_enabled'):
                     config['require_snapshot'] = True
                 saved = apply_live_settings(config)
@@ -1301,13 +1333,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                             frames = media_provider.decode_scan(output, errors, worker.returncode)
                             scan_stamp = now
                             scan_error = None
-                        if worker_labels == args.mute_label and errors.strip() and not warning_reported:
-                            log('AT-SPI warning, but the scan returned readable '
-                                'Firefox frames. Warning shown only once:')
-                            log(errors.strip()[:800])
-                            warning_reported = True
                     except Exception as error:
                         scan_error = str(error)
+                    if worker_labels == args.mute_label and errors.strip() and not warning_reported:
+                        log('AT-SPI scanner diagnostic: ' + errors.strip()[:800])
+                        warning_reported = True
                     worker = None
                     next_scan = now + SCAN_INTERVAL if worker_labels == args.mute_label else now
                 elif now - worker_started >= SCAN_TIMEOUT:
@@ -1375,12 +1405,9 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             if runtime_config['firefox_audio_blocks_standby'] and media_outputs:
                 firefox_audio_error = firefox_audio_error or mapping_error
             inhibition_error = plasma_inhibitions.health(now)
-            apps_error = equipment_snapshot.get('apps_error')
-            if equipment_snapshot.get('apps') is None:
-                apps_error = apps_error or 'Waiting for installed app discovery'
             blocking_apps = matching_inhibitions(
                 plasma_inhibitions.requests if inhibition_error is None else [],
-                runtime_config['idle_inhibition_apps'],
+                runtime_config['idle_inhibition_exceptions'],
                 equipment_snapshot.get('apps') or [], app_windows,
                 app_windows_stamp is not None
                 and now - app_windows_stamp <= mapping.ttl,
@@ -1436,10 +1463,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     blocking_apps.append({
                         'app': BROWSERS[browser][0], 'reason': 'Video',
                         'identityUnknown': False, 'locationUnknown': False})
-            if media_outputs and runtime_config['idle_inhibition_apps'] and inhibition_error:
+            if media_outputs and inhibition_error:
                 reason = reason or inhibition_error
-            if media_outputs and runtime_config['idle_inhibition_apps'] and apps_error:
-                reason = reason or str(apps_error)
             if blocking_apps:
                 reason = reason or ('App standby block: '
                                     + blocking_apps[0]['app'] + ' — '
@@ -1771,6 +1796,30 @@ def self_test():
                 {'title': quiet.name, 'audio': False},
                 {'title': sounding.name, 'audio': True}])
 
+        def test_flatpak_firefox_atspi_proxy(self):
+            from unittest.mock import patch
+
+            firefox_scope = 'app.slice/app-flatpak-org.mozilla.firefox-123.scope'
+            other_scope = 'app.slice/app-flatpak-org.example.Other-123.scope'
+            files = {
+                '/proc/10/cgroup': f'0::/{firefox_scope}\n',
+                '/proc/20/cgroup': f'0::/{other_scope}\n',
+                f'/sys/fs/cgroup/{firefox_scope}/cgroup.procs': '10\n30\n40\n',
+            }
+            executables = {10: '/usr/bin/xdg-dbus-proxy', 20: '/usr/bin/xdg-dbus-proxy',
+                           40: '/app/lib/firefox/firefox-bin'}
+
+            def executable(pid):
+                if pid not in executables:
+                    raise FileNotFoundError(pid)
+                return executables[pid]
+
+            with patch.object(Path, 'read_text', lambda path: files[str(path)]):
+                self.assertTrue(is_firefox_accessible_process(10, executable))
+                self.assertFalse(is_firefox_accessible_process(20, executable))
+                del executables[40]
+                self.assertFalse(is_firefox_accessible_process(10, executable))
+
         def test_process_window_identity(self):
             rows = [{"pid": 10, "title": "Web App", "output": test_output},
                     {"pid": 20, "title": "Firefox fake title", "output": test_output}]
@@ -1966,9 +2015,12 @@ def self_test():
             service = SimpleNamespace(
                 Object=Object, BusName=Mock(),
                 method=lambda *args, **kwargs: lambda method: method)
+            plasma_properties = Mock()
+            plasma_properties.Get.side_effect = (
+                lambda *args, reply_handler, **kwargs: reply_handler([]))
             dbus = SimpleNamespace(
                 service=service, SessionBus=Mock(return_value=session_bus),
-                DBusException=RuntimeError)
+                Interface=Mock(return_value=plasma_properties), DBusException=RuntimeError)
             loop = Mock()
             loop.run.side_effect = main_loop
             glib = SimpleNamespace(MainLoop=lambda: loop, timeout_add=timeout_add)
@@ -2415,6 +2467,7 @@ def main():
     args.firefox_video_blocks_standby = config['firefox_video_blocks_standby']
     args.chromium_video_blocks_standby = config['chromium_video_blocks_standby']
     args.idle_inhibition_apps = config['idle_inhibition_apps']
+    args.idle_inhibition_exceptions = config['idle_inhibition_exceptions']
     args.force_inhibition_apps = config['force_inhibition_apps']
     args.mute_label = config['mute_labels']
     args.cec = config['cec_enabled']
@@ -2435,6 +2488,9 @@ def main():
     if args.self_test:
         return self_test()
     if args.atspi_scan:
+        # Use the shared AT-SPI bus. A Flatpak app's private peer socket
+        # lives inside its mount namespace and is unreachable from the host.
+        os.environ['ATSPI_DISABLE_P2P'] = '1'
         try:
             print(json.dumps({'ok': True, 'frames': scan_atspi(args.mute_label)}))
             return 0

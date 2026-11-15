@@ -28,6 +28,7 @@ Kirigami.ApplicationWindow {
     property bool mouseOutputsLegacy: false
     property bool mouseOutputsFollowTarget: false
     property var idleAppsDraft: []
+    property var idleExceptionsDraft: []
     property var forceAppsDraft: []
     property var retainedAppIds: []
     property bool firefoxAudioEnabled: false
@@ -161,6 +162,7 @@ Kirigami.ApplicationWindow {
             firefoxVideoBlocksStandby: firefoxVideoEnabled,
             chromiumVideoBlocksStandby: chromiumVideoDraft,
             idleInhibitionApps: idleAppsDraft,
+            idleInhibitionExceptions: idleExceptionsDraft,
             forceInhibitionApps: forceAppsDraft,
             axisDeadzone: defaultAxisDeadzone,
             rzDeadzone: defaultRzDeadzone,
@@ -684,8 +686,9 @@ Kirigami.ApplicationWindow {
         firefoxVideoEnabled = topcec.setting("firefox_video_blocks_standby") || false
         chromiumVideoDraft = Array.from(topcec.setting("chromium_video_blocks_standby") || [])
         idleAppsDraft = Array.from(topcec.setting("idle_inhibition_apps") || [])
+        idleExceptionsDraft = Array.from(topcec.setting("idle_inhibition_exceptions") || [])
         forceAppsDraft = Array.from(topcec.setting("force_inhibition_apps") || [])
-        retainedAppIds = [...new Set([...idleAppsDraft, ...forceAppsDraft])]
+        retainedAppIds = [...new Set([...idleAppsDraft, ...idleExceptionsDraft, ...forceAppsDraft])]
         defaultAxisDeadzone = topcec.setting("axis_deadzone_percent")
         defaultRzDeadzone = topcec.setting("rz_deadzone_percent")
         axisDraft = JSON.parse(JSON.stringify(topcec.setting("device_axis_deadzones") || {}))
@@ -780,7 +783,7 @@ Kirigami.ApplicationWindow {
             }
         }
         let query = appSearch.text.trim().toLowerCase()
-        if (query && !showAllApps.checked) {
+        if (!showAllApps.checked) {
             for (let id of topcec.activeInhibitorApps) {
                 if (!apps.some(app => app.id === id)) {
                     let installed = installedApps.find(app => app.id === id)
@@ -843,6 +846,9 @@ Kirigami.ApplicationWindow {
     function setIdleApp(id, enabled) {
         idleAppsDraft = enabled ? [...idleAppsDraft.filter(item => item !== id), id]
             : idleAppsDraft.filter(item => item !== id)
+        if (topcec.automaticIdleInhibition)
+            idleExceptionsDraft = enabled ? idleExceptionsDraft.filter(item => item !== id)
+                : [...idleExceptionsDraft.filter(item => item !== id), id]
         root.markSettingsDirty()
     }
 
@@ -859,8 +865,13 @@ Kirigami.ApplicationWindow {
             updated.push(...ids)
         if (force)
             forceAppsDraft = updated
-        else
+        else {
             idleAppsDraft = updated
+            if (topcec.automaticIdleInhibition) {
+                let exceptions = idleExceptionsDraft.filter(id => !ids.includes(id))
+                idleExceptionsDraft = enabled ? exceptions : [...exceptions, ...ids]
+            }
+        }
         root.markSettingsDirty()
     }
 
@@ -868,7 +879,8 @@ Kirigami.ApplicationWindow {
     Connections {
         target: topcec
         function onAppsChanged() {
-            root.retainedAppIds = [...new Set([...root.retainedAppIds, ...root.idleAppsDraft, ...root.forceAppsDraft])]
+            root.retainedAppIds = [...new Set([...root.retainedAppIds,
+                ...root.idleAppsDraft, ...root.idleExceptionsDraft, ...root.forceAppsDraft])]
         }
         function onConfigurationChanged() { root.loadSettings() }
         function onSettingsEnabledChanged() {
@@ -1656,7 +1668,10 @@ Kirigami.ApplicationWindow {
                             width: parent.width
                             SelectableLabel {
                                 Layout.fillWidth: true
-                                text: "Turn off Allow standby to follow an app's Plasma request. Force block standby blocks TV standby while the app has a window on a selected display. Neither option prevents computer sleep."
+                                text: (topcec.automaticIdleInhibition
+                                    ? "Active Plasma screen-idle requests can keep the TV on. Check Allow standby to make an exception for an app."
+                                    : "Turn off Allow standby to honor an app's Plasma screen-idle request. Update the host service to honor these requests by default.")
+                                    + " Force block standby keeps the TV on while the app has a window on a selected display. These options control TV standby only."
                             }
                             CopyableCheckBox {
                                 id: showAllApps
@@ -1665,7 +1680,8 @@ Kirigami.ApplicationWindow {
                                 onClicked: {
                                     if (!checked)
                                         root.retainedAppIds = [...new Set([...root.retainedAppIds,
-                                            ...root.idleAppsDraft, ...root.forceAppsDraft])]
+                                            ...root.idleAppsDraft, ...root.idleExceptionsDraft,
+                                            ...root.forceAppsDraft])]
                                 }
                             }
                             Controls.TextField {
@@ -1742,7 +1758,11 @@ Kirigami.ApplicationWindow {
                                         Layout.alignment: Qt.AlignTop | Qt.AlignLeft
                                         text: "Allow standby"
                                         Accessible.name: modelData.name + " allow standby"
-                                        checked: !modelData.groupIds.some(id => root.idleAppsDraft.includes(id))
+                                        checked: !modelData.groupIds.some(id =>
+                                            !root.idleExceptionsDraft.includes(id)
+                                            && (root.idleAppsDraft.includes(id)
+                                                || (topcec.automaticIdleInhibition
+                                                    && topcec.activeInhibitorApps.includes(id))))
                                         onClicked: root.setAppGroup(modelData.groupIds, !checked, false)
                                     }
                                     CopyableCheckBox {

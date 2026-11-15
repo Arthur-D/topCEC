@@ -109,6 +109,8 @@ def config_from_settings(current, values):
             'chromiumVideoBlocksStandby', current['chromium_video_blocks_standby']),
         'idle_inhibition_apps': values.get(
             'idleInhibitionApps', current['idle_inhibition_apps']),
+        'idle_inhibition_exceptions': values.get(
+            'idleInhibitionExceptions', current['idle_inhibition_exceptions']),
         'force_inhibition_apps': values.get(
             'forceInhibitionApps', current['force_inhibition_apps']),
         'cec_enabled': bool(adapter),
@@ -169,6 +171,7 @@ class GuiBackend(QObject):
         self._status_poll_timer.start()
         self._status_poll_in_flight = False
         self._config_source = 'unknown' if self.dbus_only else 'defaults'
+        self._host_supports_idle_exceptions = None
         self._service_data = {}
         self._equipment = {'outputs': [], 'adapters': [], 'inputs': []}
         self._equipment_known = False
@@ -228,6 +231,10 @@ class GuiBackend(QObject):
     @Property(bool, notify=changed)
     def liveSettingsAvailable(self):
         return self.backendAvailable and self._service_data.get('settings_apply') == 'live'
+
+    @Property(bool, notify=changed)
+    def automaticIdleInhibition(self):
+        return not self.backendAvailable or self._host_supports_idle_exceptions is not False
 
     @Property(bool, notify=changed)
     def dbusOnly(self):
@@ -750,6 +757,7 @@ class GuiBackend(QObject):
         self._failed_input_draft = None
         self._refresh_in_flight = False
         self._set_service_data({})
+        self._host_supports_idle_exceptions = None
         self._missing_capabilities.clear()
         self._set_equipment(None, 'Host equipment inventory will refresh after reconnection.')
         self._power_state = 'unavailable'
@@ -928,6 +936,7 @@ class GuiBackend(QObject):
                           or source != self._config_source)
         self._config_source = source
         self.config = config
+        self._host_supports_idle_exceptions = 'idle_inhibition_exceptions' in raw_config
         self._chromium_audio_supported = 'chromium_audio_blocks_standby' in raw_config
         self._browser_video_supported = (
             'firefox_video_blocks_standby' in raw_config
@@ -1144,8 +1153,9 @@ class GuiBackend(QObject):
             # Older hosts returned the complete configuration without its version.
             optional = {'consider_input_devices', 'mouse_output', 'mouse_outputs',
                         'firefox_audio_blocks_standby', 'idle_inhibition_apps',
-                        'force_inhibition_apps', 'chromium_audio_blocks_standby',
-                        'firefox_video_blocks_standby', 'chromium_video_blocks_standby'}
+                        'idle_inhibition_exceptions', 'force_inhibition_apps',
+                        'chromium_audio_blocks_standby', 'firefox_video_blocks_standby',
+                        'chromium_video_blocks_standby'}
             if (isinstance(config, dict) and set(DEFAULT_CONFIG) - optional <= set(config)
                     and set(config) <= set(DEFAULT_CONFIG)):
                 config = {'schema_version': SCHEMA_VERSION, **config}
@@ -1204,6 +1214,8 @@ class GuiBackend(QObject):
                 payload = {'schema_version': 1, **validated}
                 if not payload['device_axis_deadzones']:
                     del payload['device_axis_deadzones']
+                if not self.automaticIdleInhibition:
+                    del payload['idle_inhibition_exceptions']
                 if self._browser_video_supported is False:
                     if (payload['firefox_video_blocks_standby']
                             or payload['chromium_video_blocks_standby']):

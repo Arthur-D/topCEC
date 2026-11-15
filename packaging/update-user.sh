@@ -39,12 +39,28 @@ main() {
         return 1
     fi
 
-    if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+    if git rev-parse --verify -q MERGE_HEAD >/dev/null; then
+        printf 'Finish or abort the in-progress Git merge before updating.\n' >&2
+        return 1
+    fi
+
+    local checkout_status
+    checkout_status=$(git status --porcelain --untracked-files=normal)
+    if [[ -n "$checkout_status" ]]; then
         printf 'The checkout has local changes. Commit or stash them before updating.\n' >&2
         return 1
     fi
     printf 'Pulling the current branch from its Git upstream...\n'
-    git pull --ff-only
+    if ! git pull --no-rebase --ff --no-edit --no-autostash; then
+        if git rev-parse --verify -q MERGE_HEAD >/dev/null; then
+            if git merge --abort; then
+                printf 'Git merge stopped and was aborted. Merge the upstream branch manually, then rerun the updater.\n' >&2
+            else
+                printf 'Git could not abort the merge. Check git status before rerunning the updater.\n' >&2
+            fi
+        fi
+        return 1
+    fi
 
     printf 'Installing host files and restarting topcec.service...\n'
     bash packaging/install-user.sh

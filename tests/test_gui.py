@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
 import os
+import time
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import sys
@@ -61,7 +62,9 @@ class GuiChecks(unittest.TestCase):
                 patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
                              requests.append((method, callback, args))), \
                 patch.object(backend, 'refresh'):
-            QTest.qWait(350)
+            deadline = time.monotonic() + 2
+            while not requests and time.monotonic() < deadline:
+                QTest.qWait(25)
             self.assertEqual(len(requests), 1)
             method, callback, arguments = requests.pop()
             self.assertEqual(method, 'ApplySettings')
@@ -2303,7 +2306,7 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(removed.objectName(), 'appRow:removed.desktop')
         allow = player.findChild(QObject, 'idleApp:player.desktop')
         self.assertEqual(allow.property('text'), 'Allow standby')
-        self.assertTrue(allow.property('checked'))
+        self.assertFalse(allow.property('checked'))
         removed_allow = removed.findChild(QObject, 'idleApp:removed.desktop')
         self.assertFalse(removed_allow.property('checked'))
         QMetaObject.invokeMethod(removed_allow, 'click')
@@ -2314,6 +2317,11 @@ class GuiChecks(unittest.TestCase):
         QMetaObject.invokeMethod(removed_allow, 'click')
         self.assertEqual(player.findChild(QObject, 'forceApp:player.desktop').property('text'),
                          'Force block standby')
+        QMetaObject.invokeMethod(allow, 'click')
+        self.assertTrue(allow.property('checked'))
+        self.assertEqual(json.loads(QQmlExpression(
+            engine.rootContext(), window, 'JSON.stringify(settingsValues())').evaluate()[0])
+            ['idleInhibitionExceptions'], ['player.desktop'])
         QMetaObject.invokeMethod(allow, 'click')
         self.assertFalse(allow.property('checked'))
         QMetaObject.invokeMethod(player.findChild(QObject, 'forceApp:player.desktop'), 'click')

@@ -305,6 +305,7 @@ class ConfigurationChecks(unittest.TestCase):
             command = execv.call_args.args[1]
             self.assertIn('--config', command)
             self.assertIn(str(path), command)
+            self.assertNotIn('--cec', command)
 
     def test_service_launcher_uses_portable_monitor_device_defaults(self):
         def qdbus(*args, **kwargs):
@@ -322,6 +323,7 @@ class ConfigurationChecks(unittest.TestCase):
                 patch.object(start.os, 'execv') as execv:
             start.main()
         command = execv.call_args.args[1]
+        self.assertNotIn('--cec', command)
         self.assertNotIn('--config', command)
         self.assertNotIn('--device', command)
         self.assertFalse(any('/dev/input/by-id/' in value for value in command))
