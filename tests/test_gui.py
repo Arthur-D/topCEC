@@ -2372,7 +2372,7 @@ class GuiChecks(unittest.TestCase):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)
         backend._connection_state = 'connected'
-        backend._service_status = 'running'
+        backend._service_status = 'configuration-only'
         backend.config['firefox_audio_blocks_standby'] = True
         backend._service_data = {
             'firefox_audio_error': 'AT-SPI did not respond within 5 seconds',
@@ -3338,6 +3338,9 @@ class GuiChecks(unittest.TestCase):
         backend._service_data = {
             'service': 'configuration-only', 'cec_enabled': False,
             'fail_safe_reason': 'Cannot read input: Permission denied',
+            'monitoring_error': 'Cannot read input: Permission denied',
+            'firefox_audio_error': 'AT-SPI did not respond within 5 seconds',
+            'blocking_apps': [],
         }
         config = {
             'schema_version': 1, **DEFAULT_CONFIG,
@@ -3352,6 +3355,10 @@ class GuiChecks(unittest.TestCase):
         self.assertEqual(backend.serviceStatus, 'configuration-only')
         self.assertIn('configuration only', backend.connectionMessage)
         self.assertIn('Permission denied', backend.standbyReason)
+        self.assertIn('unknown', backend.firefoxAudioStatusMessage)
+        self.assertNotIn('unavailable while monitoring is stopped',
+                         backend.firefoxAudioStatusMessage)
+        self.assertIn('Monitoring: Cannot read input', backend.diagnostics)
         with patch.object(backend, '_service_interface') as interface:
             backend.requestPower('on')
             interface.assert_not_called()
