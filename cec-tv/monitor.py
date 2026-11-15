@@ -28,7 +28,8 @@ from configuration import (
     DEFAULT_CONFIG, SCHEMA_VERSION, default_config_path, load_config, merge_cli, save_config,
     validate_config, mouse_outputs,
 )
-from firefox_media import FirefoxWebExtensionProvider
+from firefox_media import (PIP_CAPTION, FirefoxPiPScan, FirefoxWebExtensionProvider,
+                           is_firefox_executable, scan_firefox_pip)
 from chromium_media import BROWSERS, ChromiumMedia
 from standby_apps import (InhibitionHistory, PlasmaInhibitions, decode_windows,
                           forced_inhibitions, is_screen_inhibition, matching_inhibitions,
@@ -469,12 +470,6 @@ class EvdevActivityProvider:
         return None
 
 
-def is_firefox_executable(path):
-    executable = Path(path)
-    return (executable.name in ("firefox", "firefox-bin")
-            and executable.parent.name == "firefox")
-
-
 def is_firefox_accessible_process(pid, read_exe):
     executable = read_exe(pid)
     if is_firefox_executable(executable):
@@ -515,7 +510,10 @@ def firefox_window_snapshot(payload, read_exe=None):
                 or not isinstance(row.get("output"), str)):
             raise ValueError("Invalid window identity")
         if is_firefox_executable(read_exe(row["pid"])):
-            result.append({"title": row["title"], "output": row["output"]})
+            window = {"title": row["title"], "output": row["output"]}
+            if "size" in row:
+                window.update(pid=row["pid"], size=row["size"])
+            result.append(window)
     return json.dumps(result)
 
 
@@ -526,6 +524,7 @@ class Mapping:
         self.snapshot_stamp = None
         self.snapshot_counts = Counter()
         self.snapshot_error = None
+        self.windows = []
 
     def report(self, output, title, now):
         if self.snapshot_stamp is not None:
@@ -549,6 +548,7 @@ class Mapping:
             return False
         self.reports = {(row['title'], row['output']): now for row in rows}
         self.snapshot_counts = Counter(row['title'] for row in rows)
+        self.windows = rows
         self.snapshot_stamp = now
         self.snapshot_error = None
         return True
@@ -777,6 +777,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         media_provider = FirefoxMediaProvider()
     mapping = Mapping(args.mapping_ttl)
     webextension_media = FirefoxWebExtensionProvider()
+    firefox_pip = FirefoxPiPScan()
     chromium_media = ChromiumMedia()
     match_diagnostics = MatchDiagnostics()
     selector = selectors.DefaultSelector()
@@ -804,6 +805,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'plasma_timeout_seconds': None,
         'plasma_timeout_fallback': False,
         'fail_safe_reason': 'monitor poll has not completed',
+        'monitoring_error': None,
         'playback_active': False,
         'scan_status': scan_error,
     }
@@ -975,7 +977,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 staged_devices[state['device'].fd] = state
             if replacing_power:
                 staged_power = cec_backend_factory(config['cec_port']) if config['cec_enabled'] else None
-                if staged_power is not None:
+                if staged_power is not None and not startup_error:
                     staged_power.validate_port()
             if config['kde_timeout'] and kde_settings is None:
                 staged_kde = KdeTimeout()
@@ -1035,6 +1037,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             'service': 'running', 'cec_enabled': power is not None,
             'target_output': target_output, 'adapter': saved['cec_port'] if power else None,
             'fail_safe_reason': 'Settings applied; waiting for a fresh monitoring poll',
+            'monitoring_error': None,
             'scan_status': scan_error, 'input_permission_help': None,
             'settings_error': None, 'pending_action': power.pending if power else None,
             'cec_fault': power.fault if power else None,
@@ -1260,6 +1263,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             'service': 'configuration-only',
             'cec_enabled': False,
             'fail_safe_reason': startup_error,
+            'monitoring_error': startup_error,
             'scan_status': 'Monitoring has not started',
             'input_permission_help': input_permission_help(error),
         })
@@ -1276,30 +1280,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             try:
                 if power is not None and (power.process is not None or power.pending == 'on'):
                     power.poll()
-                if worker is not None and (
-                        worker.poll() is not None or time.monotonic() - worker_started >= SCAN_TIMEOUT):
-                    if worker.poll() is None:
-                        worker.kill()
-                    worker.communicate()
-                    worker = None
-                    next_scan = 0
-                if kde_settings:
-                    kde_settings.poll(timer, time.monotonic())
-                    status_snapshot.update({
-                        'plasma_timeout_read': kde_settings.value != 'unread',
-                        'plasma_timeout_seconds': (
-                            kde_settings.value
-                            if type(kde_settings.value) is int else None),
-                        'plasma_timeout_fallback': (
-                            getattr(kde_settings, 'fallback_active', False) is True),
-                    })
-                status_snapshot.update(power_status())
             except (OSError, subprocess.SubprocessError) as error:
                 message = 'Paused monitor recovery failed: ' + str(error)
                 if status_snapshot.get('settings_error') != message:
                     log(message)
                 status_snapshot['settings_error'] = message
-            return True
         try:
             for key, _ in selector.select(timeout=0):
                 device = key.fileobj
@@ -1431,9 +1416,17 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 runtime_config['force_inhibition_apps'], equipment_snapshot.get('apps') or [],
                 app_windows, app_windows_stamp is not None
                 and now - app_windows_stamp <= mapping.ttl, media_outputs))
-            if runtime_config['firefox_video_blocks_standby'] and media_outputs:
+            video_enabled = runtime_config['firefox_video_blocks_standby'] and media_outputs
+            pip_windows = []
+            if video_enabled and mapping.health(now, required=True) is None:
+                if (len(mapping.windows) > len(webextension_media.windows or [])
+                        or any(window['title'] == PIP_CAPTION for window in mapping.windows)):
+                    pip_windows = mapping.windows
+            pip_players = firefox_pip.poll(now, pip_windows)
+            if video_enabled:
                 video_states = [
-                    webextension_media.video_state(mapping, now, output, mapping.ttl)
+                    webextension_media.video_state(
+                        mapping, now, output, mapping.ttl, pip_players)
                     for output in media_outputs
                 ]
                 if any(state is None for state in video_states):
@@ -1476,6 +1469,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 reason = reason or ('App standby block: '
                                     + blocking_apps[0]['app'] + ' — '
                                     + blocking_apps[0]['reason'])
+            reason = reason or startup_error
             if kde_settings:
                 settings_error = kde_settings.poll(timer, now)
                 if settings_error and getattr(kde_settings, 'fallback_active', False) is not True:
@@ -1483,7 +1477,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 if timer.timeout is None and power and power.pending == 'off':
                     power.pending = None
                     timer.cancel_standby(now)
-            if power:
+            if power and not startup_error:
                 if reason and power.pending == 'off':
                     power.pending = None
                     timer.cancel_standby(now)
@@ -1507,14 +1501,16 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     'FAIL-SAFE cleared; monitoring restored')
                 previous_status = reason
             message = timer.tick(now, uncertain=bool(reason))
-            if message:
+            if message and not startup_error:
                 if power:
                     power.request('off')
                 else:
                     log(message)
             status_snapshot.update({
-                'service': 'running',
+                'service': 'configuration-only' if startup_error else 'running',
+                'cec_enabled': power is not None and not startup_error,
                 **power_status(),
+                'monitoring_error': startup_error,
                 'plasma_timeout_read': bool(
                     kde_settings and kde_settings.value != 'unread'),
                 'plasma_timeout_seconds': (
@@ -1548,6 +1544,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             status_snapshot.update({
                 'service': 'configuration-only', 'cec_enabled': False,
                 'fail_safe_reason': startup_error, 'scan_status': 'Monitoring paused',
+                'monitoring_error': startup_error,
                 'input_permission_help': input_permission_help(error) if isinstance(error, OSError) else None,
             })
             return True
@@ -1572,6 +1569,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     except KeyboardInterrupt:
         pass
     finally:
+        firefox_pip.close()
         if equipment_worker is not None:
             if equipment_worker.poll() is None:
                 equipment_worker.kill()
@@ -2118,7 +2116,7 @@ def self_test():
             result = self.run_monitor_steps(
                 [], input_error=PermissionError(13, 'Permission denied'),
                 equipment_updates=[connected, empty, connected])
-            self.assertEqual(len(result.workers), 3)
+            self.assertEqual(len(result.workers), 4)
             self.assertEqual(json.loads(result.receiver.GetEquipment()), connected)
             result.power.poll.assert_not_called()
             result.power.request.assert_not_called()
@@ -2170,9 +2168,32 @@ def self_test():
                     restarted = self.run_monitor_steps(
                         [], config_path=path, input_error=error)
                     self.assertTrue(restarted.status['configuration_saved'])
+                    self.assertEqual(restarted.status['service'], 'configuration-only')
+                    self.assertEqual(restarted.status['monitoring_error'],
+                                     'Cannot read input: ' + str(error))
+                    self.assertIn('firefox_audio_error', restarted.status)
+                    self.assertIn('blocking_apps', restarted.status)
                     self.assertEqual(
                         json.loads(restarted.receiver.GetConfig())['devices'],
                         ['/dev/input/by-id/selected-keyboard'])
+
+        def test_configuration_only_reports_blockers_without_cec_control(self):
+            from unittest.mock import Mock, patch
+
+            blocker = {
+                'app': 'Player', 'reason': 'Audio',
+                'identityUnknown': False, 'locationUnknown': False,
+            }
+            with patch.dict(globals(), {
+                    'matching_inhibitions': Mock(return_value=[blocker])}):
+                result = self.run_monitor_steps(
+                    [], input_error=PermissionError(13, 'Permission denied'))
+
+            self.assertEqual(result.status['service'], 'configuration-only')
+            self.assertEqual(result.status['blocking_apps'], [blocker])
+            self.assertTrue(result.status['monitoring_error'])
+            result.power.poll.assert_not_called()
+            result.power.request.assert_not_called()
 
         def test_partial_input_initialization_is_closed_before_configuration_only(self):
             result = self.run_monitor_steps(
@@ -2181,7 +2202,7 @@ def self_test():
             self.assertEqual(result.status['service'], 'configuration-only')
             result.device.close.assert_called_once()
             result.selector.close.assert_called_once()
-            self.assertEqual(result.workers, [])
+            self.assertEqual(len(result.workers), 1)
             result.power.poll.assert_not_called()
             result.power.close.assert_not_called()
 
@@ -2420,7 +2441,14 @@ def main():
                         help='Block standby without fresh Firefox live-bridge reports')
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--atspi-scan', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--atspi-pip-scan', nargs='+', type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.atspi_pip_scan:
+        try:
+            print(json.dumps(scan_firefox_pip(args.atspi_pip_scan)))
+            return 0
+        except Exception:
+            return 1
     try:
         config = load_config(args.config) if args.config else {
             'schema_version': 1, **DEFAULT_CONFIG}

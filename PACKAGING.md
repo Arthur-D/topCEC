@@ -66,12 +66,15 @@ AT-SPI fallback detects audio only.
 
 The extensions require access to sites and their frames to inspect video
 elements. Browser-restricted pages and inaccessible frames cannot be inspected;
-video inside closed shadow roots or non-HTML players may not be detected.
+non-HTML players may not be detected. Chromium-based extensions also need the
+video element to be outside a closed shadow root.
 When video status or display matching is unknown, the Standby page shows the
 fail-safe reason instead of reporting that no apps are blocking standby.
 The extensions send active tab titles and per-tab audio and video flags locally
-to topCEC so it can match playback with a KWin display. They do not send URLs
-or page contents. Reload existing tabs after installing or updating an extension.
+to topCEC so it can match playback with a KWin display. Firefox also reports the
+number of playing video elements per tab when it can inspect every frame. The
+extensions do not send URLs or page contents. Reload existing tabs after
+installing or updating an extension.
 Existing installations must accept the new site-access permissions when updating.
 
 ### Firefox
@@ -112,6 +115,14 @@ host JSON. Finish any first-run Firefox welcome screens, set
 If the Flatpak's AT-SPI tree is still unavailable, try
 `flatpak run --env=GNOME_ACCESSIBILITY=1 org.mozilla.firefox`.
 Check **Diagnostics** for detection status.
+
+For Firefox Picture-in-Picture, topCEC uses the player's AT-SPI play/pause
+state and the KWin display of its floating window. A paused player does not
+block standby by itself. If playing and paused players with identical window
+metadata span several displays, topCEC keeps standby blocked on displays that
+could contain the playing video. Extension 0.1.5 or later lets topCEC avoid
+counting a detached video again on the source tab's display when it has a
+complete count.
 
 ### Chromium, Chrome, Brave, Edge and Vivaldi
 

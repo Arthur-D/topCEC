@@ -19,22 +19,33 @@ async function withinTimeout(promise) {
     }
 }
 
-async function videoState(tabId) {
+async function videoState(tab) {
+    if (tab.discarded === true)
+        return {video: false, playing_videos: 0};
     try {
+        const tabId = tab.id;
         const frames = await withinTimeout(browser.webNavigation.getAllFrames({tabId}));
-        if (!frames || !frames.length) return null;
+        if (!frames || !frames.length) return {video: null};
         const states = await Promise.all(frames.map(async (frame) => {
             try {
                 const result = await withinTimeout(browser.tabs.sendMessage(
                     tabId, "topcec-video-state", {frameId: frame.frameId}));
-                return typeof result?.playing === "boolean" ? result.playing : null;
+                return typeof result?.playing === "boolean" ? result : null;
             } catch (_error) {
                 return null;
             }
         }));
-        return states.some(Boolean) ? true : (states.includes(null) ? null : false);
+        const playing = states.some((state) => state?.playing === true);
+        const counts = states.map((state) => {
+            if (state?.playing === false) return 0;
+            if (Number.isSafeInteger(state?.count) && state.count > 0) return state.count;
+            return null;
+        });
+        if (counts.includes(null))
+            return {video: playing ? true : null};
+        return {video: playing, playing_videos: counts.reduce((sum, count) => sum + count, 0)};
     } catch (_error) {
-        return null;
+        return {video: null};
     }
 }
 
@@ -91,7 +102,7 @@ async function publishSnapshot() {
                     tabs: await Promise.all(tabs.map(async (tab) => ({
                         audible: tab.audible === true,
                         muted: tab.mutedInfo ? tab.mutedInfo.muted === true : false,
-                        video: await videoState(tab.id)
+                        ...await videoState(tab)
                     })))
                 };
             }))

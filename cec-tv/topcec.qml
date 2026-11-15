@@ -2030,12 +2030,6 @@ Kirigami.ApplicationWindow {
                         text: "Currently blocking standby"
                     }
                     SelectableLabel {
-                        objectName: "appBlockingStatus"
-                        Layout.fillWidth: true
-                        visible: root.currentSection === 2 && topcec.firefoxPlaybackActive
-                        text: "Firefox · Audio"
-                    }
-                    SelectableLabel {
                         objectName: "firefoxAudioStatus"
                         Layout.fillWidth: true
                         visible: root.currentSection === 2 && root.firefoxAudioEnabled
@@ -2062,7 +2056,7 @@ Kirigami.ApplicationWindow {
                     SelectableLabel {
                         objectName: "noBlockingApps"
                         Layout.fillWidth: true
-                        visible: root.currentSection === 2 && !topcec.firefoxPlaybackActive
+                        visible: root.currentSection === 2
                             && (!root.firefoxAudioEnabled || topcec.firefoxAudioStatusMessage.length === 0)
                             && topcec.chromiumAudioStatusMessage.length === 0
                             && topcec.blockingApps.length === 0 && topcec.inhibitionsMessage.length === 0
@@ -2070,10 +2064,12 @@ Kirigami.ApplicationWindow {
                         text: "No apps are currently blocking standby."
                     }
                     Repeater {
+                        objectName: "blockingAppsRepeater"
                         model: root.currentSection === 2 ? topcec.blockingApps : []
                         delegate: SelectableLabel {
                             required property var modelData
                             Layout.fillWidth: true
+                            objectName: "blockingApp:" + modelData.app
                             text: modelData.app + " · " + (modelData.reason || "Blocking screen standby")
                                 + (modelData.identityUnknown ? " (app identity unknown)"
                                     : (modelData.locationUnknown ? " (display unknown)" : ""))

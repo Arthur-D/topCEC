@@ -132,14 +132,18 @@ back to the legacy `mouse_output`, then `target_output`. The
 [configuration schema](cec-tv/configuration.py) lists the remaining keys and
 defaults. Unknown keys and invalid values are rejected. Restart the service
 after editing JSON by hand. Keep `cec_enabled` false to start without CEC
-commands. Selecting a CEC adapter in the GUI enables CEC.
+commands. Selecting a CEC adapter in the GUI enables CEC. A connected adapter
+is only needed for TV power control; settings and suspend-blocker diagnostics
+do not require one.
 
 ## Recover, update or remove
 
-If the host reports **configuration-only** mode, fix the missing or unreadable
-input path in the GUI and save. If the saved paths are already correct, choose
-**Diagnostics → Retry monitoring**. Neither a Flatpak device override nor
-running the GUI as root fixes host device permissions.
+If the host reports **configuration-only** mode, settings and suspend-blocker
+diagnostics remain available even without a connected CEC adapter. Check
+**Diagnostics** for app blockers and equipment errors, then fix the missing or
+unreadable input path in the GUI and save. If the saved paths are already
+correct, choose **Diagnostics → Retry monitoring**. Neither a Flatpak device
+override nor running the GUI as root fixes host device permissions.
 
 If **Diagnostics** offers an input-group command for your device, run it from
 a host terminal. On Atomic desktops such as Bazzite, use the command the GUI

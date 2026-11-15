@@ -435,10 +435,14 @@ class LiveSettingsChecks(unittest.TestCase):
                                     for item in status['blocking_apps']))
                 snapshot['windows'][0]['tabs'].append(
                     {'audible': False, 'muted': False, 'video': None})
+                receiver.Report('Firefox-snapshot: ' + json.dumps([
+                    {'title': 'Video — Mozilla Firefox', 'output': 'TV'},
+                    {'title': 'Unreported window — Mozilla Firefox', 'output': 'TV'},
+                ]))
                 receiver.Report('Firefox-media-snapshot: ' + json.dumps(snapshot))
                 self.assertTrue(context.callbacks[100]())
                 status = json.loads(receiver.GetStatus())
-                self.assertIn('unknown', status['fail_safe_reason'])
+                self.assertIn('Mozilla Firefox — Video', status['fail_safe_reason'])
                 self.assertTrue(any(item['reason'] == 'Video'
                                     for item in status['blocking_apps']))
                 snapshot['windows'][0]['tabs'].pop()
@@ -843,6 +847,25 @@ class LiveSettingsChecks(unittest.TestCase):
 
             self.run_service(path, scenario, fail_inputs=['/mock/keyboard'],
                              initial={'cec_enabled': True})
+
+    def test_configuration_only_can_save_cec_settings_without_adapter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                receiver = context.receiver
+                self.assertEqual(json.loads(receiver.GetStatus())['service'],
+                                 'configuration-only')
+                self.apply(
+                    receiver, cec_enabled=True, cec_port='/mock/offline-cec',
+                    devices=['/mock/replacement'])
+                self.assertEqual(self.config(receiver)['cec_port'], '/mock/offline-cec')
+                self.assertFalse(context.powers[-1].validated)
+                self.assertTrue(json.loads(receiver.GetStatus())['configuration_saved'])
+
+            self.run_service(
+                path, scenario, fail_inputs=['/mock/keyboard'],
+                fail_adapter='/mock/offline-cec', initial={'cec_enabled': False})
 
     def test_alias_change_retains_open_device_and_deduplicates_same_input(self):
         with tempfile.TemporaryDirectory() as directory:

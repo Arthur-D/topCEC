@@ -417,7 +417,8 @@ class GuiBackend(QObject):
 
     @Property(str, notify=changed)
     def firefoxAudioStatusMessage(self):
-        if not self.backendAvailable or self._service_status != 'running':
+        if (not self.backendAvailable
+                or self._service_status not in ('running', 'configuration-only')):
             return 'Firefox audio status is unavailable while monitoring is stopped.'
         if 'firefox_audio_error' not in self._service_data:
             return 'Firefox audio status is unavailable. Update the host service.'
@@ -581,11 +582,36 @@ class GuiBackend(QObject):
     def blockingApps(self):
         apps = self._service_data.get('blocking_apps')
         if not isinstance(apps, list):
-            return []
-        return [app for app in apps if isinstance(app, dict)
-                and isinstance(app.get('app'), str)
-                and isinstance(app.get('reason'), str)
-                and isinstance(app.get('locationUnknown'), bool)]
+            apps = []
+        if self.firefoxPlaybackActive:
+            apps = [*apps, {
+                'app': 'Mozilla Firefox', 'reason': 'Audio',
+                'identityUnknown': False, 'locationUnknown': False,
+            }]
+        displayed = []
+        for app in apps:
+            if (not isinstance(app, dict)
+                    or not isinstance(app.get('app'), str)
+                    or not isinstance(app.get('reason'), str)
+                    or not isinstance(app.get('locationUnknown'), bool)):
+                continue
+            item = dict(app)
+            if item['reason'] in ('Audio', 'Video'):
+                existing = next((shown for shown in displayed
+                                 if shown['app'] == item['app']
+                                 and shown['reason'] in ('Audio', 'Video',
+                                                         'Audio and video')), None)
+                if existing:
+                    if existing['reason'] != item['reason']:
+                        existing['reason'] = 'Audio and video'
+                    existing['identityUnknown'] = (
+                        existing.get('identityUnknown', False)
+                        or item.get('identityUnknown', False))
+                    existing['locationUnknown'] = (
+                        existing['locationUnknown'] or item['locationUnknown'])
+                    continue
+            displayed.append(item)
+        return displayed
 
     @Property(str, notify=changed)
     def inhibitionsMessage(self):
@@ -928,9 +954,9 @@ class GuiBackend(QObject):
         self._connection_state = 'connected'
         self._update_diagnostics()
         self._connection_message = (
-            'Connected for configuration only. Monitoring could not start. '
-            'Correct the input devices and their host read permissions, then '
-            'apply settings to resume monitoring.'
+            'Connected for configuration only. Settings and standby diagnostics remain '
+            'available without a CEC adapter. Correct input-device access and apply '
+            'settings to resume monitoring.'
             if self._service_status == 'configuration-only'
             else 'Connected to the topCEC host service.')
         self._refresh_in_flight = interface is not None
@@ -960,6 +986,8 @@ class GuiBackend(QObject):
             f"Pending action: {pending}",
             f"Settings error: {self._service_data.get('settings_error') or 'none'}",
         ]
+        if self._service_data.get('monitoring_error'):
+            diagnostic_items.append('Monitoring: ' + str(self._service_data['monitoring_error']))
         if self.firefoxAccessibilityHelp:
             diagnostic_items.append('Firefox accessibility: ' + self.firefoxAccessibilityHelp)
         errors = self._service_data.get('chromium_audio_errors')
