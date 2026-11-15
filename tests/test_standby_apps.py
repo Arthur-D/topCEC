@@ -14,6 +14,15 @@ from standby_apps import (InhibitionHistory, PlasmaInhibitions, decode_windows,
 
 
 class StandbyAppsChecks(unittest.TestCase):
+    def test_flatpak_chrome_inhibitor_uses_friendly_display_name(self):
+        path = '/app/extra/chrome'
+        self.assertEqual(observed_apps([path], []), [{'id': path, 'name': 'Google Chrome'}])
+        requests = [{'kind': 'idle', 'app': path, 'reason': 'Blink Wake Lock'}]
+        blocker, = matching_inhibitions(requests, [], [], [], True, 'TV')
+        self.assertEqual((blocker['app'], blocker['reason']),
+                         ('Google Chrome', 'Blink Wake Lock'))
+        self.assertEqual(matching_inhibitions(requests, [path], [], [], True, 'TV'), [])
+
     def test_history_persists_idle_requests_and_maps_installed_apps(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'history.json'

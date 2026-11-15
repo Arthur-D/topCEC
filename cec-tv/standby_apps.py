@@ -20,6 +20,12 @@ def app_key(value):
     return value[:-8] if value.endswith('.desktop') else value
 
 
+def inhibitor_display_name(name):
+    path = name.strip()
+    browser = executable_browser(path) if path.startswith('/') else None
+    return BROWSERS[browser][0] if browser in BROWSERS else name
+
+
 def is_screen_inhibition(request):
     # PowerDevil uses logind-style types, including combinations like sleep:idle.
     return 'idle' in request['kind'].split(':')
@@ -44,7 +50,7 @@ def observed_apps(names, apps):
         if len(matches) == 1:
             app = matches[0]
         else:
-            app = {'id': name, 'name': name}
+            app = {'id': name, 'name': inhibitor_display_name(name)}
             if len(groups) == 1 and None not in groups:
                 app['launcher_group'] = groups.pop()
         result[app['id']] = app
@@ -180,7 +186,7 @@ def matching_inhibitions(inhibitions, exceptions, apps, windows, windows_fresh, 
         if not unknown and not any(row['output'] in outputs for row in app_windows):
             continue
         selected.append({
-            'app': request['app'],
+            'app': inhibitor_display_name(request['app']),
             'reason': request['reason'],
             'locationUnknown': unknown,
             'identityUnknown': ambiguous or (not candidates & identities.keys()
