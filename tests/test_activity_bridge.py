@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from pathlib import Path
 import json
+import os
 import unittest
-from PySide6.QtCore import QCoreApplication
+os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QJSEngine
 
-APP = QCoreApplication.instance() or QCoreApplication([])
+APP = QGuiApplication.instance() or QGuiApplication([])
 SOURCE = Path(__file__).resolve().parents[1] / 'cec-tv/activity.js'
 
 

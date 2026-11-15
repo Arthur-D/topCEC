@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
 import os
+import time
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import sys
@@ -61,7 +62,9 @@ class GuiChecks(unittest.TestCase):
                 patch.object(backend, '_async_call', side_effect=lambda _, method, callback, *args:
                              requests.append((method, callback, args))), \
                 patch.object(backend, 'refresh'):
-            QTest.qWait(350)
+            deadline = time.monotonic() + 2
+            while not requests and time.monotonic() < deadline:
+                QTest.qWait(25)
             self.assertEqual(len(requests), 1)
             method, callback, arguments = requests.pop()
             self.assertEqual(method, 'ApplySettings')
