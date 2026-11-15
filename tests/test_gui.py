@@ -2397,6 +2397,54 @@ class GuiChecks(unittest.TestCase):
         self.assertTrue(empty.property('visible'))
         engine.deleteLater()
 
+    def test_audio_and_video_blockers_are_deduplicated_by_app(self):
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        backend._service_data = {
+            'playback_active': True,
+            'blocking_apps': [
+                {'app': 'Mozilla Firefox', 'reason': 'Video',
+                 'identityUnknown': False, 'locationUnknown': False},
+                {'app': 'Chromium', 'reason': 'Audio',
+                 'identityUnknown': False, 'locationUnknown': False},
+                {'app': 'Chromium', 'reason': 'Video',
+                 'identityUnknown': False, 'locationUnknown': False},
+                {'app': 'Chromium', 'reason': 'Audio',
+                 'identityUnknown': False, 'locationUnknown': False},
+                {'app': 'Other player', 'reason': 'Audio',
+                 'identityUnknown': False, 'locationUnknown': False},
+            ],
+        }
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.show()
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        repeater = window.findChild(QObject, 'blockingAppsRepeater')
+        self.assertEqual(repeater.property('count'), 3)
+        engine.rootContext().setContextProperty('blockingRepeater', repeater)
+        def blocker_text(index):
+            return QQmlExpression(
+                engine.rootContext(), window,
+                f'blockingRepeater.itemAt({index}).text').evaluate()[0]
+        self.assertEqual(blocker_text(0), 'Mozilla Firefox · Audio and video')
+        self.assertEqual(blocker_text(1), 'Chromium · Audio and video')
+
+        backend._service_data['playback_active'] = False
+        backend.changed.emit()
+        app.processEvents()
+        self.assertEqual(blocker_text(0), 'Mozilla Firefox · Video')
+        backend._service_data['blocking_apps'] = []
+        backend._service_data['playback_active'] = True
+        backend.changed.emit()
+        app.processEvents()
+        self.assertEqual(blocker_text(0), 'Mozilla Firefox · Audio')
+        engine.deleteLater()
+
     def test_video_fail_safe_is_not_reported_as_no_blockers(self):
         app = QGuiApplication.instance() or QGuiApplication([])
         backend = GuiBackend(dbus_only=True)

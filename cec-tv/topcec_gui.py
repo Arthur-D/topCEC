@@ -575,11 +575,36 @@ class GuiBackend(QObject):
     def blockingApps(self):
         apps = self._service_data.get('blocking_apps')
         if not isinstance(apps, list):
-            return []
-        return [app for app in apps if isinstance(app, dict)
-                and isinstance(app.get('app'), str)
-                and isinstance(app.get('reason'), str)
-                and isinstance(app.get('locationUnknown'), bool)]
+            apps = []
+        if self.firefoxPlaybackActive:
+            apps = [*apps, {
+                'app': 'Mozilla Firefox', 'reason': 'Audio',
+                'identityUnknown': False, 'locationUnknown': False,
+            }]
+        displayed = []
+        for app in apps:
+            if (not isinstance(app, dict)
+                    or not isinstance(app.get('app'), str)
+                    or not isinstance(app.get('reason'), str)
+                    or not isinstance(app.get('locationUnknown'), bool)):
+                continue
+            item = dict(app)
+            if item['reason'] in ('Audio', 'Video'):
+                existing = next((shown for shown in displayed
+                                 if shown['app'] == item['app']
+                                 and shown['reason'] in ('Audio', 'Video',
+                                                         'Audio and video')), None)
+                if existing:
+                    if existing['reason'] != item['reason']:
+                        existing['reason'] = 'Audio and video'
+                    existing['identityUnknown'] = (
+                        existing.get('identityUnknown', False)
+                        or item.get('identityUnknown', False))
+                    existing['locationUnknown'] = (
+                        existing['locationUnknown'] or item['locationUnknown'])
+                    continue
+            displayed.append(item)
+        return displayed
 
     @Property(str, notify=changed)
     def inhibitionsMessage(self):
