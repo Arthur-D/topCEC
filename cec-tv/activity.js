@@ -56,6 +56,9 @@ function resetCursorOutput() {
     pendingCrossing = null;
     updateCursorOutput();
 }
+// Absolute remote pointers can land exactly on the seam while still at the
+// edge of the streamed display. Wait for one physical pixel of inward motion
+// across a shared edge before reporting a crossing, regardless of input source.
 function withinSharedEdgePixel(previousOutput, output, entry, pos) {
     let previous, current, scale;
     for (const screen of workspace.screens) {
@@ -66,7 +69,8 @@ function withinSharedEdgePixel(previousOutput, output, entry, pos) {
         }
     }
     if (!previous || !current) return false;
-    // KWin reports desktop coordinates in logical units.
+    // Convert one destination pixel to KWin's logical coordinates. If KWin
+    // does not provide a usable device pixel ratio, use one logical pixel.
     const pixel = Number.isFinite(scale) && scale > 0 ? 1 / scale : 1;
     const previousRight = previous.x + previous.width;
     const previousBottom = previous.y + previous.height;
@@ -89,6 +93,8 @@ function reportCursor() {
     // cannot move the pointer from one display to another.
     const previousOutput = pendingCrossing && output === pendingCrossing.origin
         ? output : outputAt(previousPosition);
+    // Keep the original entry for the shared-edge test and wake log. Returning
+    // across the seam before moving inward cancels the pending crossing.
     if (pendingCrossing && output !== pendingCrossing.destination) pendingCrossing = null;
     if (output !== "unknown" && previousOutput !== "unknown" && output !== previousOutput) {
         pendingCrossing = {origin: previousOutput, destination: output,
