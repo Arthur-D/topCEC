@@ -189,6 +189,7 @@ class CecPower:
         self.state_machine = CecPowerStateMachine()
         self.process = None
         self.pending = None
+        self.pending_wake_source = None
         self.sent = None
         self.started = 0
         self.on_retry_after = 0.0
@@ -205,13 +206,16 @@ class CecPower:
     def may_be_off(self):
         return self.state_machine.may_be_off
 
-    def request(self, action):
+    def request(self, action, *, source=None):
         if action == 'off' and not self.state_machine.can_standby:
             return
         if action == 'on' and self.process is not None and self.sent == 'on':
             # Activity cancels a queued OFF but never duplicates an in-flight ON.
             self.pending = None
+            self.pending_wake_source = None
             return
+        if action != 'on' or self.pending != 'on':
+            self.pending_wake_source = source if action == 'on' else None
         self.pending = action
         if action == 'on' and self.process is not None and self.sent == 'off':
             pid = getattr(self.process, 'pid', None)
@@ -230,9 +234,9 @@ class CecPower:
                     self.state_machine.set_fault(
                         f'Could not cancel standby command: {error}')
 
-    def activity(self, wake_requested=False):
+    def activity(self, wake_requested=False, *, source=None):
         if wake_requested or self.may_be_off:
-            self.request('on')
+            self.request('on', source=source)
 
     def validate_port(self):
         fd = os.open(self.port, os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY)
@@ -278,6 +282,7 @@ class CecPower:
             if self.pending == 'on' and time.monotonic() < self.on_retry_after:
                 return
             action, self.pending = self.pending, None
+            source, self.pending_wake_source = self.pending_wake_source, None
             if action == 'off' and not self.state_machine.can_standby:
                 return
             helper = str(Path(__file__).with_name('cec-power-command.py'))
@@ -288,11 +293,16 @@ class CecPower:
             self.state_machine.begin(action)
             self.process = process
             self.started, self.sent = time.monotonic(), action
-            log('CEC sending: ' + ('standby' if action == 'off' else 'on'))
+            if action == 'on':
+                log(f'CEC sending: on (adapter {self.port!r}, '
+                    f'trigger: {source or "unspecified"})')
+            else:
+                log('CEC sending: standby')
 
     def close(self):
         # Do not abandon a delayed OFF after the monitor has stopped.
         self.pending = None
+        self.pending_wake_source = None
         if self.process is not None:
             try:
                 self.process.communicate(timeout=self.OPERATION_TIMEOUT)
@@ -302,7 +312,8 @@ class CecPower:
                 self.process.communicate()
             self.process = None
         if self.may_be_off:
-            log('Shutting down: attempting to turn TV back on')
+            log(f'CEC sending: on (adapter {self.port!r}, '
+                'trigger: shutdown recovery)')
             try:
                 result = subprocess.run(
                     [sys.executable, str(Path(__file__).with_name('cec-power-command.py')),
@@ -329,7 +340,10 @@ def request_manual_power(power, action, fail_safe_reason):
             process is not None and getattr(power, 'sent', None) == 'off'
         ):
             raise RuntimeError('Standby request is already in progress')
-    power.request(action)
+    if action == 'on':
+        power.request(action, source='D-Bus net.local.CecActivity.RequestPower("on")')
+    else:
+        power.request(action)
     if action == 'off' and power.pending != 'off':
         raise RuntimeError('Standby request was not queued')
 
@@ -907,7 +921,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         now = time.monotonic()
         message = timer.activity(now)
         if power:
-            power.activity(wake_requested=bool(message))
+            power.activity(wake_requested=bool(message), source=source)
         elif message:
             log(message)
 
@@ -1072,11 +1086,12 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
             elif message.startswith('Mouse-activity: '):
                 output = message[len('Mouse-activity: '):].strip()
                 if output in mouse_outputs(runtime_config) and output not in ('unknown', 'ingen', ''):
-                    activity('mouse (TV activity report from KWin)')
+                    activity(f'KWin activity.js reportCursor() on {output!r} '
+                             f'via Report({message!r})')
             elif (message == 'TV-aktivitet: mus'
                   and TARGET in mouse_outputs(runtime_config)):
                 # Older bridges identify only the original default TV output.
-                activity('mouse (TV activity report from KWin)')
+                activity(f'KWin cursor activity on {TARGET!r} via Report({message!r})')
             elif message.startswith("Desktop-snapshot: "):
                 first = mapping.snapshot_stamp is None
                 raw_snapshot = message[len("Desktop-snapshot: "):]
@@ -1314,7 +1329,11 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                         source = activity_provider.event_activity(
                             state, event, focus == target_output)
                         if source:
-                            activity(source)
+                            activity(
+                                f'evdev {getattr(device, "name", None)!r} at '
+                                f'{state["path"]!r} (resolved {state["identity"]!r}): '
+                                f'event type={event.type} code={event.code} '
+                                f'value={event.value} ({source})')
                 except BlockingIOError:
                     pass
             now = time.monotonic()
@@ -1912,7 +1931,8 @@ def self_test():
                               timeout=int(DEFAULT_TIMEOUT), target=test_output,
                               input_error=None, recovery_action=None,
                               input_error_after=0, equipment_result=None,
-                              equipment_failure=None, equipment_updates=None):
+                              equipment_failure=None, equipment_updates=None,
+                              input_event=None):
             from unittest.mock import Mock, patch
 
             clock = SimpleNamespace(now=0)
@@ -2025,9 +2045,13 @@ def self_test():
             loop.run.side_effect = main_loop
             glib = SimpleNamespace(MainLoop=lambda: loop, timeout_add=timeout_add)
             device = Mock(fd=10)
+            device.name = 'Test keyboard'
             device.capabilities.return_value = {}
             selector = Mock()
             selector.select.return_value = []
+            if input_event is not None:
+                selector.select.side_effect = [[(SimpleNamespace(fileobj=device), 1)]]
+                device.read.return_value = iter([input_event])
             modules = {
                 'dbus': dbus, 'dbus.service': service,
                 'dbus.mainloop': SimpleNamespace(),
@@ -2035,6 +2059,7 @@ def self_test():
                 'gi': SimpleNamespace(), 'gi.repository': SimpleNamespace(GLib=glib),
                 'evdev': SimpleNamespace(InputDevice=Mock(return_value=device),
                                          ecodes=SimpleNamespace(EV_ABS=3, EV_KEY=1,
+                                                                EV_SYN=0, SYN_DROPPED=3,
                                                                 ABS_RZ=2, ABS_MT_SLOT=47,
                                                                 ABS={})),
             }
@@ -2216,9 +2241,24 @@ def self_test():
                     result = self.run_monitor_steps([
                         (0, None, None, None, None, [report])], target='DP-1')
                     self.assertEqual(result.power.activity.call_count, expected)
+                    if expected:
+                        result.power.activity.assert_called_once_with(
+                            wake_requested=False,
+                            source=("KWin activity.js reportCursor() on 'DP-1' "
+                                    "via Report('Mouse-activity: DP-1')"))
             legacy = self.run_monitor_steps([
                 (0, None, None, None, None, ['TV-aktivitet: mus'])])
             legacy.power.activity.assert_not_called()
+
+        def test_evdev_activity_preserves_device_and_event_details(self):
+            result = self.run_monitor_steps(
+                [(0, None, None, None, test_output)],
+                input_event=SimpleNamespace(type=1, code=28, value=1))
+            result.power.activity.assert_called_once_with(
+                wake_requested=False,
+                source=("evdev 'Test keyboard' at 'unused' "
+                        f"(resolved {str(Path('unused').resolve())!r}): "
+                        "event type=1 code=28 value=1 (keyboard/wheel)"))
 
         def test_runtime_startup_messages_reflect_configured_timeout(self):
             custom = self.run_monitor_steps([(0, None, None)], timeout=600)
@@ -2340,7 +2380,8 @@ def self_test():
             with self.assertRaisesRegex(RuntimeError, 'Standby blocked'):
                 result.receiver.RequestPower('off')
             result.receiver.RequestPower('on')
-            result.power.request.assert_called_once_with('on')
+            result.power.request.assert_called_once_with(
+                'on', source='D-Bus net.local.CecActivity.RequestPower("on")')
 
         def test_firefox_scan_timeout_is_exposed_as_unknown_audio_status(self):
             result = self.run_monitor_steps([(0, '[]', None), (6, '[]', None)])

@@ -59,13 +59,17 @@ class CecPowerChecks(unittest.TestCase):
         self.power.request('off')
         self.power.poll()
         with patch.object(os, 'killpg'):
-            self.power.activity()
+            self.power.activity(source='first input event')
+            self.power.activity(source='later cursor report')
         self.power.poll()
         self.assertEqual(self.actions, ['off'])
         self.assertEqual(self.power.pending, 'on')
 
         self.children[0].finish()
-        self.power.poll()
+        with patch.object(monitor, 'log') as log:
+            self.power.poll()
+        log.assert_any_call(
+            "CEC sending: on (adapter 'MOCK', trigger: first input event)")
         self.assertEqual(self.actions, ['off', 'on'])
 
     def test_activity_cancels_inflight_standby_before_dispatching_wake(self):
