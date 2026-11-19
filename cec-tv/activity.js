@@ -3,6 +3,7 @@ let lastOutput = "";
 let lastCursorPosition = null;
 let lastMouseReport = 0;
 let lastMouseOutput = "";
+let pendingCrossing = null;
 let watchedScreens = [];
 function send(message) {
     callDBus("net.local.CecActivity", "/net/local/CecActivity", "net.local.CecActivity", "Report", message);
@@ -36,7 +37,7 @@ function watchScreens() {
     const screens = workspace.screens;
     for (let i = 0; i < screens.length; i++) {
         if (watchedScreens.indexOf(screens[i]) === -1) {
-            screens[i].geometryChanged.connect(updateCursorOutput);
+            screens[i].geometryChanged.connect(resetCursorOutput);
             watchedScreens.push(screens[i]);
         }
     }
@@ -49,7 +50,34 @@ function watchScreens() {
 }
 function refreshScreens() {
     watchScreens();
+    resetCursorOutput();
+}
+function resetCursorOutput() {
+    pendingCrossing = null;
     updateCursorOutput();
+}
+function withinSharedEdgePixel(previousOutput, output, entry, pos) {
+    let previous, current, scale;
+    for (const screen of workspace.screens) {
+        if (screen.name === previousOutput) previous = screen.geometry;
+        if (screen.name === output) {
+            current = screen.geometry;
+            scale = screen.devicePixelRatio;
+        }
+    }
+    if (!previous || !current) return false;
+    // KWin reports desktop coordinates in logical units.
+    const pixel = Number.isFinite(scale) && scale > 0 ? 1 / scale : 1;
+    const previousRight = previous.x + previous.width;
+    const previousBottom = previous.y + previous.height;
+    const right = current.x + current.width;
+    const bottom = current.y + current.height;
+    const besidePrevious = entry.y >= previous.y && entry.y < previousBottom;
+    const aboveOrBelowPrevious = entry.x >= previous.x && entry.x < previousRight;
+    return (besidePrevious && ((current.x === previousRight && pos.x < current.x + pixel)
+                              || (right === previous.x && pos.x > right - pixel)))
+        || (aboveOrBelowPrevious && ((current.y === previousBottom && pos.y < current.y + pixel)
+                                    || (bottom === previous.y && pos.y > bottom - pixel)));
 }
 function reportCursor() {
     const previousPosition = lastCursorPosition;
@@ -59,15 +87,25 @@ function reportCursor() {
              previousPosition.y === lastCursorPosition.y)) return;
     // Use the same layout for both positions so a layout change alone
     // cannot move the pointer from one display to another.
-    const previousOutput = outputAt(previousPosition);
-    const crossed = previousOutput !== "unknown" && output !== previousOutput;
+    const previousOutput = pendingCrossing && output === pendingCrossing.origin
+        ? output : outputAt(previousPosition);
+    if (pendingCrossing && output !== pendingCrossing.destination) pendingCrossing = null;
+    if (output !== "unknown" && previousOutput !== "unknown" && output !== previousOutput) {
+        pendingCrossing = {origin: previousOutput, destination: output,
+                           position: previousPosition, entry: lastCursorPosition};
+    }
+    const crossed = pendingCrossing &&
+        !withinSharedEdgePixel(pendingCrossing.origin, output, pendingCrossing.entry,
+                               lastCursorPosition);
     if (output !== "unknown" &&
             (crossed || output !== lastMouseOutput || Date.now() - lastMouseReport >= 1000)) {
         lastMouseReport = Date.now();
         lastMouseOutput = output;
         if (crossed) {
-            send(`Mouse-crossing: ${previousOutput} -> ${output} | cursor `
-                 + `(${previousPosition.x}, ${previousPosition.y}) -> `
+            const {origin, position} = pendingCrossing;
+            pendingCrossing = null;
+            send(`Mouse-crossing: ${origin} -> ${output} | cursor `
+                 + `(${position.x}, ${position.y}) -> `
                  + `(${lastCursorPosition.x}, ${lastCursorPosition.y})`);
         } else {
             send("Mouse-activity: " + output);
