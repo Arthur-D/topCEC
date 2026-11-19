@@ -25,6 +25,15 @@ class ActivityPolicyChecks(unittest.TestCase):
         self.assertIsNone(policy.activity(12))
         self.assertFalse(policy.expired)
 
+    def test_activity_without_wake_permission_only_resets_idle_time(self):
+        policy = ActivityPolicy(0, timeout=10)
+        self.assertIsNone(policy.activity(8, allow_wake=False))
+        self.assertIsNone(policy.tick(10))
+        self.assertIn('TV in standby', policy.tick(18))
+        self.assertIsNone(policy.activity(19, allow_wake=False))
+        self.assertTrue(policy.expired)
+        self.assertIn('TV on', policy.activity(20))
+
     def test_uncertainty_requires_full_known_idle_interval(self):
         policy = ActivityPolicy(0, timeout=60)
         self.assertIsNone(policy.tick(100, uncertain=True))

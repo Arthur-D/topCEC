@@ -10,9 +10,9 @@ class ActivityPolicy:
         self.last = now
         self.expired = False
 
-    def activity(self, now):
+    def activity(self, now, *, allow_wake=True):
         self.last = now
-        if self.expired:
+        if self.expired and allow_wake:
             self.expired = False
             return 'Simulation: would turn TV on'
         return None

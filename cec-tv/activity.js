@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 let lastOutput = "";
+let lastCursorPosition = null;
 let lastMouseReport = 0;
 let lastMouseOutput = "";
 let watchedScreens = [];
@@ -22,7 +23,9 @@ function outputAt(pos) {
     return match ? match.name : "unknown";
 }
 function updateCursorOutput() {
-    const output = outputAt(workspace.cursorPos);
+    const pos = workspace.cursorPos;
+    lastCursorPosition = {x: pos.x, y: pos.y};
+    const output = outputAt(lastCursorPosition);
     if (output !== lastOutput) {
         lastOutput = output;
         send("Mus: " + output);
@@ -49,12 +52,26 @@ function refreshScreens() {
     updateCursorOutput();
 }
 function reportCursor() {
+    const previousPosition = lastCursorPosition;
     const output = updateCursorOutput();
+    if (!previousPosition ||
+            (previousPosition.x === lastCursorPosition.x &&
+             previousPosition.y === lastCursorPosition.y)) return;
+    // Use the same layout for both positions so a layout change alone
+    // cannot move the pointer from one display to another.
+    const previousOutput = outputAt(previousPosition);
+    const crossed = previousOutput !== "unknown" && output !== previousOutput;
     if (output !== "unknown" &&
-            (output !== lastMouseOutput || Date.now() - lastMouseReport >= 1000)) {
+            (crossed || output !== lastMouseOutput || Date.now() - lastMouseReport >= 1000)) {
         lastMouseReport = Date.now();
         lastMouseOutput = output;
-        send("Mouse-activity: " + output);
+        if (crossed) {
+            send(`Mouse-crossing: ${previousOutput} -> ${output} | cursor `
+                 + `(${previousPosition.x}, ${previousPosition.y}) -> `
+                 + `(${lastCursorPosition.x}, ${lastCursorPosition.y})`);
+        } else {
+            send("Mouse-activity: " + output);
+        }
     }
 }
 function reportFocus() {
@@ -66,5 +83,5 @@ workspace.cursorPosChanged.connect(reportCursor);
 workspace.screensChanged.connect(refreshScreens);
 workspace.windowActivated.connect(reportFocus);
 watchScreens();
-reportCursor();
+updateCursorOutput();
 reportFocus();
