@@ -95,6 +95,29 @@ class ActivityBridgeTests(unittest.TestCase):
                       "workspace.cursorPosChanged.emit()")
         self.assertEqual(self.evaluate('messages'), ['Mus: HDMI-A-2'])
 
+    def test_crossing_uses_one_logical_pixel_when_scale_is_unavailable(self):
+        self.evaluate('messages=[];workspace.cursorPos={x:1536,y:68};workspace.cursorPosChanged.emit();'
+                      'workspace.cursorPos={x:1536.5,y:900};workspace.cursorPosChanged.emit()')
+        self.assertEqual(self.evaluate('messages'), ['Mus: HDMI-A-2', 'Mouse-activity: HDMI-A-2'])
+        self.evaluate('workspace.cursorPos={x:1537,y:900};workspace.cursorPosChanged.emit()')
+        self.assertEqual(self.evaluate('messages[messages.length-1]'),
+                         'Mouse-crossing: HDMI-A-1 -> HDMI-A-2 | cursor (100, 100) -> (1537, 900)')
+
+    def test_crossing_uses_destination_scale_on_shared_edge(self):
+        self.evaluate('messages=[];workspace.screens[0].devicePixelRatio=2;'
+                      'workspace.screens[1].devicePixelRatio=1.25;'
+                      'workspace.cursorPos={x:1536.5,y:100};workspace.cursorPosChanged.emit()')
+        self.assertEqual(self.evaluate('messages'), ['Mus: HDMI-A-2', 'Mouse-activity: HDMI-A-2'])
+        self.evaluate('workspace.cursorPos={x:1536.8,y:100};workspace.cursorPosChanged.emit()')
+        self.assertEqual(self.evaluate('messages[messages.length-1]'),
+                         'Mouse-crossing: HDMI-A-1 -> HDMI-A-2 | cursor (100, 100) -> (1536.8, 100)')
+
+    def test_returning_from_shared_edge_cancels_crossing(self):
+        self.evaluate('messages=[];workspace.cursorPos={x:1536,y:68};workspace.cursorPosChanged.emit();'
+                      'workspace.cursorPos={x:1535,y:68};workspace.cursorPosChanged.emit()')
+        self.assertEqual(self.evaluate('messages'), ['Mus: HDMI-A-2', 'Mouse-activity: HDMI-A-2',
+                                                    'Mus: HDMI-A-1', 'Mouse-activity: HDMI-A-1'])
+
     def test_nondefault_output_and_unknown_geometry(self):
         self.evaluate("messages=[];workspace.screens=[screen('DP-1',0,0,1920,1080)];"
                       "workspace.screensChanged.emit();workspace.cursorPos={x:102,y:100};"
