@@ -3053,7 +3053,8 @@ class GuiChecks(unittest.TestCase):
         power = SimpleNamespace(
             state_machine=CecPowerStateMachine(), pending=None, request=Mock())
         request_manual_power(power, 'on', 'Firefox snapshot unavailable')
-        power.request.assert_called_once_with('on')
+        power.request.assert_called_once_with(
+            'on', source='D-Bus net.local.CecActivity.RequestPower("on")')
 
     def test_manual_off_requires_safe_monitor_and_no_recovery(self):
         power = SimpleNamespace(
