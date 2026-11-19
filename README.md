@@ -38,9 +38,7 @@ monitor; prefer stable `/dev/input/by-id/` or `/dev/input/by-path/` paths.
 An empty input list is valid. In **Standby**, choose the timeout and displays
 where mouse movement and app activity should count. Mouse movement within a
 selected display keeps the TV awake. To wake the TV by mouse, move the pointer
-from another display at least one physical pixel past the shared edge, using
-the destination display's scale. If KWin does not expose the scale, the
-guard is one logical pixel.
+from another display into a selected display.
 The wake log includes the crossing coordinates. When the service can read
 Sunshine's virtual pointer devices, recent movement can add a best-effort
 Sunshine hint to the same entry.
