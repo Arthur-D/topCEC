@@ -45,7 +45,7 @@ class ActivityBridgeTests(unittest.TestCase):
 
     def test_startup_and_shared_boundary(self):
         self.assertEqual(self.evaluate('messages'), [
-            'Mus: HDMI-A-1', 'Mouse-activity: HDMI-A-1', 'Fokus: ingen'])
+            'Mus: HDMI-A-1', 'Fokus: ingen'])
         self.assertEqual(self.evaluate('outputAt({x:1535.9,y:100})'), 'HDMI-A-1')
         self.assertEqual(self.evaluate('outputAt({x:1536,y:100})'), 'HDMI-A-2')
         self.assertEqual(self.evaluate('outputAt({x:3456,y:100})'), 'unknown')
@@ -76,22 +76,35 @@ class ActivityBridgeTests(unittest.TestCase):
         self.evaluate('workspace.screens[0].geometry.x=2000;workspace.screens[0].geometryChanged.emit()')
         self.assertEqual(self.evaluate('messages[messages.length-1]'), 'Mus: unknown')
 
-    def test_mouse_activity_is_throttled_and_reports_actual_output(self):
+    def test_crossing_reports_both_outputs_and_same_display_motion_is_throttled(self):
         self.evaluate('messages=[];workspace.cursorPosChanged.emit()')
         self.assertEqual(self.evaluate('messages'), [])
-        self.evaluate('workspace.cursorPos={x:1600,y:100};workspace.cursorPosChanged.emit();workspace.cursorPosChanged.emit()')
+        self.evaluate('workspace.cursorPos={x:1600,y:100};workspace.cursorPosChanged.emit();'
+                      'workspace.cursorPos={x:1601,y:100};workspace.cursorPosChanged.emit()')
         self.assertEqual(self.evaluate('messages'), [
-            'Mus: HDMI-A-2', 'Mouse-activity: HDMI-A-2'])
-        self.evaluate('now+=1000;workspace.cursorPosChanged.emit()')
-        self.assertEqual(self.evaluate('messages.filter(m=>m==="Mouse-activity: HDMI-A-2").length'), 2)
+            'Mus: HDMI-A-2', 'Mouse-crossing: HDMI-A-1 -> HDMI-A-2 | cursor (100, 100) -> (1600, 100)'])
+        self.evaluate('now+=1000;workspace.cursorPos={x:1602,y:100};workspace.cursorPosChanged.emit()')
+        self.assertEqual(self.evaluate('messages[messages.length-1]'), 'Mouse-activity: HDMI-A-2')
+        self.evaluate('workspace.cursorPos={x:1535,y:100};workspace.cursorPosChanged.emit()')
+        self.assertEqual(self.evaluate('messages[messages.length-1]'),
+                         'Mouse-crossing: HDMI-A-2 -> HDMI-A-1 | cursor (1602, 100) -> (1535, 100)')
+
+    def test_geometry_remap_does_not_report_a_crossing_before_screen_signal(self):
+        self.evaluate("messages=[];workspace.screens[0].geometry.x=4000;"
+                      "workspace.screens[1].geometry.x=0;"
+                      "workspace.cursorPosChanged.emit()")
+        self.assertEqual(self.evaluate('messages'), ['Mus: HDMI-A-2'])
 
     def test_nondefault_output_and_unknown_geometry(self):
         self.evaluate("messages=[];workspace.screens=[screen('DP-1',0,0,1920,1080)];"
-                      "workspace.screensChanged.emit();workspace.cursorPosChanged.emit()")
-        self.assertIn('Mouse-activity: DP-1', self.evaluate('messages'))
+                      "workspace.screensChanged.emit();workspace.cursorPos={x:102,y:100};"
+                      "workspace.cursorPosChanged.emit()")
+        self.assertEqual(self.evaluate('messages'), ['Mus: DP-1', 'Mouse-activity: DP-1'])
         self.evaluate("messages=[];now+=1000;workspace.cursorPos={x:3000,y:100};"
                       "workspace.cursorPosChanged.emit()")
         self.assertEqual(self.evaluate('messages'), ['Mus: unknown'])
+        self.evaluate("messages=[];workspace.cursorPos={x:100,y:100};workspace.cursorPosChanged.emit()")
+        self.assertEqual(self.evaluate('messages'), ['Mus: DP-1', 'Mouse-activity: DP-1'])
 
 
 class AppWindowBridgeTests(unittest.TestCase):

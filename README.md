@@ -36,7 +36,12 @@ the TV output and CEC adapter to enable it. If discovery misses your hardware,
 enter its output name or path manually. In **Input**, choose any devices to
 monitor; prefer stable `/dev/input/by-id/` or `/dev/input/by-path/` paths.
 An empty input list is valid. In **Standby**, choose the timeout and displays
-where mouse movement and app activity should count.
+where mouse movement and app activity should count. Mouse movement within a
+selected display keeps the TV awake. To wake the TV by mouse, move the pointer
+from another display into a selected display.
+The wake log includes the crossing coordinates. When the service can read
+Sunshine's virtual pointer devices, recent movement can add a best-effort
+Sunshine hint to the same entry.
 
 Run the service as your desktop user. That user needs read/write access to the
 CEC adapter and read access to the selected input devices. Disable any older

@@ -484,6 +484,91 @@ class EvdevActivityProvider:
         return None
 
 
+class SunshinePointer:
+    DEVICE_NAMES = {'libvirtualhid Mouse', 'libvirtualhid Mouse (Absolute)'}
+    MAX_EVENT_AGE = 0.1
+
+    def __init__(self, open_device, ecodes):
+        self.open_device = open_device
+        self.ecodes = ecodes
+        self.devices = {}
+        self.next_scan = 0
+
+    def scan(self):
+        for entry in Path('/sys/devices/virtual/input').glob('input*/event*'):
+            path = Path('/dev/input') / entry.name
+            if path in self.devices or not path.exists():
+                continue
+            try:
+                name = (entry.parent / 'name').read_text().strip()
+                if name not in self.DEVICE_NAMES:
+                    continue
+                device = self.open_device(str(path))
+            except OSError:
+                continue
+            if device.name == name:
+                self.devices[path] = SunshinePointerDevice(device)
+            else:
+                device.close()
+
+    def poll(self, now):
+        if now >= self.next_scan:
+            self.next_scan = now + 5
+            try:
+                self.scan()
+            except OSError:
+                # Optional diagnostics must not stop power monitoring.
+                pass
+        codes = self.ecodes
+        for path, state in list(self.devices.items()):
+            try:
+                # Drain batches without letting a busy input device starve the main loop.
+                for _ in range(16):
+                    for event in state.device.read():
+                        if event.type == codes.EV_SYN:
+                            if event.code == codes.SYN_DROPPED:
+                                state.dropped = True
+                                state.last_motion = None
+                            elif event.code == codes.SYN_REPORT:
+                                state.dropped = False
+                        elif not state.dropped and (
+                                (event.type == codes.EV_REL and event.value
+                                 and event.code in (codes.REL_X, codes.REL_Y))
+                                or (event.type == codes.EV_ABS
+                                    and event.code in (codes.ABS_X, codes.ABS_Y))):
+                            state.last_motion = event.timestamp()
+            except BlockingIOError:
+                pass
+            except OSError:
+                self.devices.pop(path).device.close()
+
+    def source(self):
+        # Fresh evdev clients use CLOCK_REALTIME. Compare kernel timestamps,
+        # so queued input isn't mistaken for fresh motion after a stalled poll.
+        received = time.time()
+        self.poll(time.monotonic())
+        recent = [(received - state.last_motion, state.device.name)
+                  for state in self.devices.values() if state.last_motion is not None]
+        if recent:
+            age, name = min((sample for sample in recent if sample[0] >= 0),
+                            default=(float('inf'), ''))
+            if age <= self.MAX_EVENT_AGE:
+                return f'likely Sunshine input ({name}, {age * 1000:.0f} ms before report)'
+        return 'unknown' if self.devices else 'unknown (Sunshine pointer devices unavailable)'
+
+    def close(self):
+        for state in self.devices.values():
+            state.device.close()
+        self.devices.clear()
+
+
+class SunshinePointerDevice:
+    def __init__(self, device):
+        self.device = device
+        self.last_motion = None
+        self.dropped = False
+
+
 def is_firefox_accessible_process(pid, read_exe):
     executable = read_exe(pid)
     if is_firefox_executable(executable):
@@ -796,6 +881,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     match_diagnostics = MatchDiagnostics()
     selector = selectors.DefaultSelector()
     devices = {}
+    sunshine_pointer = SunshinePointer(InputDevice, ecodes)
     focus = None
     worker = None
     worker_labels = None
@@ -915,12 +1001,12 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 equipment_next = now + 10
         return True
 
-    def activity(source):
+    def activity(source, *, allow_wake=True):
         if startup_error:
             return
         now = time.monotonic()
-        message = timer.activity(now)
-        if power:
+        message = timer.activity(now, allow_wake=allow_wake)
+        if power and allow_wake:
             power.activity(wake_requested=bool(message), source=source)
         elif message:
             log(message)
@@ -1083,15 +1169,25 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     for state in devices.values():
                         for axis in state['axes'].values():
                             axis.reset()
+            elif message.startswith('Mouse-crossing: '):
+                displays = message[len('Mouse-crossing: '):].partition(' | ')[0]
+                origin, _, output = displays.partition(' -> ')
+                if (origin not in ('unknown', 'ingen', '', output)
+                        and output not in ('unknown', 'ingen', '')
+                        and output in mouse_outputs(runtime_config)):
+                    source = (f'KWin activity.js reportCursor() on {output!r} '
+                              f'via Report({message!r})')
+                    if power and not startup_error and (timer.expired or power.may_be_off):
+                        source += '; pointer source: ' + sunshine_pointer.source()
+                    activity(source)
             elif message.startswith('Mouse-activity: '):
                 output = message[len('Mouse-activity: '):].strip()
                 if output in mouse_outputs(runtime_config) and output not in ('unknown', 'ingen', ''):
-                    activity(f'KWin activity.js reportCursor() on {output!r} '
-                             f'via Report({message!r})')
+                    activity(f'KWin cursor activity on {output!r}', allow_wake=False)
             elif (message == 'TV-aktivitet: mus'
                   and TARGET in mouse_outputs(runtime_config)):
                 # Older bridges identify only the original default TV output.
-                activity(f'KWin cursor activity on {TARGET!r} via Report({message!r})')
+                activity(f'KWin cursor activity on {TARGET!r}', allow_wake=False)
             elif message.startswith("Desktop-snapshot: "):
                 first = mapping.snapshot_stamp is None
                 raw_snapshot = message[len("Desktop-snapshot: "):]
@@ -1291,6 +1387,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         nonlocal startup_error, selector
         plasma_inhibitions.poll(time.monotonic())
         inhibition_history.observe(plasma_inhibitions.requests, time.monotonic())
+        if power and not startup_error:
+            sunshine_pointer.poll(time.monotonic())
         if startup_error:
             try:
                 if power is not None and (power.process is not None or power.pending == 'on'):
@@ -1589,6 +1687,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         pass
     finally:
         firefox_pip.close()
+        sunshine_pointer.close()
         if equipment_worker is not None:
             if equipment_worker.poll() is None:
                 equipment_worker.kill()
@@ -2233,9 +2332,11 @@ def self_test():
 
         def test_mouse_reports_follow_configured_target_not_default_display(self):
             for report, expected in (
-                    ('Mouse-activity: DP-1', 1),
-                    ('Mouse-activity: HDMI-A-2', 0),
-                    ('Mouse-activity: unknown', 0),
+                    ('Mouse-crossing: HDMI-A-2 -> DP-1 | cursor (-0.5, 200) -> (0, 200)', 1),
+                    ('Mouse-crossing: DP-1 -> HDMI-A-2', 0),
+                    ('Mouse-crossing: unknown -> DP-1', 0),
+                    ('Mouse-crossing: DP-1 -> DP-1', 0),
+                    ('Mouse-activity: DP-1', 0),
                     ('TV-aktivitet: mus', 0)):
                 with self.subTest(report=report):
                     result = self.run_monitor_steps([
@@ -2244,8 +2345,8 @@ def self_test():
                     if expected:
                         result.power.activity.assert_called_once_with(
                             wake_requested=False,
-                            source=("KWin activity.js reportCursor() on 'DP-1' "
-                                    "via Report('Mouse-activity: DP-1')"))
+                            source=(f"KWin activity.js reportCursor() on 'DP-1' "
+                                    f"via Report({report!r})"))
             legacy = self.run_monitor_steps([
                 (0, None, None, None, None, ['TV-aktivitet: mus'])])
             legacy.power.activity.assert_not_called()
