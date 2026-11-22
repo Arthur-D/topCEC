@@ -57,9 +57,10 @@ function resetCursorOutput() {
     updateCursorOutput();
 }
 // Absolute remote pointers can land exactly on the seam while still at the
-// edge of the streamed display. Wait for one physical pixel of inward motion
-// across a shared edge before reporting a crossing, regardless of input source.
-function withinSharedEdgePixel(previousOutput, output, entry, pos) {
+// edge of the streamed display. Guard the entire destination row or column
+// along a shared edge so a diagonal move just past the overlap cannot wake
+// the display. Require one physical pixel inward, regardless of input source.
+function withinSharedEdgePixel(previousOutput, output, pos) {
     let previous, current, scale;
     for (const screen of workspace.screens) {
         if (screen.name === previousOutput) previous = screen.geometry;
@@ -76,8 +77,8 @@ function withinSharedEdgePixel(previousOutput, output, entry, pos) {
     const previousBottom = previous.y + previous.height;
     const right = current.x + current.width;
     const bottom = current.y + current.height;
-    const besidePrevious = entry.y >= previous.y && entry.y < previousBottom;
-    const aboveOrBelowPrevious = entry.x >= previous.x && entry.x < previousRight;
+    const besidePrevious = current.y < previousBottom && previous.y < bottom;
+    const aboveOrBelowPrevious = current.x < previousRight && previous.x < right;
     return (besidePrevious && ((current.x === previousRight && pos.x < current.x + pixel)
                               || (right === previous.x && pos.x > right - pixel)))
         || (aboveOrBelowPrevious && ((current.y === previousBottom && pos.y < current.y + pixel)
@@ -93,16 +94,15 @@ function reportCursor() {
     // cannot move the pointer from one display to another.
     const previousOutput = pendingCrossing && output === pendingCrossing.origin
         ? output : outputAt(previousPosition);
-    // Keep the original entry for the shared-edge test and wake log. Returning
-    // across the seam before moving inward cancels the pending crossing.
+    // Keep the original position for the wake log. Returning across the seam
+    // before moving inward cancels the pending crossing.
     if (pendingCrossing && output !== pendingCrossing.destination) pendingCrossing = null;
     if (output !== "unknown" && previousOutput !== "unknown" && output !== previousOutput) {
         pendingCrossing = {origin: previousOutput, destination: output,
-                           position: previousPosition, entry: lastCursorPosition};
+                           position: previousPosition};
     }
     const crossed = pendingCrossing &&
-        !withinSharedEdgePixel(pendingCrossing.origin, output, pendingCrossing.entry,
-                               lastCursorPosition);
+        !withinSharedEdgePixel(pendingCrossing.origin, output, lastCursorPosition);
     if (output !== "unknown" &&
             (crossed || output !== lastMouseOutput || Date.now() - lastMouseReport >= 1000)) {
         lastMouseReport = Date.now();

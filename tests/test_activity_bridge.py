@@ -112,6 +112,17 @@ class ActivityBridgeTests(unittest.TestCase):
         self.assertEqual(self.evaluate('messages[messages.length-1]'),
                          'Mouse-crossing: HDMI-A-1 -> HDMI-A-2 | cursor (100, 100) -> (1536.8, 100)')
 
+    def test_diagonal_crossing_stays_pending_in_first_column_past_shared_corner(self):
+        self.evaluate('workspace.screens[1].devicePixelRatio=1;'
+                      'workspace.cursorPos={x:1534,y:863};workspace.cursorPosChanged.emit();'
+                      'messages=[];workspace.cursorPos={x:1536,y:864};workspace.cursorPosChanged.emit()')
+        self.assertEqual(self.evaluate('messages'), ['Mus: HDMI-A-2', 'Mouse-activity: HDMI-A-2'])
+        self.evaluate('now+=1000;workspace.cursorPos={x:1536,y:900};workspace.cursorPosChanged.emit()')
+        self.assertEqual(self.evaluate('messages[messages.length-1]'), 'Mouse-activity: HDMI-A-2')
+        self.evaluate('workspace.cursorPos={x:1537,y:900};workspace.cursorPosChanged.emit()')
+        self.assertEqual(self.evaluate('messages[messages.length-1]'),
+                         'Mouse-crossing: HDMI-A-1 -> HDMI-A-2 | cursor (1534, 863) -> (1537, 900)')
+
     def test_returning_from_shared_edge_cancels_crossing(self):
         self.evaluate('messages=[];workspace.cursorPos={x:1536,y:68};workspace.cursorPosChanged.emit();'
                       'workspace.cursorPos={x:1535,y:68};workspace.cursorPosChanged.emit()')
