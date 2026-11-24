@@ -113,6 +113,9 @@ def config_from_settings(current, values):
             'idleInhibitionExceptions', current['idle_inhibition_exceptions']),
         'force_inhibition_apps': values.get(
             'forceInhibitionApps', current['force_inhibition_apps']),
+        'allow_standby_on_unknown_app_status': values.get(
+            'allowStandbyOnUnknownAppStatus',
+            current['allow_standby_on_unknown_app_status']),
         'cec_enabled': bool(adapter),
         'cec_port': adapter,
         'kde_timeout': timeout_mode == 'kde',
@@ -172,6 +175,7 @@ class GuiBackend(QObject):
         self._status_poll_in_flight = False
         self._config_source = 'unknown' if self.dbus_only else 'defaults'
         self._host_supports_idle_exceptions = None
+        self._host_supports_unknown_app_policy = None
         self._service_data = {}
         self._equipment = {'outputs': [], 'adapters': [], 'inputs': []}
         self._equipment_known = False
@@ -424,7 +428,9 @@ class GuiBackend(QObject):
             return 'Firefox audio status is unavailable. Update the host service.'
         error = self._service_data['firefox_audio_error']
         if error:
-            return 'Firefox audio status is unknown. TV standby is blocked.'
+            return ('Firefox audio status is unknown. TV standby is allowed by your setting.'
+                    if self.config['allow_standby_on_unknown_app_status']
+                    else 'Firefox audio status is unknown. TV standby is blocked.')
         return ''
 
     @Property(str, notify=changed)
@@ -444,7 +450,10 @@ class GuiBackend(QObject):
     def chromiumAudioStatusMessage(self):
         errors = self._service_data.get('chromium_audio_errors')
         if isinstance(errors, dict) and errors:
-            return ('Browser audio status is unknown. TV standby is blocked. '
+            outcome = ('TV standby is allowed by your setting.'
+                       if self.config['allow_standby_on_unknown_app_status']
+                       else 'TV standby is blocked.')
+            return ('Browser audio status is unknown. ' + outcome + ' '
                     'See Diagnostics for details.')
         return ''
 
@@ -614,6 +623,20 @@ class GuiBackend(QObject):
         return displayed
 
     @Property(str, notify=changed)
+    def eventLog(self):
+        entries = self._service_data.get('event_log')
+        if not isinstance(entries, list):
+            return 'No events have been reported by the host service.'
+        lines = []
+        for entry in entries:
+            if (not isinstance(entry, dict)
+                    or not isinstance(entry.get('time'), str)
+                    or not isinstance(entry.get('message'), str)):
+                continue
+            lines.append(f"{entry['time']}  {entry['message']}")
+        return '\n'.join(lines) if lines else 'No events have been reported yet.'
+
+    @Property(str, notify=changed)
     def inhibitionsMessage(self):
         if not self.backendAvailable:
             return 'Plasma idle-inhibition status is unavailable.'
@@ -758,6 +781,7 @@ class GuiBackend(QObject):
         self._refresh_in_flight = False
         self._set_service_data({})
         self._host_supports_idle_exceptions = None
+        self._host_supports_unknown_app_policy = None
         self._missing_capabilities.clear()
         self._set_equipment(None, 'Host equipment inventory will refresh after reconnection.')
         self._power_state = 'unavailable'
@@ -937,6 +961,8 @@ class GuiBackend(QObject):
         self._config_source = source
         self.config = config
         self._host_supports_idle_exceptions = 'idle_inhibition_exceptions' in raw_config
+        self._host_supports_unknown_app_policy = (
+            'allow_standby_on_unknown_app_status' in raw_config)
         self._chromium_audio_supported = 'chromium_audio_blocks_standby' in raw_config
         self._browser_video_supported = (
             'firefox_video_blocks_standby' in raw_config
@@ -1155,7 +1181,8 @@ class GuiBackend(QObject):
                         'firefox_audio_blocks_standby', 'idle_inhibition_apps',
                         'idle_inhibition_exceptions', 'force_inhibition_apps',
                         'chromium_audio_blocks_standby', 'firefox_video_blocks_standby',
-                        'chromium_video_blocks_standby'}
+                        'chromium_video_blocks_standby',
+                        'allow_standby_on_unknown_app_status'}
             if (isinstance(config, dict) and set(DEFAULT_CONFIG) - optional <= set(config)
                     and set(config) <= set(DEFAULT_CONFIG)):
                 config = {'schema_version': SCHEMA_VERSION, **config}
@@ -1216,6 +1243,12 @@ class GuiBackend(QObject):
                     del payload['device_axis_deadzones']
                 if not self.automaticIdleInhibition:
                     del payload['idle_inhibition_exceptions']
+                if self._host_supports_unknown_app_policy is False:
+                    if payload['allow_standby_on_unknown_app_status']:
+                        raise RuntimeError(
+                            'Allowing standby with unknown app status requires an '
+                            'updated host backend. Update it and restart topcec.service.')
+                    del payload['allow_standby_on_unknown_app_status']
                 if self._browser_video_supported is False:
                     if (payload['firefox_video_blocks_standby']
                             or payload['chromium_video_blocks_standby']):

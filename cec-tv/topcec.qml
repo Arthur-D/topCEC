@@ -35,6 +35,7 @@ Kirigami.ApplicationWindow {
     property var chromiumAudioDraft: []
     property bool firefoxVideoEnabled: false
     property var chromiumVideoDraft: []
+    property bool allowStandbyOnUnknownAppStatus: false
     property real defaultAxisDeadzone: 0
     property real defaultRzDeadzone: 0
     onSettingsDirtyChanged: {
@@ -164,6 +165,7 @@ Kirigami.ApplicationWindow {
             idleInhibitionApps: idleAppsDraft,
             idleInhibitionExceptions: idleExceptionsDraft,
             forceInhibitionApps: forceAppsDraft,
+            allowStandbyOnUnknownAppStatus: allowStandbyOnUnknownAppStatus,
             axisDeadzone: defaultAxisDeadzone,
             rzDeadzone: defaultRzDeadzone,
             deviceAxisDeadzones: axisDraft
@@ -688,6 +690,8 @@ Kirigami.ApplicationWindow {
         idleAppsDraft = Array.from(topcec.setting("idle_inhibition_apps") || [])
         idleExceptionsDraft = Array.from(topcec.setting("idle_inhibition_exceptions") || [])
         forceAppsDraft = Array.from(topcec.setting("force_inhibition_apps") || [])
+        allowStandbyOnUnknownAppStatus =
+            topcec.setting("allow_standby_on_unknown_app_status") || false
         retainedAppIds = [...new Set([...idleAppsDraft, ...idleExceptionsDraft, ...forceAppsDraft])]
         defaultAxisDeadzone = topcec.setting("axis_deadzone_percent")
         defaultRzDeadzone = topcec.setting("rz_deadzone_percent")
@@ -1674,6 +1678,17 @@ Kirigami.ApplicationWindow {
                                     + " Force block standby keeps the TV on while the app has a window on a selected display. These options control TV standby only."
                             }
                             CopyableCheckBox {
+                                id: allowUnknownAppStatus
+                                objectName: "allowStandbyOnUnknownAppStatus"
+                                text: "Allow standby when app or browser status is unknown"
+                                Accessible.description: "By default, unknown status blocks standby as a safety precaution."
+                                checked: root.allowStandbyOnUnknownAppStatus
+                                onClicked: {
+                                    root.allowStandbyOnUnknownAppStatus = checked
+                                    root.markSettingsDirty()
+                                }
+                            }
+                            CopyableCheckBox {
                                 id: showAllApps
                                 objectName: "showAllApps"
                                 text: "Show all installed apps"
@@ -2289,6 +2304,27 @@ Kirigami.ApplicationWindow {
                                 visible: diagnosticDetailsToggle.checked
                                 Accessible.name: "Host service status"
                                 text: topcec.diagnostics
+                            }
+                        }
+                        FullWidthFrame {
+                            Layout.fillWidth: true
+                            DisclosureButton {
+                                id: eventLogToggle
+                                objectName: "eventLogToggle"
+                                text: "Recent events"
+                                checked: true
+                            }
+                            Controls.TextArea {
+                                objectName: "eventLog"
+                                Layout.fillWidth: true
+                                visible: eventLogToggle.checked
+                                readOnly: true
+                                selectByMouse: true
+                                textFormat: TextEdit.PlainText
+                                wrapMode: TextEdit.Wrap
+                                text: topcec.eventLog
+                                Accessible.name: "Recent host service events"
+                                font.family: "monospace"
                             }
                         }
                     }

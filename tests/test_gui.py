@@ -1177,6 +1177,10 @@ class GuiChecks(unittest.TestCase):
         backend._service_status = 'running'
         backend._service_data = {
             'scan_status': 'Ready',
+            'event_log': [
+                {'time': '2026-11-24 20:00:00',
+                 'message': 'App/browser status restored'},
+            ],
             'input_permission_help': {
                 'path': '/dev/input/by-id/keyboard', 'message': 'Input access was denied.',
             },
@@ -1228,6 +1232,10 @@ class GuiChecks(unittest.TestCase):
         self.assertNotIn('Access blocked', self.input_choice(engine, window, '/dev/input/event2').property('text'))
         window.setProperty('currentSection', 4)
         self.assertFalse(window.findChild(QObject, 'connectionDiagnostics').property('visible'))
+        event_log = window.findChild(QObject, 'eventLog')
+        self.assertTrue(event_log.property('visible'))
+        self.assertIn('App/browser status restored', event_log.property('text'))
+        self.assertTrue(event_log.property('readOnly'))
         for name, value in (('diagnosticsDisplays', 'HDMI-A-1'),
                             ('diagnosticsAdapters', 'CEC adapter · /dev/cec')):
             self.assertIn(value, window.findChild(QObject, name).property('description'))
@@ -2166,6 +2174,30 @@ class GuiChecks(unittest.TestCase):
         self.assertTrue(config['require_snapshot'])
         self.assertFalse(config['kde_timeout'])
         self.assertEqual(config['rz_deadzone_percent'], 6.0)
+
+    def test_unknown_app_status_policy_is_exposed_as_an_app_toggle(self):
+        config = config_from_settings(
+            self.config, {**self.values, 'allowStandbyOnUnknownAppStatus': True})
+        self.assertTrue(config['allow_standby_on_unknown_app_status'])
+
+        app = QGuiApplication.instance() or QGuiApplication([])
+        backend = GuiBackend(dbus_only=True)
+        backend._connection_state = 'connected'
+        backend._service_status = 'running'
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('topcec', backend)
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'cec-tv/topcec.qml')))
+        window = engine.rootObjects()[0]
+        window.setProperty('currentSection', 2)
+        app.processEvents()
+        toggle = window.findChild(QObject, 'allowStandbyOnUnknownAppStatus')
+        self.assertTrue(toggle.property('visible'))
+        self.assertFalse(toggle.property('checked'))
+        QMetaObject.invokeMethod(toggle, 'click')
+        self.assertTrue(toggle.property('checked'))
+        self.assertTrue(window.property('allowStandbyOnUnknownAppStatus'))
+        self.assertIn('standby', toggle.property('text').lower())
+        engine.deleteLater()
 
     def test_older_unversioned_save_reply_receives_new_defaults(self):
         backend = GuiBackend(dbus_only=True)

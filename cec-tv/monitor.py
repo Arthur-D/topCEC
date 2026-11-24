@@ -851,6 +851,17 @@ def scan_atspi(mute_labels, read_exe=None):
 
 def run(args, *, activity_provider_factory=None, media_provider=None,
         cec_backend_factory=None):
+    event_log = []
+    console_log = globals()['log']
+
+    def log(message):
+        event_log.append({
+            'time': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'message': str(message),
+        })
+        del event_log[:-200]
+        console_log(message)
+
     try:
         import dbus
         import dbus.service
@@ -891,6 +902,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
     scan_stamp = None
     scan_error = 'Waiting for the first AT-SPI scan'
     previous_status = None
+    previous_unknown_status = []
     warning_reported = False
     previous_playback = False
     status_snapshot = {
@@ -931,6 +943,8 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         'idle_inhibition_apps': getattr(args, 'idle_inhibition_apps', []),
         'idle_inhibition_exceptions': getattr(args, 'idle_inhibition_exceptions', []),
         'force_inhibition_apps': getattr(args, 'force_inhibition_apps', []),
+        'allow_standby_on_unknown_app_status': getattr(
+            args, 'allow_standby_on_unknown_app_status', False),
         'cec_enabled': bool(args.cec),
         'cec_port': args.cec_port,
         'kde_timeout': bool(args.kde_timeout),
@@ -1241,6 +1255,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 **status_snapshot, 'configuration_saved': config_path.is_file(),
                 'settings_apply': 'live', 'process_id': os.getpid(),
                 'browser_extension_reports': extension_reports,
+                'event_log': list(event_log),
                 'installed_apps': equipment_snapshot.get('apps'),
                 'installed_apps_error': equipment_snapshot.get(
                     'apps_error', 'Installed app discovery has not completed'),
@@ -1384,6 +1399,7 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
         nonlocal worker, worker_started, next_scan, frames, scan_stamp
         nonlocal worker_labels, worker_generation
         nonlocal scan_error, previous_status, warning_reported, previous_playback
+        nonlocal previous_unknown_status
         nonlocal startup_error, selector
         plasma_inhibitions.poll(time.monotonic())
         inhibition_history.observe(plasma_inhibitions.requests, time.monotonic())
@@ -1474,8 +1490,12 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 worker_labels = list(args.mute_label)
                 worker_generation = scan_generation
             reason = None
+            unknown_app_statuses = []
             audible = False
+            uncertain_audio = False
             firefox_audio_error = None
+            allow_unknown_app_status = (
+                runtime_config['allow_standby_on_unknown_app_status'])
             media_outputs = mouse_outputs(runtime_config)
             native_audio_states = [
                 webextension_media.audio_state(mapping, now, output, mapping.ttl)
@@ -1488,7 +1508,9 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     firefox_audio_error = (
                         'Firefox WebExtension reports audio, but its active window '
                         'cannot be uniquely matched to a KWin display')
-                    reason = firefox_audio_error
+                    unknown_app_statuses.append(firefox_audio_error)
+                    if not allow_unknown_app_status:
+                        reason = firefox_audio_error
             elif runtime_config['firefox_audio_blocks_standby'] and media_outputs:
                 reason = scan_error
                 if scan_stamp is None or now - scan_stamp > SCAN_MAX_AGE:
@@ -1517,8 +1539,15 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     if not frames and mapping.reports:
                         reason = 'KWin reported Firefox, but AT-SPI found no frames'
                 firefox_audio_error = reason
+                if firefox_audio_error:
+                    unknown_app_statuses.append(firefox_audio_error)
+                    if allow_unknown_app_status:
+                        reason = None
             mapping_error = mapping.health(now, args.require_snapshot)
-            reason = reason or mapping_error
+            if mapping_error:
+                unknown_app_statuses.append(mapping_error)
+            if not allow_unknown_app_status:
+                reason = reason or mapping_error
             if runtime_config['firefox_audio_blocks_standby'] and media_outputs:
                 firefox_audio_error = firefox_audio_error or mapping_error
             inhibition_error = plasma_inhibitions.health(now)
@@ -1533,6 +1562,18 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 runtime_config['force_inhibition_apps'], equipment_snapshot.get('apps') or [],
                 app_windows, app_windows_stamp is not None
                 and now - app_windows_stamp <= mapping.ttl, media_outputs))
+            unknown_blocking_apps = [
+                item for item in blocking_apps
+                if item.get('identityUnknown') or item.get('locationUnknown')
+            ]
+            unknown_app_statuses.extend(
+                f"{item['app']}: {item['reason']} (display or identity unknown)"
+                for item in unknown_blocking_apps)
+            if allow_unknown_app_status:
+                blocking_apps = [
+                    item for item in blocking_apps
+                    if not item.get('identityUnknown')
+                    and not item.get('locationUnknown')]
             video_enabled = runtime_config['firefox_video_blocks_standby'] and media_outputs
             pip_windows = []
             if video_enabled and mapping.health(now, required=True) is None:
@@ -1547,9 +1588,15 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     for output in media_outputs
                 ]
                 if any(state is None for state in video_states):
-                    reason = reason or 'Firefox video extension is unavailable or stale'
+                    message = 'Firefox video extension is unavailable or stale'
+                    unknown_app_statuses.append(message)
+                    if not allow_unknown_app_status:
+                        reason = reason or message
                 if any(state is not None and state[1] for state in video_states):
-                    reason = reason or 'Firefox video state or display is unknown'
+                    message = 'Firefox video state or display is unknown'
+                    unknown_app_statuses.append(message)
+                    if not allow_unknown_app_status:
+                        reason = reason or message
                 if any(state is not None and state[0] for state in video_states):
                     blocking_apps.append({
                         'app': 'Mozilla Firefox', 'reason': 'Video',
@@ -1563,7 +1610,10 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     browser, media_outputs, now, mapping.ttl)
                 if error:
                     browser_errors[browser] = error
-                    reason = reason or (BROWSERS[browser][0] + ' audio: ' + error)
+                    message = BROWSERS[browser][0] + ' audio: ' + error
+                    unknown_app_statuses.append(message)
+                    if not allow_unknown_app_status:
+                        reason = reason or message
                 elif playing:
                     blocking_apps.append({
                         'app': BROWSERS[browser][0], 'reason': 'Audio',
@@ -1575,13 +1625,18 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     browser, media_outputs, now, mapping.ttl, video=True)
                 if error:
                     browser_video_errors[browser] = error
-                    reason = reason or (BROWSERS[browser][0] + ' video: ' + error)
+                    message = BROWSERS[browser][0] + ' video: ' + error
+                    unknown_app_statuses.append(message)
+                    if not allow_unknown_app_status:
+                        reason = reason or message
                 elif playing:
                     blocking_apps.append({
                         'app': BROWSERS[browser][0], 'reason': 'Video',
                         'identityUnknown': False, 'locationUnknown': False})
             if media_outputs and inhibition_error:
-                reason = reason or inhibition_error
+                unknown_app_statuses.append(inhibition_error)
+                if not allow_unknown_app_status:
+                    reason = reason or inhibition_error
             if blocking_apps:
                 reason = reason or ('App standby block: '
                                     + blocking_apps[0]['app'] + ' — '
@@ -1606,17 +1661,30 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                 reason = reason or 'Waiting for a focus report from KWin'
             if any(state['dropped'] for state in devices.values()):
                 reason = reason or 'Waiting for input resynchronization'
-            if audible:
+            confirmed_audible = audible and not (
+                allow_unknown_app_status and uncertain_audio)
+            if confirmed_audible:
                 activity('Firefox audio on a selected display')
             # Logging state is separate from activity and fail-safe decisions.
             # Unknown monitoring state must not be reported as playback stopping.
-            if reason is None and audible != previous_playback:
-                log('Firefox playback on a selected display ' + ('started' if audible else 'stopped'))
-                previous_playback = audible
+            if reason is None and confirmed_audible != previous_playback:
+                log('Firefox playback on a selected display '
+                    + ('started' if confirmed_audible else 'stopped'))
+                previous_playback = confirmed_audible
             if reason != previous_status:
                 log('FAIL-SAFE: ' + reason + '; standby blocked' if reason else
                     'FAIL-SAFE cleared; monitoring restored')
                 previous_status = reason
+            unique_unknown_statuses = list(dict.fromkeys(unknown_app_statuses))
+            if unique_unknown_statuses != previous_unknown_status:
+                if unique_unknown_statuses:
+                    outcome = ('allowed by setting'
+                               if allow_unknown_app_status else 'blocking standby')
+                    log('App/browser status unknown (' + outcome + '): '
+                        + '; '.join(unique_unknown_statuses))
+                elif previous_unknown_status:
+                    log('App/browser status restored')
+                previous_unknown_status = unique_unknown_statuses
             message = timer.tick(now, uncertain=bool(reason))
             if message and not startup_error:
                 if power:
@@ -1637,11 +1705,14 @@ def run(args, *, activity_provider_factory=None, media_provider=None,
                     kde_settings and
                     getattr(kde_settings, 'fallback_active', False) is True),
                 'fail_safe_reason': reason,
-                'playback_active': audible,
+                'playback_active': confirmed_audible,
                 'firefox_audio_error': firefox_audio_error,
                 'chromium_audio_errors': browser_errors,
                 'chromium_video_errors': browser_video_errors,
                 'blocking_apps': blocking_apps,
+                'unknown_app_statuses': unique_unknown_statuses,
+                'unknown_app_status_allows_standby': (
+                    allow_unknown_app_status and bool(unique_unknown_statuses)),
                 'inhibitions_error': inhibition_error,
                 'scan_status': (scan_error if runtime_config['firefox_audio_blocks_standby']
                                 else 'Firefox audio detection disabled'),
@@ -2611,6 +2682,8 @@ def main():
     args.idle_inhibition_apps = config['idle_inhibition_apps']
     args.idle_inhibition_exceptions = config['idle_inhibition_exceptions']
     args.force_inhibition_apps = config['force_inhibition_apps']
+    args.allow_standby_on_unknown_app_status = config[
+        'allow_standby_on_unknown_app_status']
     args.mute_label = config['mute_labels']
     args.cec = config['cec_enabled']
     args.cec_port = config['cec_port']

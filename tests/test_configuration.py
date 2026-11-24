@@ -175,6 +175,8 @@ class ConfigurationChecks(unittest.TestCase):
             {'schema_version': SCHEMA_VERSION, 'cec_enabled': 1},
             {'schema_version': SCHEMA_VERSION, 'consider_input_devices': 1},
             {'schema_version': SCHEMA_VERSION, 'firefox_audio_blocks_standby': 1},
+            {'schema_version': SCHEMA_VERSION,
+             'allow_standby_on_unknown_app_status': 1},
             {'schema_version': SCHEMA_VERSION, 'idle_inhibition_apps': ['a', 'a']},
             {'schema_version': SCHEMA_VERSION, 'force_inhibition_apps': ['a', 'a']},
             {'schema_version': SCHEMA_VERSION, 'force_inhibition_apps': ['']},
