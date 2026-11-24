@@ -214,6 +214,8 @@ class LiveSettingsChecks(unittest.TestCase):
             idle_inhibition_apps=config['idle_inhibition_apps'],
             idle_inhibition_exceptions=config['idle_inhibition_exceptions'],
             force_inhibition_apps=config['force_inhibition_apps'],
+            allow_standby_on_unknown_app_status=config[
+                'allow_standby_on_unknown_app_status'],
             axis_deadzone_percent=config['axis_deadzone_percent'],
             rz_deadzone_percent=config['rz_deadzone_percent'],
             device_axis_deadzones=config['device_axis_deadzones'], config=str(path))
@@ -344,6 +346,85 @@ class LiveSettingsChecks(unittest.TestCase):
                 self.assertTrue(json.loads(receiver.GetStatus())['playback_active'])
 
             self.run_service(path, scenario)
+
+    def test_unknown_browser_status_can_be_allowed_without_hiding_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                receiver = context.receiver
+                receiver.Report('Fokus: TV')
+                self.apply(
+                    receiver, mouse_outputs=['TV'],
+                    firefox_audio_blocks_standby=True,
+                    allow_standby_on_unknown_app_status=True)
+                self.assertTrue(context.callbacks[100]())
+                status = json.loads(receiver.GetStatus())
+                self.assertIsNone(status['fail_safe_reason'])
+                self.assertTrue(status['unknown_app_statuses'])
+                self.assertTrue(status['unknown_app_status_allows_standby'])
+                self.assertTrue(any(
+                    'unknown' in entry['message'].lower()
+                    for entry in status['event_log']))
+
+                self.apply(
+                    receiver, allow_standby_on_unknown_app_status=False)
+                self.assertTrue(context.callbacks[100]())
+                status = json.loads(receiver.GetStatus())
+                self.assertIsNotNone(status['fail_safe_reason'])
+                self.assertFalse(status['unknown_app_status_allows_standby'])
+                self.assertTrue(load_config(path)[
+                    'allow_standby_on_unknown_app_status'] is False)
+
+            self.run_service(path, scenario)
+
+    def test_unknown_app_display_status_follows_the_app_policy(self):
+        inventory = {
+            'outputs': [], 'adapters': [], 'inputs': [], 'errors': [],
+            'apps': [{'id': 'player.desktop', 'name': 'Player'}],
+            'apps_error': None,
+        }
+        plasma = Mock(requests=[{
+            'kind': 'idle', 'app': 'player', 'reason': 'Playing', 'mode': 'block',
+        }])
+        plasma.health.return_value = None
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(monitor, 'PlasmaInhibitions', return_value=plasma):
+            path = Path(directory) / 'config.json'
+
+            def scenario(context):
+                receiver = context.receiver
+                context.callbacks[500]()
+                context.workers[-1].poll.return_value = 0
+                context.callbacks[500]()
+                receiver.Report('Fokus: TV')
+                self.apply(
+                    receiver, mouse_outputs=['TV'],
+                    allow_standby_on_unknown_app_status=True)
+                context.callbacks[100]()
+                status = json.loads(receiver.GetStatus())
+                self.assertEqual(status['blocking_apps'], [])
+                self.assertIsNone(status['fail_safe_reason'])
+                self.assertIn('player: Playing', status['unknown_app_statuses'][0])
+
+                receiver.Report('Desktop-snapshot: ' + json.dumps([{
+                    'pid': 123, 'desktop': 'player', 'class': 'player',
+                    'title': 'Player', 'output': 'TV',
+                }]))
+                context.callbacks[100]()
+                status = json.loads(receiver.GetStatus())
+                self.assertEqual(status['blocking_apps'][0]['locationUnknown'], False)
+                self.assertIn('Playing', status['fail_safe_reason'])
+
+                receiver.Report('Desktop-snapshot: []')
+                self.apply(
+                    receiver, allow_standby_on_unknown_app_status=False)
+                context.callbacks[100]()
+                status = json.loads(receiver.GetStatus())
+                self.assertEqual(status['blocking_apps'][0]['app'], 'player')
+                self.assertIn('Playing', status['fail_safe_reason'])
+
+            self.run_service(path, scenario, inventory=inventory)
 
     def test_firefox_scan_only_runs_when_enabled_and_discards_old_worker(self):
         with tempfile.TemporaryDirectory() as directory:

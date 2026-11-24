@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     'idle_inhibition_apps': [],
     'idle_inhibition_exceptions': [],
     'force_inhibition_apps': [],
+    'allow_standby_on_unknown_app_status': False,
     'cec_enabled': False,
     'cec_port': '',
     'kde_timeout': True,
@@ -80,7 +81,8 @@ def validate_config(value):
                 or len(set(browsers)) != len(browsers)):
             raise ValueError(f'{key} must contain unique supported browser IDs')
     for key in ('cec_enabled', 'kde_timeout', 'require_snapshot', 'consider_input_devices',
-                'firefox_audio_blocks_standby', 'firefox_video_blocks_standby'):
+                'firefox_audio_blocks_standby', 'firefox_video_blocks_standby',
+                'allow_standby_on_unknown_app_status'):
         if type(config[key]) is not bool:
             raise ValueError(f'{key} must be a boolean')
     if config['cec_enabled'] and not config['target_output'].strip():

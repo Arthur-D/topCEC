@@ -97,8 +97,10 @@ The script stays attached to the GUI until it exits.
   for that app. This setting only affects topCEC. Use **Force block standby**
   to keep the TV awake while an app has a window on a selected display.
   See [browser setup](PACKAGING.md#browser-media) for browser audio and video
-  options. Stale or ambiguous data can keep the TV awake. Check **Currently
-  blocking standby** and **Diagnostics** for the reason.
+  options. Stale or ambiguous data keeps the TV awake by default. Enable
+  **Allow standby when app or browser status is unknown** to ignore only
+  uncertain app, browser, or display status; confirmed blockers still apply.
+  Check **Currently blocking standby** and **Diagnostics** for the reason.
 
 Settings save automatically after a short pause. A running host applies the
 changes without restarting. An offline native GUI saves for the next start.
@@ -109,6 +111,8 @@ Devices without a stable alias may appear as `/dev/input/eventN`; those numbers
 can change on reconnect or restart, so check the selection before saving.
 If saving fails, the draft and error remain visible without repeatedly retrying.
 Correct the settings or use **Retry saving** after resolving the error.
+Diagnostics also keeps a recent host event log, including status changes,
+settings, and monitoring recovery events.
 
 ## Configure without the GUI
 
